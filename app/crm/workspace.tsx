@@ -32,7 +32,13 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
-export default function CRM() {
+type CrmRole = 'admin' | 'supervisor' | 'sales' | 'field';
+
+type WorkspaceProps = {
+  role: CrmRole;
+};
+
+export default function CRM({role}: WorkspaceProps) {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -176,9 +182,11 @@ export default function CRM() {
               العقارات
             </TabsTrigger>
 
-            <TabsTrigger value="users">
-              المستخدمون والصلاحيات
-            </TabsTrigger>
+            {role === 'admin' && (
+                <TabsTrigger value="users">
+                    المستخدمون والصلاحيات
+                </TabsTrigger>
+          )}
           </TabsList>
 
           <TabsContent value="leads">
@@ -394,9 +402,11 @@ export default function CRM() {
             </div>
           </TabsContent>
 
-          <TabsContent value="users">
-            <UsersPanel />
-          </TabsContent>
+          {role === 'admin' && (
+                <TabsContent value="users">
+                    <UsersPanel />
+                </TabsContent>
+           )}
         </Tabs>
 
         <Dialog

@@ -1,9 +1,16 @@
 import {getServerSession} from 'next-auth';
+
 import {authOptions} from '@/lib/auth';
 import {LoginButton} from './auth-buttons';
 import Workspace from './workspace';
 
 export const dynamic = 'force-dynamic';
+
+type CrmRole =
+  | 'admin'
+  | 'supervisor'
+  | 'sales'
+  | 'field';
 
 export default async function CrmPage() {
   const session = await getServerSession(authOptions);
@@ -12,7 +19,9 @@ export default async function CrmPage() {
     return (
       <main className="min-h-screen flex items-center justify-center p-6">
         <div className="w-full max-w-md rounded-2xl border p-8 shadow-sm">
-          <h1 className="text-2xl font-bold mb-2">تسجيل الدخول</h1>
+          <h1 className="text-2xl font-bold mb-2">
+            تسجيل الدخول
+          </h1>
 
           <p className="text-sm text-muted-foreground mb-6">
             الدخول إلى نظام إدارة العملاء
@@ -24,5 +33,13 @@ export default async function CrmPage() {
     );
   }
 
-  return <Workspace />;
+  const crmSession = session as typeof session & {
+    crmRole?: CrmRole;
+  };
+
+  return (
+    <Workspace
+      role={crmSession.crmRole ?? 'sales'}
+    />
+  );
 }
