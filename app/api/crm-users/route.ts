@@ -16,9 +16,16 @@ const createUserSchema = z.object({
     .max(80)
     .regex(/^[a-z0-9._-]+$/),
 
-  password: z.string().min(8).max(100),
+  password: z
+    .string()
+    .min(8)
+    .max(100),
 
-  name: z.string().trim().min(2).max(120),
+  name: z
+    .string()
+    .trim()
+    .min(2)
+    .max(120),
 
   email: z
     .string()
@@ -43,7 +50,10 @@ const createUserSchema = z.object({
   ]),
 });
 
-function reply(body: unknown, status = 200) {
+function reply(
+  body: unknown,
+  status = 200
+) {
   return Response.json(body, {
     status,
     headers: {
@@ -52,38 +62,78 @@ function reply(body: unknown, status = 200) {
   });
 }
 
-async function requireAdmin() {
+export async function GET(
+  req: Request
+) {
   const user = await getCrmUser();
 
   if (!user) {
-    return {
-      error: reply({error: 'يجب تسجيل الدخول'}, 401),
-      user: null,
-    };
+    return reply(
+      {error: 'يجب تسجيل الدخول'},
+      401
+    );
   }
 
-  if (user.role !== 'admin') {
-    return {
-      error: reply({error: 'غير مسموح لك بإدارة المستخدمين'}, 403),
-      user: null,
-    };
-  }
-
-  return {
-    error: null,
-    user,
-  };
-}
-
-export async function GET() {
-  const auth = await requireAdmin();
-
-  if (auth.error) {
-    return auth.error;
-  }
+  const url = new URL(req.url);
+  const assignable =
+    url.searchParams.get('assignable') === '1';
 
   try {
-    const result = await crmDb()
+    const db = crmDb();
+
+    /*
+     * قائمة المندوبين التي يستخدمها
+     * Admin / Supervisor عند تعيين العميل.
+     */
+    if (assignable) {
+      if (
+        user.role !== 'admin' &&
+        user.role !== 'supervisor'
+      ) {
+        return reply(
+          {
+            error:
+              'غير مسموح لك بعرض قائمة المندوبين',
+          },
+          403
+        );
+      }
+
+      const result = await db
+        .prepare(`
+          SELECT
+            id,
+            username,
+            name,
+            email,
+            phone,
+            role,
+            active
+          FROM crm_users
+          WHERE active = 1
+            AND role IN ('sales', 'field')
+          ORDER BY name ASC
+        `)
+        .all();
+
+      return reply(result.results);
+    }
+
+    /*
+     * إدارة المستخدمين الكاملة:
+     * Admin فقط.
+     */
+    if (user.role !== 'admin') {
+      return reply(
+        {
+          error:
+            'غير مسموح لك بإدارة المستخدمين',
+        },
+        403
+      );
+    }
+
+    const result = await db
       .prepare(`
         SELECT
           id,
@@ -102,28 +152,54 @@ export async function GET() {
 
     return reply(result.results);
   } catch (error) {
-    console.error('Failed to load CRM users:', error);
+    console.error(
+      'Failed to load CRM users:',
+      error
+    );
 
     return reply(
-      {error: 'تعذر تحميل المستخدمين'},
+      {
+        error:
+          'تعذر تحميل المستخدمين',
+      },
       503
     );
   }
 }
 
-export async function POST(req: Request) {
-  const auth = await requireAdmin();
+export async function POST(
+  req: Request
+) {
+  const user = await getCrmUser();
 
-  if (auth.error) {
-    return auth.error;
+  if (!user) {
+    return reply(
+      {error: 'يجب تسجيل الدخول'},
+      401
+    );
+  }
+
+  if (user.role !== 'admin') {
+    return reply(
+      {
+        error:
+          'غير مسموح لك بإدارة المستخدمين',
+      },
+      403
+    );
   }
 
   if (
     !process.env.NEXTAUTH_URL ||
     req.headers.get('origin') !==
-      new URL(process.env.NEXTAUTH_URL).origin
+      new URL(
+        process.env.NEXTAUTH_URL
+      ).origin
   ) {
-    return reply({error: 'طلب غير مسموح'}, 403);
+    return reply(
+      {error: 'طلب غير مسموح'},
+      403
+    );
   }
 
   let body: unknown;
@@ -131,10 +207,14 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    return reply({error: 'بيانات غير صالحة'}, 400);
+    return reply(
+      {error: 'بيانات غير صالحة'},
+      400
+    );
   }
 
-  const parsed = createUserSchema.safeParse(body);
+  const parsed =
+    createUserSchema.safeParse(body);
 
   if (!parsed.success) {
     return reply(
@@ -163,17 +243,22 @@ export async function POST(req: Request) {
 
     if (existing) {
       return reply(
-        {error: 'اسم المستخدم مستخدم بالفعل'},
+        {
+          error:
+            'اسم المستخدم مستخدم بالفعل',
+        },
         409
       );
     }
 
-    const passwordHash = await bcrypt.hash(
-      input.password,
-      12
-    );
+    const passwordHash =
+      await bcrypt.hash(
+        input.password,
+        12
+      );
 
-    const id = crypto.randomUUID();
+    const id =
+      crypto.randomUUID();
 
     await db
       .prepare(`
@@ -208,10 +293,16 @@ export async function POST(req: Request) {
       201
     );
   } catch (error) {
-    console.error('Failed to create CRM user:', error);
+    console.error(
+      'Failed to create CRM user:',
+      error
+    );
 
     return reply(
-      {error: 'تعذر إنشاء المستخدم'},
+      {
+        error:
+          'تعذر إنشاء المستخدم',
+      },
       503
     );
   }

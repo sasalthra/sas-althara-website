@@ -245,6 +245,12 @@ export default function CRM({role}: WorkspaceProps) {
                         المرحلة
                       </TableHead>
 
+
+
+                      <TableHead>
+                        المندوب المسؤول
+                      </TableHead>
+
                       <TableHead>
                         المتابعة
                       </TableHead>
@@ -286,6 +292,10 @@ export default function CRM({role}: WorkspaceProps) {
                             {stages[
                               lead.stage
                             ]}
+                          </TableCell>
+
+                          <TableCell>
+                            {lead.assigned_name || 'بدون تعيين'}
                           </TableCell>
 
                           <TableCell>
@@ -431,12 +441,13 @@ export default function CRM({role}: WorkspaceProps) {
             </DialogHeader>
 
             <LeadForm
-              key={edit?.id || 'new'}
-              initial={edit}
-              onSaved={() => {
-                setOpen(false);
-                void refresh();
-              }}
+                key={edit?.id || 'new'}
+                initial={edit}
+                role={role}
+                onSaved={() => {
+                    setOpen(false);
+                    void refresh();
+                }}
             />
           </DialogContent>
         </Dialog>
