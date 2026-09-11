@@ -1,0 +1,218 @@
+import bcrypt from 'bcryptjs';
+import {z} from 'zod';
+
+import {getCrmUser} from '@/lib/admin';
+import {crmDb} from '@/lib/crm-db';
+
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
+const createUserSchema = z.object({
+  username: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(3)
+    .max(80)
+    .regex(/^[a-z0-9._-]+$/),
+
+  password: z.string().min(8).max(100),
+
+  name: z.string().trim().min(2).max(120),
+
+  email: z
+    .string()
+    .trim()
+    .email()
+    .max(190)
+    .optional()
+    .or(z.literal('')),
+
+  phone: z
+    .string()
+    .trim()
+    .max(30)
+    .optional()
+    .or(z.literal('')),
+
+  role: z.enum([
+    'admin',
+    'supervisor',
+    'sales',
+    'field',
+  ]),
+});
+
+function reply(body: unknown, status = 200) {
+  return Response.json(body, {
+    status,
+    headers: {
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+async function requireAdmin() {
+  const user = await getCrmUser();
+
+  if (!user) {
+    return {
+      error: reply({error: 'يجب تسجيل الدخول'}, 401),
+      user: null,
+    };
+  }
+
+  if (user.role !== 'admin') {
+    return {
+      error: reply({error: 'غير مسموح لك بإدارة المستخدمين'}, 403),
+      user: null,
+    };
+  }
+
+  return {
+    error: null,
+    user,
+  };
+}
+
+export async function GET() {
+  const auth = await requireAdmin();
+
+  if (auth.error) {
+    return auth.error;
+  }
+
+  try {
+    const result = await crmDb()
+      .prepare(`
+        SELECT
+          id,
+          username,
+          name,
+          email,
+          phone,
+          role,
+          active,
+          created_at,
+          updated_at
+        FROM crm_users
+        ORDER BY created_at DESC
+      `)
+      .all();
+
+    return reply(result.results);
+  } catch (error) {
+    console.error('Failed to load CRM users:', error);
+
+    return reply(
+      {error: 'تعذر تحميل المستخدمين'},
+      503
+    );
+  }
+}
+
+export async function POST(req: Request) {
+  const auth = await requireAdmin();
+
+  if (auth.error) {
+    return auth.error;
+  }
+
+  if (
+    !process.env.NEXTAUTH_URL ||
+    req.headers.get('origin') !==
+      new URL(process.env.NEXTAUTH_URL).origin
+  ) {
+    return reply({error: 'طلب غير مسموح'}, 403);
+  }
+
+  let body: unknown;
+
+  try {
+    body = await req.json();
+  } catch {
+    return reply({error: 'بيانات غير صالحة'}, 400);
+  }
+
+  const parsed = createUserSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return reply(
+      {
+        error:
+          'راجع اسم المستخدم وكلمة المرور والاسم والدور',
+      },
+      400
+    );
+  }
+
+  const input = parsed.data;
+
+  try {
+    const db = crmDb();
+
+    const existing = await db
+      .prepare(`
+        SELECT id
+        FROM crm_users
+        WHERE LOWER(username) = ?
+        LIMIT 1
+      `)
+      .bind(input.username)
+      .first<{id: string}>();
+
+    if (existing) {
+      return reply(
+        {error: 'اسم المستخدم مستخدم بالفعل'},
+        409
+      );
+    }
+
+    const passwordHash = await bcrypt.hash(
+      input.password,
+      12
+    );
+
+    const id = crypto.randomUUID();
+
+    await db
+      .prepare(`
+        INSERT INTO crm_users (
+          id,
+          username,
+          password_hash,
+          name,
+          email,
+          phone,
+          role,
+          active
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+      `)
+      .bind(
+        id,
+        input.username,
+        passwordHash,
+        input.name,
+        input.email || '',
+        input.phone || '',
+        input.role
+      )
+      .run();
+
+    return reply(
+      {
+        ok: true,
+        id,
+      },
+      201
+    );
+  } catch (error) {
+    console.error('Failed to create CRM user:', error);
+
+    return reply(
+      {error: 'تعذر إنشاء المستخدم'},
+      503
+    );
+  }
+}
