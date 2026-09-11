@@ -65,6 +65,12 @@ const schema = z.object({
     .uuid()
     .nullable()
     .optional(),
+
+  fieldAssignedTo: z
+    .string()
+    .uuid()
+    .nullable()
+    .optional(),
 });
 
 function reply(
@@ -93,8 +99,9 @@ function canAssign(role: string) {
   );
 }
 
-async function validAssignableUser(
-  userId: string
+async function validUserForRole(
+  userId: string,
+  role: 'sales' | 'field'
 ) {
   const user = await crmDb()
     .prepare(`
@@ -102,13 +109,107 @@ async function validAssignableUser(
       FROM crm_users
       WHERE id = ?
         AND active = 1
-        AND role IN ('sales', 'field')
+        AND role = ?
       LIMIT 1
     `)
-    .bind(userId)
+    .bind(
+      userId,
+      role
+    )
     .first<{id: string}>();
 
   return Boolean(user);
+}
+
+function leadSelect() {
+  return `
+    SELECT
+      leads.*,
+
+      sales_user.name AS assigned_name,
+      sales_user.username AS assigned_username,
+
+      field_user.name AS field_assigned_name,
+      field_user.username AS field_assigned_username,
+
+      (
+        SELECT JSON_UNQUOTE(
+          JSON_EXTRACT(
+            activity.details,
+            '$.note'
+          )
+        )
+        FROM lead_activity AS activity
+        INNER JOIN crm_users AS activity_user
+          ON activity_user.id = activity.user_id
+        WHERE activity.lead_id = leads.id
+          AND activity_user.role = 'sales'
+          AND JSON_EXTRACT(
+            activity.details,
+            '$.note'
+          ) IS NOT NULL
+        ORDER BY activity.created_at DESC
+        LIMIT 1
+      ) AS sales_last_update,
+
+      (
+        SELECT activity.created_at
+        FROM lead_activity AS activity
+        INNER JOIN crm_users AS activity_user
+          ON activity_user.id = activity.user_id
+        WHERE activity.lead_id = leads.id
+          AND activity_user.role = 'sales'
+          AND JSON_EXTRACT(
+            activity.details,
+            '$.note'
+          ) IS NOT NULL
+        ORDER BY activity.created_at DESC
+        LIMIT 1
+      ) AS sales_last_update_at,
+
+      (
+        SELECT JSON_UNQUOTE(
+          JSON_EXTRACT(
+            activity.details,
+            '$.note'
+          )
+        )
+        FROM lead_activity AS activity
+        INNER JOIN crm_users AS activity_user
+          ON activity_user.id = activity.user_id
+        WHERE activity.lead_id = leads.id
+          AND activity_user.role = 'field'
+          AND JSON_EXTRACT(
+            activity.details,
+            '$.note'
+          ) IS NOT NULL
+        ORDER BY activity.created_at DESC
+        LIMIT 1
+      ) AS field_last_update,
+
+      (
+        SELECT activity.created_at
+        FROM lead_activity AS activity
+        INNER JOIN crm_users AS activity_user
+          ON activity_user.id = activity.user_id
+        WHERE activity.lead_id = leads.id
+          AND activity_user.role = 'field'
+          AND JSON_EXTRACT(
+            activity.details,
+            '$.note'
+          ) IS NOT NULL
+        ORDER BY activity.created_at DESC
+        LIMIT 1
+      ) AS field_last_update_at
+
+    FROM leads
+
+    LEFT JOIN crm_users AS sales_user
+      ON sales_user.id = leads.assigned_to
+
+    LEFT JOIN crm_users AS field_user
+      ON field_user.id = leads.field_assigned_to
+  `;
 }
 
 export async function GET() {
@@ -127,13 +228,7 @@ export async function GET() {
     if (canSeeAll(user.role)) {
       const result = await db
         .prepare(`
-          SELECT
-            leads.*,
-            assigned_user.name AS assigned_name,
-            assigned_user.username AS assigned_username
-          FROM leads
-          LEFT JOIN crm_users AS assigned_user
-            ON assigned_user.id = leads.assigned_to
+          ${leadSelect()}
           ORDER BY leads.created_at DESC
         `)
         .all();
@@ -141,28 +236,47 @@ export async function GET() {
       return reply(result.results);
     }
 
-    const result = await db
-      .prepare(`
-        SELECT
-          leads.*,
-          assigned_user.name AS assigned_name,
-          assigned_user.username AS assigned_username
-        FROM leads
-        LEFT JOIN crm_users AS assigned_user
-          ON assigned_user.id = leads.assigned_to
-        WHERE leads.assigned_to = ?
-           OR leads.created_by = ?
-           OR leads.owner = ?
-        ORDER BY leads.created_at DESC
-      `)
-      .bind(
-        user.userId,
-        user.userId,
-        user.userId
-      )
-      .all();
+    if (user.role === 'sales') {
+      const result = await db
+        .prepare(`
+          ${leadSelect()}
+          WHERE
+            leads.assigned_to = ?
+            OR leads.created_by = ?
+            OR leads.owner = ?
+          ORDER BY leads.created_at DESC
+        `)
+        .bind(
+          user.userId,
+          user.userId,
+          user.userId
+        )
+        .all();
 
-    return reply(result.results);
+      return reply(result.results);
+    }
+
+    if (user.role === 'field') {
+      const result = await db
+        .prepare(`
+          ${leadSelect()}
+          WHERE
+            leads.field_assigned_to = ?
+            OR leads.created_by = ?
+            OR leads.owner = ?
+          ORDER BY leads.created_at DESC
+        `)
+        .bind(
+          user.userId,
+          user.userId,
+          user.userId
+        )
+        .all();
+
+      return reply(result.results);
+    }
+
+    return reply([]);
   } catch (error) {
     console.error(
       'Failed to load leads:',
@@ -281,20 +395,45 @@ async function write(
     | null
     | undefined;
 
+  let fieldAssignedTo:
+    | string
+    | null
+    | undefined;
+
   if (canAssign(user.role)) {
     assignedTo =
       value.assignedTo ?? null;
 
+    fieldAssignedTo =
+      value.fieldAssignedTo ?? null;
+
     if (
       assignedTo &&
-      !(await validAssignableUser(
-        assignedTo
+      !(await validUserForRole(
+        assignedTo,
+        'sales'
       ))
     ) {
       return reply(
         {
           error:
-            'المندوب المحدد غير صالح أو غير نشط',
+            'مندوب المبيعات المحدد غير صالح أو غير نشط',
+        },
+        400
+      );
+    }
+
+    if (
+      fieldAssignedTo &&
+      !(await validUserForRole(
+        fieldAssignedTo,
+        'field'
+      ))
+    ) {
+      return reply(
+        {
+          error:
+            'الموظف الميداني المحدد غير صالح أو غير نشط',
         },
         400
       );
@@ -310,7 +449,8 @@ async function write(
           .prepare(`
             SELECT
               id,
-              assigned_to
+              assigned_to,
+              field_assigned_to
             FROM leads
             WHERE id = ?
             LIMIT 1
@@ -319,6 +459,9 @@ async function write(
           .first<{
             id: string;
             assigned_to:
+              | string
+              | null;
+            field_assigned_to:
               | string
               | null;
           }>();
@@ -334,9 +477,10 @@ async function write(
         }
 
         const finalAssignedTo =
-          canAssign(user.role)
-            ? assignedTo ?? null
-            : existing.assigned_to;
+          assignedTo ?? null;
+
+        const finalFieldAssignedTo =
+          fieldAssignedTo ?? null;
 
         await db
           .prepare(`
@@ -349,6 +493,7 @@ async function write(
               notes = ?,
               follow_up = ?,
               assigned_to = ?,
+              field_assigned_to = ?,
               updated_at = ?
             WHERE id = ?
           `)
@@ -360,6 +505,7 @@ async function write(
             value.notes,
             value.followUp,
             finalAssignedTo ?? '',
+            finalFieldAssignedTo ?? '',
             now,
             value.id
           )
@@ -388,6 +534,10 @@ async function write(
                 value.followUp,
               assignedTo:
                 finalAssignedTo,
+              fieldAssignedTo:
+                finalFieldAssignedTo,
+              note:
+                value.notes,
             })
           )
           .run();
@@ -398,25 +548,53 @@ async function write(
         });
       }
 
-      const existing = await db
-        .prepare(`
-          SELECT id
-          FROM leads
-          WHERE id = ?
-            AND (
-              assigned_to = ?
-              OR created_by = ?
-              OR owner = ?
-            )
-          LIMIT 1
-        `)
-        .bind(
-          value.id,
-          user.userId,
-          user.userId,
-          user.userId
-        )
-        .first<{id: string}>();
+      let existing:
+        | {id: string}
+        | null = null;
+
+      if (user.role === 'sales') {
+        existing = await db
+          .prepare(`
+            SELECT id
+            FROM leads
+            WHERE id = ?
+              AND (
+                assigned_to = ?
+                OR created_by = ?
+                OR owner = ?
+              )
+            LIMIT 1
+          `)
+          .bind(
+            value.id,
+            user.userId,
+            user.userId,
+            user.userId
+          )
+          .first<{id: string}>();
+      }
+
+      if (user.role === 'field') {
+        existing = await db
+          .prepare(`
+            SELECT id
+            FROM leads
+            WHERE id = ?
+              AND (
+                field_assigned_to = ?
+                OR created_by = ?
+                OR owner = ?
+              )
+            LIMIT 1
+          `)
+          .bind(
+            value.id,
+            user.userId,
+            user.userId,
+            user.userId
+          )
+          .first<{id: string}>();
+      }
 
       if (!existing) {
         return reply(
@@ -474,14 +652,37 @@ async function write(
               value.stage,
             followUp:
               value.followUp,
+            note:
+              value.notes,
           })
         )
         .run();
     } else {
-      const newAssignedTo =
-        canAssign(user.role)
-          ? assignedTo ?? null
-          : user.userId;
+      let newAssignedTo:
+        | string
+        | null = null;
+
+      let newFieldAssignedTo:
+        | string
+        | null = null;
+
+      if (canAssign(user.role)) {
+        newAssignedTo =
+          assignedTo ?? null;
+
+        newFieldAssignedTo =
+          fieldAssignedTo ?? null;
+      } else if (
+        user.role === 'sales'
+      ) {
+        newAssignedTo =
+          user.userId;
+      } else if (
+        user.role === 'field'
+      ) {
+        newFieldAssignedTo =
+          user.userId;
+      }
 
       await db
         .prepare(`
@@ -489,6 +690,7 @@ async function write(
             id,
             owner,
             assigned_to,
+            field_assigned_to,
             created_by,
             name,
             phone,
@@ -513,6 +715,7 @@ async function write(
             ?,
             ?,
             ?,
+            ?,
             ?
           )
           ON DUPLICATE KEY
@@ -522,6 +725,7 @@ async function write(
           value.id,
           user.userId,
           newAssignedTo ?? '',
+          newFieldAssignedTo ?? '',
           user.userId,
           value.name,
           value.phone,
@@ -581,6 +785,10 @@ async function write(
               value.stage,
             assignedTo:
               newAssignedTo,
+            fieldAssignedTo:
+              newFieldAssignedTo,
+            note:
+              value.notes,
           })
         )
         .run();

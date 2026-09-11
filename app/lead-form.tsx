@@ -29,9 +29,21 @@ export type Lead = {
   stage: string;
   notes: string;
   follow_up: string;
+
   assigned_to?: string | null;
   assigned_name?: string | null;
   assigned_username?: string | null;
+
+  field_assigned_to?: string | null;
+  field_assigned_name?: string | null;
+  field_assigned_username?: string | null;
+
+  sales_last_update?: string | null;
+  sales_last_update_at?: string | null;
+
+  field_last_update?: string | null;
+  field_last_update_at?: string | null;
+
   created_at?: string;
 };
 
@@ -93,6 +105,14 @@ export default function LeadForm({
       initial?.assigned_to || 'unassigned'
     );
 
+  const [
+    fieldAssignedTo,
+    setFieldAssignedTo,
+  ] = useState(
+    initial?.field_assigned_to ||
+      'unassigned'
+  );
+
   const [users, setUsers] = useState<
     AssignableUser[]
   >([]);
@@ -122,6 +142,18 @@ export default function LeadForm({
     role === 'admin' ||
     role === 'supervisor';
 
+  const salesUsers = users.filter(
+    user =>
+      user.role === 'sales' &&
+      user.active === 1
+  );
+
+  const fieldUsers = users.filter(
+    user =>
+      user.role === 'field' &&
+      user.active === 1
+  );
+
   useEffect(() => {
     if (!canAssign) {
       return;
@@ -147,7 +179,7 @@ export default function LeadForm({
         if (!response.ok) {
           throw new Error(
             result.error ||
-              'تعذر تحميل المندوبين'
+              'تعذر تحميل الموظفين'
           );
         }
 
@@ -159,7 +191,7 @@ export default function LeadForm({
           setUsersError(
             error instanceof Error
               ? error.message
-              : 'تعذر تحميل المندوبين'
+              : 'تعذر تحميل الموظفين'
           );
         }
       } finally {
@@ -194,6 +226,7 @@ export default function LeadForm({
         notes: string;
         followUp: string;
         assignedTo?: string | null;
+        fieldAssignedTo?: string | null;
       } = {
         id,
         name,
@@ -209,6 +242,11 @@ export default function LeadForm({
           assignedTo === 'unassigned'
             ? null
             : assignedTo;
+
+        body.fieldAssignedTo =
+          fieldAssignedTo === 'unassigned'
+            ? null
+            : fieldAssignedTo;
       }
 
       const response = await fetch(
@@ -239,7 +277,9 @@ export default function LeadForm({
       setDone(true);
 
       setMessage(
-        'تم حفظ الطلب في لوحة العملاء.'
+        initial
+          ? 'تم حفظ تحديث العميل.'
+          : 'تم حفظ العميل في النظام.'
       );
 
       onSaved?.();
@@ -260,7 +300,7 @@ export default function LeadForm({
       onSubmit={submit}
     >
       <label>
-        الاسم
+        اسم العميل
 
         <input
           required
@@ -320,7 +360,7 @@ export default function LeadForm({
       {!propertyId && (
         <>
           <label>
-            مرحلة الطلب
+            مرحلة العميل
 
             <Select
               value={stage}
@@ -363,56 +403,91 @@ export default function LeadForm({
       )}
 
       {canAssign && (
-        <label>
-          المندوب المسؤول
+        <>
+          <label>
+            مندوب المبيعات
 
-          {loadingUsers ? (
-            <p>
-              جاري تحميل المندوبين...
-            </p>
-          ) : (
-            <Select
-              value={assignedTo}
-              onValueChange={
-                setAssignedTo
-              }
-              dir="rtl"
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="اختر المندوب" />
-              </SelectTrigger>
+            {loadingUsers ? (
+              <p>
+                جاري تحميل موظفي المبيعات...
+              </p>
+            ) : (
+              <Select
+                value={assignedTo}
+                onValueChange={
+                  setAssignedTo
+                }
+                dir="rtl"
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="اختر مندوب المبيعات" />
+                </SelectTrigger>
 
-              <SelectContent>
-                <SelectItem value="unassigned">
-                  بدون تعيين
-                </SelectItem>
-
-                {users.map(user => (
-                  <SelectItem
-                    key={user.id}
-                    value={user.id}
-                  >
-                    {user.name} —{' '}
-                    {user.role ===
-                    'sales'
-                      ? 'مبيعات'
-                      : 'ميداني'}
+                <SelectContent>
+                  <SelectItem value="unassigned">
+                    بدون تعيين
                   </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+
+                  {salesUsers.map(user => (
+                    <SelectItem
+                      key={user.id}
+                      value={user.id}
+                    >
+                      {user.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </label>
+
+          <label>
+            الموظف الميداني
+
+            {loadingUsers ? (
+              <p>
+                جاري تحميل الموظفين الميدانيين...
+              </p>
+            ) : (
+              <Select
+                value={fieldAssignedTo}
+                onValueChange={
+                  setFieldAssignedTo
+                }
+                dir="rtl"
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="اختر الموظف الميداني" />
+                </SelectTrigger>
+
+                <SelectContent>
+                  <SelectItem value="unassigned">
+                    بدون تعيين
+                  </SelectItem>
+
+                  {fieldUsers.map(user => (
+                    <SelectItem
+                      key={user.id}
+                      value={user.id}
+                    >
+                      {user.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </label>
 
           {usersError ? (
             <span className="error">
               {usersError}
             </span>
           ) : null}
-        </label>
+        </>
       )}
 
       <label>
-        ملاحظات
+        تحديث / ملاحظات العميل
 
         <textarea
           rows={3}
@@ -422,6 +497,13 @@ export default function LeadForm({
             setNotes(
               event.target.value
             )
+          }
+          placeholder={
+            role === 'field'
+              ? 'اكتب نتيجة الزيارة أو تحديث الموظف الميداني...'
+              : role === 'sales'
+              ? 'اكتب آخر تحديث بعد التواصل مع العميل...'
+              : 'اكتب ملاحظات أو تحديث العميل...'
           }
         />
       </label>
@@ -436,7 +518,7 @@ export default function LeadForm({
           ? 'تم الحفظ'
           : initial
           ? 'حفظ التحديث'
-          : 'حفظ طلب الاهتمام'}
+          : 'إضافة العميل'}
       </button>
 
       {message && (
