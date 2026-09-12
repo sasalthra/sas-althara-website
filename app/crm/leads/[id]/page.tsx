@@ -22,11 +22,38 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 
-type CrmRole = 'admin' | 'supervisor' | 'sales' | 'field';
+type CrmRole =
+  | 'admin'
+  | 'supervisor'
+  | 'sales'
+  | 'field';
 
 type LeadDetails = Lead & {
   source?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
+
+type Activity = {
+  id: string;
+  lead_id: string;
+  user_id: string | null;
+  action: string;
+  details:
+    | Record<string, unknown>
+    | string
+    | null;
+  created_at: string;
+  user_name: string | null;
+  username: string | null;
+  role: CrmRole | null;
+};
+
+type DialogMode =
+  | 'edit'
+  | 'followup'
+  | 'stage'
+  | null;
 
 function valueOrDash(
   value?: string | null
@@ -61,25 +88,157 @@ function formatDate(
   );
 }
 
+function formatDateTime(
+  value?: string | null
+) {
+  if (!value) {
+    return '-';
+  }
+
+  const parsed = new Date(value);
+
+  if (
+    Number.isNaN(
+      parsed.getTime()
+    )
+  ) {
+    return value;
+  }
+
+  return parsed.toLocaleString(
+    'ar-SA',
+    {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }
+  );
+}
+
+function roleLabel(
+  role?: CrmRole | null
+) {
+  switch (role) {
+    case 'admin':
+      return 'مدير النظام';
+    case 'supervisor':
+      return 'مشرف';
+    case 'sales':
+      return 'مبيعات';
+    case 'field':
+      return 'ميداني';
+    default:
+      return 'النظام';
+  }
+}
+
+function actionLabel(
+  action: string
+) {
+  switch (action) {
+    case 'created':
+    case 'lead_created':
+      return 'تم إنشاء العميل';
+    case 'updated':
+    case 'lead_updated':
+      return 'تم تحديث بيانات العميل';
+    default:
+      return action
+        .replaceAll('_', ' ')
+        .trim() || 'تحديث';
+  }
+}
+
+function getActivityNote(
+  activity: Activity
+) {
+  if (
+    activity.details &&
+    typeof activity.details === 'object' &&
+    !Array.isArray(
+      activity.details
+    )
+  ) {
+    const note =
+      activity.details.note;
+
+    if (
+      typeof note === 'string' &&
+      note.trim()
+    ) {
+      return note.trim();
+    }
+
+    const followUp =
+      activity.details.followUp;
+
+    const stage =
+      activity.details.stage;
+
+    const parts: string[] = [];
+
+    if (
+      typeof stage === 'string' &&
+      stage
+    ) {
+      parts.push(
+        `المرحلة: ${
+          stages[stage] || stage
+        }`
+      );
+    }
+
+    if (
+      typeof followUp === 'string' &&
+      followUp
+    ) {
+      parts.push(
+        `المتابعة: ${followUp}`
+      );
+    }
+
+    if (parts.length) {
+      return parts.join(' • ');
+    }
+  }
+
+  if (
+    typeof activity.details === 'string'
+  ) {
+    return activity.details;
+  }
+
+  return 'تم تسجيل تحديث على العميل.';
+}
+
 export default function LeadDetailsPage() {
-  const params = useParams<{
-    id: string;
-  }>();
+  const params =
+    useParams<{
+      id: string;
+    }>();
 
   const [leads, setLeads] =
     useState<LeadDetails[]>([]);
 
+  const [activities, setActivities] =
+    useState<Activity[]>([]);
+
   const [loading, setLoading] =
+    useState(true);
+
+  const [activityLoading, setActivityLoading] =
     useState(true);
 
   const [error, setError] =
     useState('');
 
-  const [editOpen, setEditOpen] =
-    useState(false);
-
   const [role, setRole] =
     useState<CrmRole>('sales');
+
+  const [dialogMode, setDialogMode] =
+    useState<DialogMode>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -116,8 +275,40 @@ export default function LeadDetailsPage() {
     }
   };
 
+  const refreshActivity =
+    async () => {
+      setActivityLoading(true);
+
+      try {
+        const response =
+          await fetch(
+            `/api/leads/${params.id}/activity`,
+            {
+              cache: 'no-store',
+            }
+          );
+
+        const result =
+          await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            result.error ||
+              'تعذر تحميل سجل النشاط'
+          );
+        }
+
+        setActivities(result);
+      } catch {
+        setActivities([]);
+      } finally {
+        setActivityLoading(false);
+      }
+    };
+
   useEffect(() => {
     void refresh();
+    void refreshActivity();
 
     void getSession().then(
       session => {
@@ -137,7 +328,7 @@ export default function LeadDetailsPage() {
         }
       }
     );
-  }, []);
+  }, [params.id]);
 
   const lead = useMemo(
     () =>
@@ -159,6 +350,20 @@ export default function LeadDetailsPage() {
         : undefined,
     [lead]
   );
+
+  const dialogTitle =
+    dialogMode === 'stage'
+      ? 'تغيير مرحلة العميل'
+      : dialogMode === 'followup'
+        ? 'إضافة متابعة'
+        : 'تحديث بيانات العميل';
+
+  const dialogDescription =
+    dialogMode === 'stage'
+      ? 'حدّث المرحلة الحالية وسجّل ملاحظتك.'
+      : dialogMode === 'followup'
+        ? 'حدد موعد المتابعة القادمة وسجّل آخر مستجد.'
+        : 'حدّث بيانات العميل والتعيينات والمتابعة.';
 
   if (loading) {
     return (
@@ -217,200 +422,394 @@ export default function LeadDetailsPage() {
         dir="rtl"
         className="mx-auto max-w-7xl space-y-6 p-6"
       >
-        <div className="flex flex-col gap-4 rounded-2xl border bg-white p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <a
-              href="/crm"
-              className="mb-3 inline-block text-sm text-muted-foreground hover:underline"
-            >
-              ← العودة إلى سجل العملاء
-            </a>
+        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0">
+              <a
+                href="/crm"
+                className="mb-4 inline-flex text-sm text-muted-foreground hover:text-[#53115c]"
+              >
+                ← العودة إلى سجل العملاء
+              </a>
 
-            <h1 className="text-3xl font-bold text-[#43104d]">
-              {lead.name}
-            </h1>
-
-            <p
-              dir="ltr"
-              className="mt-2 text-right text-muted-foreground"
-            >
-              {lead.phone}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="inline-flex w-fit rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700">
-              {stages[
-                lead.stage
-              ] || lead.stage}
-            </span>
-
-            <button
-              type="button"
-              onClick={() =>
-                setEditOpen(true)
-              }
-              className="rounded-xl bg-[#53115c] px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
-            >
-              تحديث بيانات العميل
-            </button>
-          </div>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-3">
-          <section className="rounded-2xl border bg-white p-6 shadow-sm lg:col-span-2">
-            <h2 className="mb-5 text-xl font-bold">
-              بيانات العميل
-            </h2>
-
-            <div className="grid gap-5 sm:grid-cols-2">
-              <div>
-                <div className="text-sm text-muted-foreground">
-                  اسم العميل
-                </div>
-                <div className="mt-1 font-medium">
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-3xl font-bold text-[#43104d]">
                   {lead.name}
-                </div>
-              </div>
+                </h1>
 
-              <div>
-                <div className="text-sm text-muted-foreground">
-                  الجوال
-                </div>
-                <div
-                  dir="ltr"
-                  className="mt-1 text-right font-medium"
-                >
-                  {lead.phone}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-sm text-muted-foreground">
-                  العقار
-                </div>
-                <div className="mt-1 font-medium">
-                  {property?.title ||
-                    lead.property_id}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-sm text-muted-foreground">
-                  مصدر العميل
-                </div>
-                <div className="mt-1 font-medium">
-                  {valueOrDash(
-                    lead.source
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-sm text-muted-foreground">
-                  مندوب المبيعات
-                </div>
-                <div className="mt-1 font-medium">
-                  {valueOrDash(
-                    lead.assigned_name
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-sm text-muted-foreground">
-                  الموظف الميداني
-                </div>
-                <div className="mt-1 font-medium">
-                  {valueOrDash(
-                    lead.field_assigned_name
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-sm text-muted-foreground">
-                  المتابعة القادمة
-                </div>
-                <div className="mt-1 font-medium">
-                  {valueOrDash(
-                    lead.follow_up
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-sm text-muted-foreground">
-                  المرحلة
-                </div>
-                <div className="mt-1 font-medium">
+                <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                   {stages[
                     lead.stage
                   ] || lead.stage}
+                </span>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
+                <span dir="ltr">
+                  {lead.phone}
+                </span>
+
+                <span>
+                  العميل منذ{' '}
+                  {formatDate(
+                    lead.created_at
+                  )}
+                </span>
+
+                <span>
+                  آخر تعديل{' '}
+                  {formatDate(
+                    lead.updated_at
+                  )}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setDialogMode(
+                    'followup'
+                  )
+                }
+                className="rounded-xl border border-[#53115c]/20 bg-[#53115c]/5 px-4 py-2.5 text-sm font-semibold text-[#53115c] transition hover:bg-[#53115c]/10"
+              >
+                + إضافة متابعة
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setDialogMode(
+                    'stage'
+                  )
+                }
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                تغيير المرحلة
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setDialogMode(
+                    'edit'
+                  )
+                }
+                className="rounded-xl bg-[#53115c] px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
+              >
+                تحديث بيانات العميل
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="text-sm text-muted-foreground">
+              مندوب المبيعات
+            </div>
+            <div className="mt-2 font-semibold text-slate-900">
+              {valueOrDash(
+                lead.assigned_name
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="text-sm text-muted-foreground">
+              الموظف الميداني
+            </div>
+            <div className="mt-2 font-semibold text-slate-900">
+              {valueOrDash(
+                lead.field_assigned_name
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="text-sm text-muted-foreground">
+              المتابعة القادمة
+            </div>
+            <div className="mt-2 font-semibold text-slate-900">
+              {valueOrDash(
+                lead.follow_up
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="text-sm text-muted-foreground">
+              مصدر العميل
+            </div>
+            <div className="mt-2 font-semibold text-slate-900">
+              {valueOrDash(
+                lead.source
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-[1.35fr_.65fr]">
+          <div className="space-y-6">
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="mb-5 flex items-center justify-between gap-4">
+                <h2 className="text-xl font-bold text-slate-900">
+                  العقار المرتبط
+                </h2>
+
+                {property && (
+                  <a
+                    href={`/properties/${property.id}`}
+                    className="text-sm font-semibold text-[#53115c] hover:underline"
+                  >
+                    فتح العقار ↗
+                  </a>
+                )}
+              </div>
+
+              <div className="grid gap-5 sm:grid-cols-2">
+                <div>
+                  <div className="text-sm text-muted-foreground">
+                    اسم العقار
+                  </div>
+                  <div className="mt-1 font-semibold">
+                    {property?.title ||
+                      lead.property_id}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-sm text-muted-foreground">
+                    معرف العقار
+                  </div>
+                  <div className="mt-1 font-medium text-slate-700">
+                    {lead.property_id}
+                  </div>
+                </div>
+
+                {property && (
+                  <>
+                    <div>
+                      <div className="text-sm text-muted-foreground">
+                        السعر
+                      </div>
+                      <div className="mt-1 font-semibold">
+                        {property.price.toLocaleString(
+                          'ar-SA'
+                        )}{' '}
+                        ر.س
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-sm text-muted-foreground">
+                        المساحة
+                      </div>
+                      <div className="mt-1 font-semibold">
+                        {property.area}{' '}
+                        م²
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h2 className="text-lg font-bold">
+                    آخر تحديث للمبيعات
+                  </h2>
+
+                  <span className="text-xs text-muted-foreground">
+                    {formatDate(
+                      lead.sales_last_update_at
+                    )}
+                  </span>
+                </div>
+
+                <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                  {valueOrDash(
+                    lead.sales_last_update
+                  )}
+                </p>
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h2 className="text-lg font-bold">
+                    آخر تحديث للميداني
+                  </h2>
+
+                  <span className="text-xs text-muted-foreground">
+                    {formatDate(
+                      lead.field_last_update_at
+                    )}
+                  </span>
+                </div>
+
+                <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                  {valueOrDash(
+                    lead.field_last_update
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="mb-5 text-xl font-bold text-slate-900">
+                سجل النشاط
+              </h2>
+
+              {activityLoading ? (
+                <p className="text-sm text-muted-foreground">
+                  جارٍ تحميل سجل النشاط…
+                </p>
+              ) : activities.length ? (
+                <div className="space-y-0">
+                  {activities.map(
+                    (
+                      activity,
+                      index
+                    ) => (
+                      <div
+                        key={
+                          activity.id
+                        }
+                        className="relative flex gap-4 pb-6 last:pb-0"
+                      >
+                        {index <
+                          activities.length -
+                            1 && (
+                          <div className="absolute right-[7px] top-5 h-[calc(100%-8px)] w-px bg-slate-200" />
+                        )}
+
+                        <div className="relative z-10 mt-1.5 h-4 w-4 shrink-0 rounded-full border-4 border-white bg-[#53115c] shadow-sm" />
+
+                        <div className="min-w-0 flex-1 rounded-2xl bg-slate-50 p-4">
+                          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                              <div className="font-semibold text-slate-900">
+                                {actionLabel(
+                                  activity.action
+                                )}
+                              </div>
+
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {activity.user_name ||
+                                  activity.username ||
+                                  'النظام'}{' '}
+                                •{' '}
+                                {roleLabel(
+                                  activity.role
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="text-xs text-muted-foreground">
+                              {formatDateTime(
+                                activity.created_at
+                              )}
+                            </div>
+                          </div>
+
+                          <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                            {getActivityNote(
+                              activity
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  لا يوجد نشاط مسجل حتى الآن.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <aside className="space-y-6">
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="mb-5 text-xl font-bold text-slate-900">
+                بيانات العميل
+              </h2>
+
+              <div className="space-y-5">
+                <div>
+                  <div className="text-sm text-muted-foreground">
+                    اسم العميل
+                  </div>
+                  <div className="mt-1 font-semibold">
+                    {lead.name}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-sm text-muted-foreground">
+                    رقم الجوال
+                  </div>
+                  <div
+                    dir="ltr"
+                    className="mt-1 text-right font-semibold"
+                  >
+                    {lead.phone}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-sm text-muted-foreground">
+                    المرحلة الحالية
+                  </div>
+                  <div className="mt-1 font-semibold">
+                    {stages[
+                      lead.stage
+                    ] || lead.stage}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-sm text-muted-foreground">
+                    المتابعة القادمة
+                  </div>
+                  <div className="mt-1 font-semibold">
+                    {valueOrDash(
+                      lead.follow_up
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
-          </section>
 
-          <section className="rounded-2xl border bg-white p-6 shadow-sm">
-            <h2 className="mb-5 text-xl font-bold">
-              الملاحظات
-            </h2>
-
-            <p className="whitespace-pre-wrap text-sm leading-7">
-              {valueOrDash(
-                lead.notes
-              )}
-            </p>
-          </section>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-2">
-          <section className="rounded-2xl border bg-white p-6 shadow-sm">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 className="text-xl font-bold">
-                آخر تحديث للمبيعات
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="mb-4 text-xl font-bold text-slate-900">
+                الملاحظات
               </h2>
 
-              <span className="text-xs text-muted-foreground">
-                {formatDate(
-                  lead.sales_last_update_at
+              <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                {valueOrDash(
+                  lead.notes
                 )}
-              </span>
+              </p>
             </div>
-
-            <p className="whitespace-pre-wrap leading-7">
-              {valueOrDash(
-                lead.sales_last_update
-              )}
-            </p>
-          </section>
-
-          <section className="rounded-2xl border bg-white p-6 shadow-sm">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 className="text-xl font-bold">
-                آخر تحديث للموظف الميداني
-              </h2>
-
-              <span className="text-xs text-muted-foreground">
-                {formatDate(
-                  lead.field_last_update_at
-                )}
-              </span>
-            </div>
-
-            <p className="whitespace-pre-wrap leading-7">
-              {valueOrDash(
-                lead.field_last_update
-              )}
-            </p>
-          </section>
-        </div>
+          </aside>
+        </section>
       </main>
 
       <Dialog
-        open={editOpen}
-        onOpenChange={setEditOpen}
+        open={
+          dialogMode !== null
+        }
+        onOpenChange={open => {
+          if (!open) {
+            setDialogMode(null);
+          }
+        }}
       >
         <DialogContent
           dir="rtl"
@@ -418,21 +817,22 @@ export default function LeadDetailsPage() {
         >
           <DialogHeader>
             <DialogTitle>
-              تحديث بيانات العميل
+              {dialogTitle}
             </DialogTitle>
 
             <DialogDescription>
-              حدّث بيانات العميل والمرحلة والمتابعة والتعيينات.
+              {dialogDescription}
             </DialogDescription>
           </DialogHeader>
 
           <LeadForm
-            key={lead.id}
+            key={`${lead.id}-${dialogMode || 'edit'}`}
             initial={lead}
             role={role}
             onSaved={() => {
-              setEditOpen(false);
+              setDialogMode(null);
               void refresh();
+              void refreshActivity();
             }}
           />
         </DialogContent>
