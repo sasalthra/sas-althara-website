@@ -14,11 +14,19 @@ type LeadRow = {
 
 const allowedStages = new Set([
   'new',
+  'received',
+  'no_answer',
   'contacted',
-  'viewing',
-  'negotiation',
-  'won',
-  'closed',
+  'data_received',
+  'calculation_done',
+  'visit_qualified',
+  'property_visited',
+  'bank_approval',
+  'deposit_paid',
+  'contract_signed',
+  'transferred',
+  'unqualified',
+  'not_interested',
 ]);
 
 function canAccess(user: {userId: string; role: string}, lead: LeadRow) {

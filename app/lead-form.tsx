@@ -13,12 +13,20 @@ import {
 } from '@/components/ui/select';
 
 export const stages: Record<string, string> = {
-  new: 'جديد',
+  new: 'عميل جديد',
+  received: 'تم استلام العميل',
+  no_answer: 'لم يتم الرد',
   contacted: 'تم التواصل',
-  viewing: 'موعد معاينة',
-  negotiation: 'تفاوض',
-  won: 'تمت الصفقة',
-  closed: 'مغلق',
+  data_received: 'تم استلام بيانات العميل',
+  calculation_done: 'تم عمل حسبة للعميل',
+  visit_qualified: 'مؤهل زيارة',
+  property_visited: 'تم زيارة العقار',
+  bank_approval: 'مؤهل بانتظار موافقة البنك',
+  deposit_paid: 'دفع عربون',
+  contract_signed: 'وقع عقد',
+  transferred: 'إفراغ',
+  unqualified: 'غير مؤهل',
+  not_interested: 'غير مهتم',
 };
 
 export type Lead = {
