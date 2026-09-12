@@ -76,23 +76,37 @@ function formatUpdateDate(
   );
 }
 
-function shortUpdate(
-  value?: string | null
+function compactText(
+  value?: string | null,
+  limit = 28
 ) {
-  if (!value) {
-    return 'لا يوجد تحديث';
+  if (!value?.trim()) {
+    return 'لا يوجد';
   }
 
   const clean = value.trim();
 
-  if (clean.length <= 65) {
+  if (clean.length <= limit) {
     return clean;
   }
 
-  return (
-    clean.slice(0, 65) +
-    '…'
-  );
+  return `${clean.slice(0, limit)}…`;
+}
+
+function compactPropertyTitle(
+  value?: string
+) {
+  if (!value) {
+    return '-';
+  }
+
+  const clean = value.trim();
+
+  if (clean.length <= 30) {
+    return clean;
+  }
+
+  return `${clean.slice(0, 30)}…`;
 }
 
 export default function CRM({
@@ -169,15 +183,18 @@ export default function CRM({
             lead.property_id
         );
 
-      const searchable =
-        lead.name +
-        lead.phone +
-        (property?.title || '');
+      const searchable = [
+        lead.name,
+        lead.phone,
+        property?.title || '',
+        lead.assigned_name || '',
+        lead.field_assigned_name || '',
+      ].join(' ');
 
       return searchable
         .toLowerCase()
         .includes(
-          q.toLowerCase()
+          q.trim().toLowerCase()
         );
     });
 
@@ -290,25 +307,43 @@ export default function CRM({
 
           <TabsContent value="leads">
             <div className="panel">
-              <div className="section-head">
-                <h2>
-                  سجل العملاء
-                </h2>
+              <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <h2 className="mb-1">
+                    سجل العملاء
+                  </h2>
 
-                <label className="search">
-                  <input
-                    aria-label="بحث العملاء"
-                    value={q}
-                    onChange={
-                      event =>
-                        setQ(
-                          event.target
-                            .value
-                        )
-                    }
-                    placeholder="اسم العميل، الجوال أو العقار"
-                  />
-                </label>
+                  <p className="subtle">
+                    كل متابعة في مكان واحد.
+                  </p>
+                </div>
+
+                <div className="flex w-full flex-col gap-3 sm:flex-row lg:w-auto">
+                  <label className="search w-full sm:w-[360px]">
+                    <input
+                      aria-label="بحث العملاء"
+                      value={q}
+                      onChange={
+                        event =>
+                          setQ(
+                            event.target
+                              .value
+                          )
+                      }
+                      placeholder="ابحث باسم العميل، الجوال أو العقار..."
+                    />
+                  </label>
+
+                  <button
+                    className="primary whitespace-nowrap"
+                    onClick={() => {
+                      setEdit(undefined);
+                      setOpen(true);
+                    }}
+                  >
+                    + إضافة عميل
+                  </button>
+                </div>
               </div>
 
               {error && (
@@ -333,192 +368,241 @@ export default function CRM({
                   جارٍ تحميل العملاء…
                 </p>
               ) : shown.length ? (
-                <div className="w-full overflow-x-auto">
-                  <Table className="min-w-[1450px]">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="whitespace-nowrap text-center">
-                          #
-                        </TableHead>
+                <>
+                  <div className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                    <Table className="w-full table-fixed">
+                      <TableHeader>
+                        <TableRow className="bg-slate-50/80">
+                          <TableHead className="w-[3%] px-2 text-center">
+                            #
+                          </TableHead>
 
-                        <TableHead className="whitespace-nowrap">
-                          اسم العميل
-                        </TableHead>
+                          <TableHead className="w-[10%] px-2">
+                            اسم العميل
+                          </TableHead>
 
-                        <TableHead className="whitespace-nowrap">
-                          الجوال
-                        </TableHead>
+                          <TableHead className="w-[10%] px-2">
+                            الجوال
+                          </TableHead>
 
-                        <TableHead className="whitespace-nowrap">
-                          العقار
-                        </TableHead>
+                          <TableHead className="w-[12%] px-2">
+                            العقار
+                          </TableHead>
 
-                        <TableHead className="whitespace-nowrap">
-                          المرحلة
-                        </TableHead>
+                          <TableHead className="w-[7%] px-2">
+                            المرحلة
+                          </TableHead>
 
-                        <TableHead className="whitespace-nowrap">
-                          مندوب المبيعات
-                        </TableHead>
+                          <TableHead className="w-[9%] px-2">
+                            مندوب المبيعات
+                          </TableHead>
 
-                        <TableHead className="whitespace-nowrap">
-                          الموظف الميداني
-                        </TableHead>
+                          <TableHead className="w-[9%] px-2">
+                            الموظف الميداني
+                          </TableHead>
 
-                        <TableHead className="min-w-[190px]">
-                          آخر تحديث (المبيعات)
-                        </TableHead>
+                          <TableHead className="w-[12%] px-2">
+                            آخر تحديث المبيعات
+                          </TableHead>
 
-                        <TableHead className="min-w-[190px]">
-                          آخر تحديث (الميداني)
-                        </TableHead>
+                          <TableHead className="w-[12%] px-2">
+                            آخر تحديث الميداني
+                          </TableHead>
 
-                        <TableHead className="whitespace-nowrap">
-                          المتابعة القادمة
-                        </TableHead>
+                          <TableHead className="w-[9%] px-2">
+                            المتابعة
+                          </TableHead>
 
-                        <TableHead className="whitespace-nowrap text-center">
-                          الإجراء
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
+                          <TableHead className="w-[7%] px-2 text-center">
+                            الإجراء
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
 
-                    <TableBody>
-                      {shown.map(
-                        (
-                          lead,
-                          index
-                        ) => {
-                          const property =
-                            data.find(
-                              property =>
-                                property.id ===
-                                lead.property_id
-                            );
+                      <TableBody>
+                        {shown.map(
+                          (
+                            lead,
+                            index
+                          ) => {
+                            const property =
+                              data.find(
+                                property =>
+                                  property.id ===
+                                  lead.property_id
+                              );
 
-                          return (
-                            <TableRow
-                              key={
-                                lead.id
-                              }
-                            >
-                              <TableCell className="text-center text-muted-foreground">
-                                {index +
-                                  1}
-                              </TableCell>
-
-                              <TableCell className="font-medium whitespace-nowrap">
-                                {
-                                  lead.name
+                            return (
+                              <TableRow
+                                key={
+                                  lead.id
                                 }
-                              </TableCell>
-
-                              <TableCell
-                                dir="ltr"
-                                className="whitespace-nowrap text-right"
+                                className="align-middle"
                               >
-                                {
-                                  lead.phone
-                                }
-                              </TableCell>
+                                <TableCell className="px-2 text-center text-sm text-muted-foreground">
+                                  {index +
+                                    1}
+                                </TableCell>
 
-                              <TableCell className="min-w-[170px]">
-                                {property?.title ||
-                                  '-'}
-                              </TableCell>
+                                <TableCell className="px-2">
+                                  <a
+                                    href={`/crm/leads/${lead.id}`}
+                                    className="block truncate font-semibold text-[#5b2a72] underline-offset-4 hover:underline"
+                                    title={
+                                      lead.name
+                                    }
+                                  >
+                                    {
+                                      lead.name
+                                    }
+                                  </a>
+                                </TableCell>
 
-                              <TableCell className="whitespace-nowrap">
-                                <span className="inline-flex rounded-full border px-3 py-1 text-xs font-medium">
-                                  {stages[
-                                    lead
-                                      .stage
-                                  ] ||
-                                    lead.stage}
-                                </span>
-                              </TableCell>
-
-                              <TableCell className="whitespace-nowrap">
-                                {lead.assigned_name ||
-                                  'بدون تعيين'}
-                              </TableCell>
-
-                              <TableCell className="whitespace-nowrap">
-                                {lead.field_assigned_name ||
-                                  'بدون تعيين'}
-                              </TableCell>
-
-                              <TableCell className="min-w-[190px] max-w-[230px]">
-                                <div
-                                  className="truncate"
-                                  title={
-                                    lead.sales_last_update ||
-                                    ''
-                                  }
+                                <TableCell
+                                  dir="ltr"
+                                  className="px-2 text-right text-sm"
                                 >
-                                  {shortUpdate(
-                                    lead.sales_last_update
-                                  )}
-                                </div>
+                                  <div
+                                    className="truncate"
+                                    title={
+                                      lead.phone
+                                    }
+                                  >
+                                    {
+                                      lead.phone
+                                    }
+                                  </div>
+                                </TableCell>
 
-                                {lead.sales_last_update_at && (
-                                  <div className="mt-1 text-xs text-muted-foreground">
-                                    {formatUpdateDate(
-                                      lead.sales_last_update_at
+                                <TableCell className="px-2 text-sm">
+                                  <div
+                                    className="truncate"
+                                    title={
+                                      property?.title ||
+                                      '-'
+                                    }
+                                  >
+                                    {compactPropertyTitle(
+                                      property?.title
                                     )}
                                   </div>
-                                )}
-                              </TableCell>
+                                </TableCell>
 
-                              <TableCell className="min-w-[190px] max-w-[230px]">
-                                <div
-                                  className="truncate"
-                                  title={
-                                    lead.field_last_update ||
-                                    ''
-                                  }
-                                >
-                                  {shortUpdate(
-                                    lead.field_last_update
-                                  )}
-                                </div>
-
-                                {lead.field_last_update_at && (
-                                  <div className="mt-1 text-xs text-muted-foreground">
-                                    {formatUpdateDate(
-                                      lead.field_last_update_at
-                                    )}
-                                  </div>
-                                )}
-                              </TableCell>
-
-                              <TableCell className="whitespace-nowrap">
-                                {lead.follow_up ||
-                                  'لم تحدد'}
-                              </TableCell>
-
-                              <TableCell className="text-center">
-                                <button
-                                  onClick={() => {
-                                    setEdit(
+                                <TableCell className="px-2">
+                                  <span className="inline-flex max-w-full truncate rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                                    {stages[
                                       lead
-                                    );
+                                        .stage
+                                    ] ||
+                                      lead.stage}
+                                  </span>
+                                </TableCell>
 
-                                    setOpen(
-                                      true
-                                    );
-                                  }}
-                                  className="underline whitespace-nowrap"
-                                >
-                                  تحديث
-                                </button>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        }
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
+                                <TableCell className="px-2 text-sm">
+                                  <div
+                                    className="truncate"
+                                    title={
+                                      lead.assigned_name ||
+                                      'بدون تعيين'
+                                    }
+                                  >
+                                    {lead.assigned_name ||
+                                      'بدون تعيين'}
+                                  </div>
+                                </TableCell>
+
+                                <TableCell className="px-2 text-sm">
+                                  <div
+                                    className="truncate"
+                                    title={
+                                      lead.field_assigned_name ||
+                                      'بدون تعيين'
+                                    }
+                                  >
+                                    {lead.field_assigned_name ||
+                                      'بدون تعيين'}
+                                  </div>
+                                </TableCell>
+
+                                <TableCell className="px-2 text-sm">
+                                  <div
+                                    className="truncate"
+                                    title={
+                                      lead.sales_last_update ||
+                                      'لا يوجد تحديث'
+                                    }
+                                  >
+                                    {compactText(
+                                      lead.sales_last_update
+                                    )}
+                                  </div>
+
+                                  {lead.sales_last_update_at && (
+                                    <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                                      {formatUpdateDate(
+                                        lead.sales_last_update_at
+                                      )}
+                                    </div>
+                                  )}
+                                </TableCell>
+
+                                <TableCell className="px-2 text-sm">
+                                  <div
+                                    className="truncate"
+                                    title={
+                                      lead.field_last_update ||
+                                      'لا يوجد تحديث'
+                                    }
+                                  >
+                                    {compactText(
+                                      lead.field_last_update
+                                    )}
+                                  </div>
+
+                                  {lead.field_last_update_at && (
+                                    <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                                      {formatUpdateDate(
+                                        lead.field_last_update_at
+                                      )}
+                                    </div>
+                                  )}
+                                </TableCell>
+
+                                <TableCell className="px-2 text-sm">
+                                  <div className="truncate">
+                                    {lead.follow_up ||
+                                      '-'}
+                                  </div>
+                                </TableCell>
+
+                                <TableCell className="px-2 text-center">
+                                  <button
+                                    onClick={() => {
+                                      setEdit(
+                                        lead
+                                      );
+
+                                      setOpen(
+                                        true
+                                      );
+                                    }}
+                                    className="inline-flex items-center justify-center rounded-lg bg-slate-100 px-3 py-2 text-xs font-medium text-[#5b2a72] transition hover:bg-slate-200"
+                                  >
+                                    تحديث
+                                  </button>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          }
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+
+                  <div className="mt-4 text-sm text-muted-foreground">
+                    عرض {shown.length} من أصل {leads.length} عميل
+                  </div>
+                </>
               ) : (
                 !error && (
                   <div className="empty">
@@ -529,9 +613,7 @@ export default function CRM({
                     </h3>
 
                     <p>
-                      أضف عميلًا أو
-                      سجّل طلب اهتمام
-                      من صفحة العقار.
+                      أضف عميلًا أو سجّل طلب اهتمام من صفحة العقار.
                     </p>
                   </div>
                 )
@@ -546,12 +628,10 @@ export default function CRM({
               </h2>
 
               <p className="subtle">
-                87 سجلًا مستوردًا
-                للمعاينة، و30 سجلًا
-                في قائمة المراجعة
-                خارج هذه النسخة. لا
-                يحدث نشر على الموقع
-                الأصلي.
+                87 سجلًا مستوردًا للمعاينة،
+                و30 سجلًا في قائمة المراجعة
+                خارج هذه النسخة. لا يحدث نشر
+                على الموقع الأصلي.
               </p>
 
               <Table>
