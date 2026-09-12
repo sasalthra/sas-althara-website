@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  FormEvent,
   useEffect,
   useMemo,
   useState,
@@ -144,6 +145,10 @@ function actionLabel(
     case 'updated':
     case 'lead_updated':
       return 'تم تحديث بيانات العميل';
+    case 'follow_up_added':
+      return 'تمت إضافة متابعة';
+    case 'stage_changed':
+      return 'تم تغيير المرحلة';
     default:
       return action
         .replaceAll('_', ' ')
@@ -157,36 +162,63 @@ function getActivityNote(
   if (
     activity.details &&
     typeof activity.details === 'object' &&
-    !Array.isArray(
-      activity.details
-    )
+    !Array.isArray(activity.details)
   ) {
-    const note =
-      activity.details.note;
+    const note = activity.details.note;
+    const followUp = activity.details.followUp;
+    const stage = activity.details.stage;
+    const previousStage = activity.details.previousStage;
+    const parts: string[] = [];
+
+    if (
+      activity.action === 'stage_changed' &&
+      typeof stage === 'string'
+    ) {
+      if (
+        typeof previousStage === 'string' &&
+        previousStage
+      ) {
+        parts.push(
+          `${
+            stages[previousStage] || previousStage
+          } ← ${
+            stages[stage] || stage
+          }`
+        );
+      } else {
+        parts.push(
+          `المرحلة: ${stages[stage] || stage}`
+        );
+      }
+    }
+
+    if (
+      activity.action === 'follow_up_added' &&
+      typeof followUp === 'string' &&
+      followUp
+    ) {
+      parts.push(
+        `موعد المتابعة: ${followUp}`
+      );
+    }
 
     if (
       typeof note === 'string' &&
       note.trim()
     ) {
-      return note.trim();
+      parts.push(note.trim());
     }
 
-    const followUp =
-      activity.details.followUp;
-
-    const stage =
-      activity.details.stage;
-
-    const parts: string[] = [];
+    if (parts.length) {
+      return parts.join(' • ');
+    }
 
     if (
       typeof stage === 'string' &&
       stage
     ) {
       parts.push(
-        `المرحلة: ${
-          stages[stage] || stage
-        }`
+        `المرحلة: ${stages[stage] || stage}`
       );
     }
 
@@ -239,6 +271,24 @@ export default function LeadDetailsPage() {
 
   const [dialogMode, setDialogMode] =
     useState<DialogMode>(null);
+
+  const [followUpDate, setFollowUpDate] =
+    useState('');
+
+  const [followUpNote, setFollowUpNote] =
+    useState('');
+
+  const [nextStage, setNextStage] =
+    useState('new');
+
+  const [stageNote, setStageNote] =
+    useState('');
+
+  const [saving, setSaving] =
+    useState(false);
+
+  const [dialogError, setDialogError] =
+    useState('');
 
   const refresh = async () => {
     setLoading(true);
@@ -351,19 +401,133 @@ export default function LeadDetailsPage() {
     [lead]
   );
 
-  const dialogTitle =
-    dialogMode === 'stage'
-      ? 'تغيير مرحلة العميل'
-      : dialogMode === 'followup'
-        ? 'إضافة متابعة'
-        : 'تحديث بيانات العميل';
+  useEffect(() => {
+    if (!lead) {
+      return;
+    }
 
-  const dialogDescription =
-    dialogMode === 'stage'
-      ? 'حدّث المرحلة الحالية وسجّل ملاحظتك.'
-      : dialogMode === 'followup'
-        ? 'حدد موعد المتابعة القادمة وسجّل آخر مستجد.'
-        : 'حدّث بيانات العميل والتعيينات والمتابعة.';
+    setFollowUpDate(
+      lead.follow_up || ''
+    );
+
+    setNextStage(
+      lead.stage
+    );
+  }, [lead]);
+
+  async function saveFollowUp(
+    event: FormEvent
+  ) {
+    event.preventDefault();
+
+    if (!followUpDate) {
+      setDialogError(
+        'حدد تاريخ المتابعة القادمة.'
+      );
+      return;
+    }
+
+    setSaving(true);
+    setDialogError('');
+
+    try {
+      const response =
+        await fetch(
+          `/api/leads/${params.id}/followup`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type':
+                'application/json',
+            },
+            body: JSON.stringify({
+              followUp:
+                followUpDate,
+              note: followUpNote,
+            }),
+          }
+        );
+
+      const result =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          result.error ||
+            'تعذر حفظ المتابعة'
+        );
+      }
+
+      setDialogMode(null);
+      setFollowUpNote('');
+
+      await Promise.all([
+        refresh(),
+        refreshActivity(),
+      ]);
+    } catch (error) {
+      setDialogError(
+        error instanceof Error
+          ? error.message
+          : 'تعذر حفظ المتابعة'
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveStage(
+    event: FormEvent
+  ) {
+    event.preventDefault();
+
+    setSaving(true);
+    setDialogError('');
+
+    try {
+      const response =
+        await fetch(
+          `/api/leads/${params.id}/stage`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type':
+                'application/json',
+            },
+            body: JSON.stringify({
+              stage: nextStage,
+              note: stageNote,
+            }),
+          }
+        );
+
+      const result =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          result.error ||
+            'تعذر تغيير المرحلة'
+        );
+      }
+
+      setDialogMode(null);
+      setStageNote('');
+
+      await Promise.all([
+        refresh(),
+        refreshActivity(),
+      ]);
+    } catch (error) {
+      setDialogError(
+        error instanceof Error
+          ? error.message
+          : 'تعذر تغيير المرحلة'
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -468,11 +632,16 @@ export default function LeadDetailsPage() {
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  setDialogError('');
+                  setFollowUpDate(
+                    lead.follow_up || ''
+                  );
+                  setFollowUpNote('');
                   setDialogMode(
                     'followup'
-                  )
-                }
+                  );
+                }}
                 className="rounded-xl border border-[#53115c]/20 bg-[#53115c]/5 px-4 py-2.5 text-sm font-semibold text-[#53115c] transition hover:bg-[#53115c]/10"
               >
                 + إضافة متابعة
@@ -480,11 +649,16 @@ export default function LeadDetailsPage() {
 
               <button
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  setDialogError('');
+                  setNextStage(
+                    lead.stage
+                  );
+                  setStageNote('');
                   setDialogMode(
                     'stage'
-                  )
-                }
+                  );
+                }}
                 className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
               >
                 تغيير المرحلة
@@ -492,11 +666,12 @@ export default function LeadDetailsPage() {
 
               <button
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  setDialogError('');
                   setDialogMode(
                     'edit'
-                  )
-                }
+                  );
+                }}
                 className="rounded-xl bg-[#53115c] px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
               >
                 تحديث بيانات العميل
@@ -803,7 +978,225 @@ export default function LeadDetailsPage() {
 
       <Dialog
         open={
-          dialogMode !== null
+          dialogMode === 'followup'
+        }
+        onOpenChange={open => {
+          if (!open) {
+            setDialogMode(null);
+            setDialogError('');
+          }
+        }}
+      >
+        <DialogContent
+          dir="rtl"
+          className="sm:max-w-lg"
+        >
+          <DialogHeader>
+            <DialogTitle>
+              إضافة متابعة
+            </DialogTitle>
+
+            <DialogDescription>
+              حدد موعد المتابعة القادمة وأضف ملاحظة مختصرة.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form
+            className="space-y-5"
+            onSubmit={
+              saveFollowUp
+            }
+          >
+            <div>
+              <label className="mb-2 block text-sm font-medium">
+                تاريخ المتابعة القادمة
+              </label>
+
+              <input
+                type="date"
+                required
+                value={
+                  followUpDate
+                }
+                onChange={
+                  event =>
+                    setFollowUpDate(
+                      event.target.value
+                    )
+                }
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#53115c]"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium">
+                ملاحظة المتابعة
+              </label>
+
+              <textarea
+                rows={4}
+                value={
+                  followUpNote
+                }
+                onChange={
+                  event =>
+                    setFollowUpNote(
+                      event.target.value
+                    )
+                }
+                placeholder="مثال: التواصل مع العميل بعد موافقة البنك..."
+                className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#53115c]"
+              />
+            </div>
+
+            {dialogError && (
+              <p className="text-sm text-red-600">
+                {dialogError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setDialogMode(null)
+                }
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold"
+              >
+                إلغاء
+              </button>
+
+              <button
+                type="submit"
+                disabled={saving}
+                className="rounded-xl bg-[#53115c] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {saving
+                  ? 'جارٍ الحفظ...'
+                  : 'حفظ المتابعة'}
+              </button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={
+          dialogMode === 'stage'
+        }
+        onOpenChange={open => {
+          if (!open) {
+            setDialogMode(null);
+            setDialogError('');
+          }
+        }}
+      >
+        <DialogContent
+          dir="rtl"
+          className="sm:max-w-lg"
+        >
+          <DialogHeader>
+            <DialogTitle>
+              تغيير المرحلة
+            </DialogTitle>
+
+            <DialogDescription>
+              اختر المرحلة الجديدة وسجّل سبب أو نتيجة التغيير.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form
+            className="space-y-5"
+            onSubmit={
+              saveStage
+            }
+          >
+            <div>
+              <label className="mb-2 block text-sm font-medium">
+                المرحلة الجديدة
+              </label>
+
+              <select
+                value={nextStage}
+                onChange={
+                  event =>
+                    setNextStage(
+                      event.target.value
+                    )
+                }
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none focus:border-[#53115c]"
+              >
+                {Object.entries(
+                  stages
+                ).map(
+                  ([
+                    value,
+                    label,
+                  ]) => (
+                    <option
+                      key={value}
+                      value={value}
+                    >
+                      {label}
+                    </option>
+                  )
+                )}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium">
+                ملاحظة التغيير
+              </label>
+
+              <textarea
+                rows={4}
+                value={stageNote}
+                onChange={
+                  event =>
+                    setStageNote(
+                      event.target.value
+                    )
+                }
+                placeholder="مثال: تم التواصل مع العميل وتحديد موعد للمعاينة..."
+                className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#53115c]"
+              />
+            </div>
+
+            {dialogError && (
+              <p className="text-sm text-red-600">
+                {dialogError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setDialogMode(null)
+                }
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold"
+              >
+                إلغاء
+              </button>
+
+              <button
+                type="submit"
+                disabled={saving}
+                className="rounded-xl bg-[#53115c] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {saving
+                  ? 'جارٍ الحفظ...'
+                  : 'حفظ المرحلة'}
+              </button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={
+          dialogMode === 'edit'
         }
         onOpenChange={open => {
           if (!open) {
@@ -817,16 +1210,16 @@ export default function LeadDetailsPage() {
         >
           <DialogHeader>
             <DialogTitle>
-              {dialogTitle}
+              تحديث بيانات العميل
             </DialogTitle>
 
             <DialogDescription>
-              {dialogDescription}
+              عدّل بيانات العميل والتعيينات وباقي المعلومات.
             </DialogDescription>
           </DialogHeader>
 
           <LeadForm
-            key={`${lead.id}-${dialogMode || 'edit'}`}
+            key={`${lead.id}-edit`}
             initial={lead}
             role={role}
             onSaved={() => {
