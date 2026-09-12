@@ -78,7 +78,7 @@ function formatUpdateDate(
 
 function compactText(
   value?: string | null,
-  limit = 28
+  limit = 22
 ) {
   if (!value?.trim()) {
     return 'لا يوجد';
@@ -86,11 +86,9 @@ function compactText(
 
   const clean = value.trim();
 
-  if (clean.length <= limit) {
-    return clean;
-  }
-
-  return `${clean.slice(0, limit)}…`;
+  return clean.length <= limit
+    ? clean
+    : `${clean.slice(0, limit)}…`;
 }
 
 function compactPropertyTitle(
@@ -102,11 +100,9 @@ function compactPropertyTitle(
 
   const clean = value.trim();
 
-  if (clean.length <= 30) {
-    return clean;
-  }
-
-  return `${clean.slice(0, 30)}…`;
+  return clean.length <= 24
+    ? clean
+    : `${clean.slice(0, 24)}…`;
 }
 
 export default function CRM({
@@ -306,44 +302,32 @@ export default function CRM({
           </TabsList>
 
           <TabsContent value="leads">
-            <div className="panel">
-              <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="panel !py-6">
+              <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <h2 className="mb-1">
                     سجل العملاء
                   </h2>
 
                   <p className="subtle">
-                    كل متابعة في مكان واحد.
+                    اضغط على اسم العميل لعرض الملف الكامل.
                   </p>
                 </div>
 
-                <div className="flex w-full flex-col gap-3 sm:flex-row lg:w-auto">
-                  <label className="search w-full sm:w-[360px]">
-                    <input
-                      aria-label="بحث العملاء"
-                      value={q}
-                      onChange={
-                        event =>
-                          setQ(
-                            event.target
-                              .value
-                          )
-                      }
-                      placeholder="ابحث باسم العميل، الجوال أو العقار..."
-                    />
-                  </label>
-
-                  <button
-                    className="primary whitespace-nowrap"
-                    onClick={() => {
-                      setEdit(undefined);
-                      setOpen(true);
-                    }}
-                  >
-                    + إضافة عميل
-                  </button>
-                </div>
+                <label className="search w-full lg:w-[420px]">
+                  <input
+                    aria-label="بحث العملاء"
+                    value={q}
+                    onChange={
+                      event =>
+                        setQ(
+                          event.target
+                            .value
+                        )
+                    }
+                    placeholder="ابحث باسم العميل، الجوال أو العقار..."
+                  />
+                </label>
               </div>
 
               {error && (
@@ -377,44 +361,40 @@ export default function CRM({
                             #
                           </TableHead>
 
-                          <TableHead className="w-[10%] px-2">
+                          <TableHead className="w-[12%] px-2">
                             اسم العميل
                           </TableHead>
 
-                          <TableHead className="w-[10%] px-2">
+                          <TableHead className="w-[11%] px-2">
                             الجوال
                           </TableHead>
 
-                          <TableHead className="w-[12%] px-2">
+                          <TableHead className="w-[14%] px-2">
                             العقار
                           </TableHead>
 
-                          <TableHead className="w-[7%] px-2">
+                          <TableHead className="w-[8%] px-2">
                             المرحلة
                           </TableHead>
 
-                          <TableHead className="w-[9%] px-2">
-                            مندوب المبيعات
+                          <TableHead className="w-[10%] px-2">
+                            المبيعات
                           </TableHead>
 
-                          <TableHead className="w-[9%] px-2">
-                            الموظف الميداني
+                          <TableHead className="w-[10%] px-2">
+                            الميداني
                           </TableHead>
 
-                          <TableHead className="w-[12%] px-2">
-                            آخر تحديث المبيعات
+                          <TableHead className="w-[13%] px-2">
+                            آخر تحديث مبيعات
                           </TableHead>
 
-                          <TableHead className="w-[12%] px-2">
-                            آخر تحديث الميداني
+                          <TableHead className="w-[13%] px-2">
+                            آخر تحديث ميداني
                           </TableHead>
 
-                          <TableHead className="w-[9%] px-2">
+                          <TableHead className="w-[6%] px-2">
                             المتابعة
-                          </TableHead>
-
-                          <TableHead className="w-[7%] px-2 text-center">
-                            الإجراء
                           </TableHead>
                         </TableRow>
                       </TableHeader>
@@ -440,21 +420,18 @@ export default function CRM({
                                 className="align-middle"
                               >
                                 <TableCell className="px-2 text-center text-sm text-muted-foreground">
-                                  {index +
-                                    1}
+                                  {index + 1}
                                 </TableCell>
 
                                 <TableCell className="px-2">
                                   <a
                                     href={`/crm/leads/${lead.id}`}
-                                    className="block truncate font-semibold text-[#5b2a72] underline-offset-4 hover:underline"
+                                    className="block truncate font-semibold text-[#5b2a72] underline decoration-[#5b2a72]/40 underline-offset-4 hover:decoration-[#5b2a72]"
                                     title={
                                       lead.name
                                     }
                                   >
-                                    {
-                                      lead.name
-                                    }
+                                    {lead.name}
                                   </a>
                                 </TableCell>
 
@@ -468,9 +445,7 @@ export default function CRM({
                                       lead.phone
                                     }
                                   >
-                                    {
-                                      lead.phone
-                                    }
+                                    {lead.phone}
                                   </div>
                                 </TableCell>
 
@@ -574,23 +549,6 @@ export default function CRM({
                                       '-'}
                                   </div>
                                 </TableCell>
-
-                                <TableCell className="px-2 text-center">
-                                  <button
-                                    onClick={() => {
-                                      setEdit(
-                                        lead
-                                      );
-
-                                      setOpen(
-                                        true
-                                      );
-                                    }}
-                                    className="inline-flex items-center justify-center rounded-lg bg-slate-100 px-3 py-2 text-xs font-medium text-[#5b2a72] transition hover:bg-slate-200"
-                                  >
-                                    تحديث
-                                  </button>
-                                </TableCell>
                               </TableRow>
                             );
                           }
@@ -599,7 +557,7 @@ export default function CRM({
                     </Table>
                   </div>
 
-                  <div className="mt-4 text-sm text-muted-foreground">
+                  <div className="mt-3 text-sm text-muted-foreground">
                     عرض {shown.length} من أصل {leads.length} عميل
                   </div>
                 </>
