@@ -29,11 +29,29 @@ export const stages: Record<string, string> = {
   not_interested: 'غير مهتم',
 };
 
+export const leadSources: Record<string, string> = {
+  meta: 'ميتا',
+  tiktok: 'تيك توك',
+  snapchat: 'سناب',
+  google: 'جوجل',
+  management: 'الإدارة',
+  other: 'أخرى',
+};
+
+const knownLeadSources = new Set([
+  'meta',
+  'tiktok',
+  'snapchat',
+  'google',
+  'management',
+]);
+
 export type Lead = {
   id: string;
   name: string;
   phone: string;
   property_id: string;
+  source?: string | null;
   stage: string;
   notes: string;
   follow_up: string;
@@ -95,6 +113,30 @@ export default function LeadForm({
       propertyId ||
       data[0].id
   );
+
+  const initialSource =
+    initial?.source?.trim() || '';
+
+  const [sourceOption, setSourceOption] =
+    useState(
+      initialSource
+        ? knownLeadSources.has(
+            initialSource
+          )
+          ? initialSource
+          : 'other'
+        : 'management'
+    );
+
+  const [customSource, setCustomSource] =
+    useState(
+      initialSource &&
+        !knownLeadSources.has(
+          initialSource
+        )
+        ? initialSource
+        : ''
+    );
 
   const [stage, setStage] = useState(
     initial?.stage || 'new'
@@ -225,11 +267,25 @@ export default function LeadForm({
     setMessage('');
 
     try {
+      const resolvedSource =
+        sourceOption === 'other'
+          ? customSource.trim()
+          : sourceOption;
+
+      if (!resolvedSource) {
+        setMessage(
+          'اكتب مصدر العميل.'
+        );
+        setBusy(false);
+        return;
+      }
+
       const body: {
         id: string;
         name: string;
         phone: string;
         propertyId: string;
+        source: string;
         stage: string;
         notes: string;
         followUp: string;
@@ -240,6 +296,7 @@ export default function LeadForm({
         name,
         phone,
         propertyId: prop,
+        source: resolvedSource,
         stage,
         notes,
         followUp: date,
@@ -367,6 +424,58 @@ export default function LeadForm({
 
       {!propertyId && (
         <>
+          <label>
+            مصدر العميل
+
+            <Select
+              value={sourceOption}
+              onValueChange={value => {
+                setSourceOption(value);
+
+                if (value !== 'other') {
+                  setCustomSource('');
+                }
+              }}
+              dir="rtl"
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="اختر مصدر العميل" />
+              </SelectTrigger>
+
+              <SelectContent>
+                {Object.entries(
+                  leadSources
+                ).map(([key, value]) => (
+                  <SelectItem
+                    key={key}
+                    value={key}
+                  >
+                    {value}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+
+          {sourceOption === 'other' && (
+            <label>
+              اكتب مصدر العميل
+
+              <input
+                required
+                minLength={2}
+                maxLength={80}
+                value={customSource}
+                onChange={event =>
+                  setCustomSource(
+                    event.target.value
+                  )
+                }
+                placeholder="مثال: معرض عقاري، إحالة، حملة خاصة..."
+              />
+            </label>
+          )}
+
           <label>
             مرحلة العميل
 
