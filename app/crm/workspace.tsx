@@ -8,6 +8,11 @@ import {
 
 import {LogoutButton} from './auth-buttons';
 import UsersPanel from './users-panel';
+import HrPanel from './hr-panel';
+import TransactionsPanel from './transactions-panel';
+import ImportPanel from './import-panel';
+import AiPanel from './ai-panel';
+import SheetsPanel from './sheets-panel';
 
 import data from '@/data/properties.json';
 import LeadForm, {
@@ -182,7 +187,7 @@ export default function CRM({
       const searchable = [
         lead.name,
         lead.phone,
-        property?.title || '',
+        property?.title || lead.property_other || '',
         lead.assigned_name || '',
         lead.field_assigned_name || '',
       ].join(' ');
@@ -285,7 +290,12 @@ export default function CRM({
           defaultValue="leads"
           dir="rtl"
         >
-          <TabsList>
+          <TabsList className="h-auto flex-wrap justify-start">
+            <TabsTrigger value="ai">المساعد الداخلي</TabsTrigger>
+            {role === 'admin' && <TabsTrigger value="sheets">إعدادات Google Sheets</TabsTrigger>}
+            {['admin','supervisor'].includes(role) && <TabsTrigger value="import">استيراد Excel</TabsTrigger>}
+            <TabsTrigger value="hr">الموظفون والحضور</TabsTrigger>
+            {role === 'admin' && <TabsTrigger value="transactions">المعاملات والمالية</TabsTrigger>}
             <TabsTrigger value="leads">
               العملاء والمتابعات
             </TabsTrigger>
@@ -301,6 +311,11 @@ export default function CRM({
             )}
           </TabsList>
 
+          {role === 'admin' && <TabsContent value="transactions"><TransactionsPanel leads={leads}/></TabsContent>}
+          <TabsContent value="hr"><HrPanel admin={role === 'admin'}/></TabsContent>
+          <TabsContent value="ai"><AiPanel admin={role === 'admin'}/></TabsContent>
+          {role === 'admin' && <TabsContent value="sheets"><SheetsPanel/></TabsContent>}
+          {['admin','supervisor'].includes(role) && <TabsContent value="import"><ImportPanel onSaved={()=>void refresh()}/></TabsContent>}
           <TabsContent value="leads">
             <div className="panel !py-6">
               <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -354,7 +369,7 @@ export default function CRM({
               ) : shown.length ? (
                 <>
                   <div className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                    <Table className="w-full table-fixed">
+                    <Table className="w-full min-w-[1200px] table-fixed">
                       <TableHeader>
                         <TableRow className="bg-slate-50/80">
                           <TableHead className="w-[3%] px-2 text-center">
@@ -453,12 +468,12 @@ export default function CRM({
                                   <div
                                     className="truncate"
                                     title={
-                                      property?.title ||
-                                      '-'
+                                      property?.title || lead.property_other ||
+                                                                            '-'
                                     }
                                   >
                                     {compactPropertyTitle(
-                                      property?.title
+                                                                          property?.title || lead.property_other
                                     )}
                                   </div>
                                 </TableCell>

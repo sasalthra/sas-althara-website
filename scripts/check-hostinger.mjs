@@ -6,8 +6,8 @@ import assert from 'node:assert/strict';
 const require=createRequire(import.meta.url);
 // Match webpack's CommonJS default-import interop for the actual Google provider.
 const googleInterop={name:'google-interop',setup(b){
-  b.onResolve({filter:/^next-auth\/providers\/google$/},()=>({path:'google',namespace:'interop'}));
-  b.onLoad({filter:/.*/,namespace:'interop'},()=>({contents:`import mod from ${JSON.stringify(require.resolve('next-auth/providers/google').replaceAll('\\','/'))}; export default mod.default ?? mod;`,loader:'js',resolveDir:process.cwd()}));
+  b.onResolve({filter:/^next-auth\/providers\/(google|credentials)$/},args=>({path:args.path,namespace:'interop'}));
+  b.onLoad({filter:/.*/,namespace:'interop'},args=>({contents:`import mod from ${JSON.stringify(require.resolve(args.path).replaceAll('\\','/'))}; export default mod.default ?? mod;`,loader:'js',resolveDir:process.cwd()}));
 }};
 mkdirSync('test-output',{recursive:true});
 process.env.NEXTAUTH_URL='https://sas.test';
@@ -26,19 +26,21 @@ assert.equal(await callbacks.redirect({url:'https://evil.test',baseUrl:'https://
 let token=await callbacks.jwt({token:{email:profile.email},account:{provider:'google'},profile});
 let session=await callbacks.session({session:{user:{email:profile.email}},token});
 assert.equal(session.adminId,'google:test-admin');
-assert.equal((await callbacks.session({session:{user:{email:profile.email}},token:{email:profile.email}})).user,undefined);
+assert.equal((await callbacks.session({session:{user:{email:profile.email}},token:{email:profile.email}})).crmUserId,undefined);
 const secret=process.env.NEXTAUTH_SECRET;delete process.env.NEXTAUTH_SECRET;
 assert.equal(authConfigured(),false);process.env.NEXTAUTH_SECRET=secret;
 
 const sqlite=new DatabaseSync(':memory:');
-sqlite.exec('CREATE TABLE leads(id TEXT PRIMARY KEY,owner TEXT,name TEXT,phone TEXT,property_id TEXT,stage TEXT,notes TEXT,follow_up TEXT,created_at TEXT,updated_at TEXT)');
+sqlite.exec('CREATE TABLE leads(id TEXT PRIMARY KEY,owner TEXT,created_by TEXT,assigned_to TEXT,field_assigned_to TEXT,name TEXT,phone TEXT,property_id TEXT,property_other TEXT,source TEXT,stage TEXT,notes TEXT,follow_up TEXT,created_at TEXT,updated_at TEXT); CREATE TABLE crm_users(id TEXT PRIMARY KEY,name TEXT,username TEXT,role TEXT,active INTEGER); CREATE TABLE lead_activity(id TEXT PRIMARY KEY,lead_id TEXT,user_id TEXT,action TEXT,details TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
+sqlite.function('JSON_UNQUOTE',v=>v);
 globalThis.qaSession=null;globalThis.qaFailDB=false;
 // Only the external MySQL driver and session retrieval are substituted.
 // SQL runs in SQLite; MySQL-specific upsert is translated at this boundary.
 globalThis.qaPool={async execute(sql,values){
   if(globalThis.qaFailDB)throw Error('test database unavailable');
+  sql=sql.trim();
   if(sql.startsWith('SELECT'))return [sqlite.prepare(sql).all(...values)];
-  const translated=sql.replace(' ON DUPLICATE KEY UPDATE id=id',' ON CONFLICT(id) DO NOTHING');
+  const translated=sql.replace(/ON DUPLICATE KEY\s+UPDATE id\s*=\s*id/,'ON CONFLICT(id) DO NOTHING');
   return [{affectedRows:Number(sqlite.prepare(translated).run(...values).changes)}];
 }};
 process.env.DB_HOST='test';process.env.DB_USER='test';process.env.DB_PASSWORD='test';process.env.DB_NAME='test';
@@ -53,7 +55,7 @@ const make=(v,origin='https://sas.test')=>new Request('https://internal-host/api
 assert.equal((await api.GET()).status,401);
 globalThis.qaSession={user:{email:'other@gmail.com'},adminId:'google:other'};assert.equal((await api.GET()).status,401);
 globalThis.qaSession={user:{email:profile.email},adminId:'local_admin'};assert.equal((await api.GET()).status,401);
-globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin'};
+globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crmUserId:'google:test-admin',crmRole:'admin'};
 const v={id:crypto.randomUUID(),name:'عميل اختبار',phone:'+966500000000',propertyId:property.id,stage:'new',notes:"quote ' ; --",followUp:'2026-10-01'};
 assert.equal((await api.POST(make(v))).status,200);
 assert.equal((await api.POST(make({...v,name:'لا يستبدل الأصل'}))).status,200);
@@ -65,7 +67,8 @@ for(const followUp of ['2026-99-99','2026-02-30'])assert.equal((await api.POST(m
 assert.equal((await api.POST(make(v,'https://evil.test'))).status,403);
 assert.equal((await api.POST(make({...v,notes:'x'.repeat(13000)}))).status,413);
 assert.equal((await api.PATCH(make({...v,id:crypto.randomUUID()}))).status,404);
-sqlite.prepare('UPDATE leads SET owner=? WHERE id=?').run('google:someone-else',v.id);
+sqlite.prepare('UPDATE leads SET owner=?,created_by=? WHERE id=?').run('google:someone-else','google:someone-else',v.id);
+globalThis.qaSession.crmRole='sales';
 assert.equal((await api.POST(make(v))).status,409);
 assert.equal((await api.PATCH(make(v))).status,404);
 assert.equal((await(await api.GET()).json()).length,0);

@@ -1,77 +1,10 @@
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
-import data from '@/data/properties.json';
-import {z} from 'zod';
+import {leadSchema as schema} from '@/lib/lead-input';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const schema = z.object({
-  id: z.string().uuid(),
-
-  name: z
-    .string()
-    .trim()
-    .min(2)
-    .max(100),
-
-  phone: z
-    .string()
-    .trim()
-    .regex(/^[+\d\s()-]{7,22}$/),
-
-  propertyId: z
-    .string()
-    .refine(id =>
-      data.some(property => property.id === id)
-    ),
-
-  notes: z
-    .string()
-    .max(3000)
-    .default(''),
-
-  stage: z.enum([
-    'new',
-    'contacted',
-    'viewing',
-    'negotiation',
-    'won',
-    'closed',
-  ]).default('new'),
-
-  followUp: z
-    .string()
-    .refine(value => {
-      if (value === '') {
-        return true;
-      }
-
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-        return false;
-      }
-
-      const date = new Date(value);
-
-      return (
-        Number.isFinite(date.getTime()) &&
-        date.toISOString().slice(0, 10) === value
-      );
-    })
-    .default(''),
-
-  assignedTo: z
-    .string()
-    .uuid()
-    .nullable()
-    .optional(),
-
-  fieldAssignedTo: z
-    .string()
-    .uuid()
-    .nullable()
-    .optional(),
-});
 
 function reply(
   body: unknown,
@@ -489,6 +422,8 @@ async function write(
               name = ?,
               phone = ?,
               property_id = ?,
+              property_other = ?,
+              source = ?,
               stage = ?,
               notes = ?,
               follow_up = ?,
@@ -501,6 +436,8 @@ async function write(
             value.name,
             value.phone,
             value.propertyId,
+            value.propertyOther,
+            value.source,
             value.stage,
             value.notes,
             value.followUp,
@@ -613,6 +550,8 @@ async function write(
             name = ?,
             phone = ?,
             property_id = ?,
+              property_other = ?,
+              source = ?,
             stage = ?,
             notes = ?,
             follow_up = ?,
@@ -623,6 +562,8 @@ async function write(
           value.name,
           value.phone,
           value.propertyId,
+            value.propertyOther,
+            value.source,
           value.stage,
           value.notes,
           value.followUp,
@@ -695,6 +636,7 @@ async function write(
             name,
             phone,
             property_id,
+            property_other,
             source,
             stage,
             notes,
@@ -703,6 +645,7 @@ async function write(
             updated_at
           )
           VALUES (
+            ?,
             ?,
             ?,
             ?,
@@ -730,7 +673,8 @@ async function write(
           value.name,
           value.phone,
           value.propertyId,
-          'manual',
+            value.propertyOther,
+            value.source,
           value.stage,
           value.notes,
           value.followUp,

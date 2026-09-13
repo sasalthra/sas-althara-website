@@ -750,8 +750,8 @@ export default function LeadDetailsPage() {
                     اسم العقار
                   </div>
                   <div className="mt-1 font-semibold">
-                    {property?.title ||
-                      lead.property_id}
+                    {property?.title || lead.property_other ||
+                                          lead.property_id}
                   </div>
                 </div>
 

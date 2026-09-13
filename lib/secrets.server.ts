@@ -1,0 +1,5 @@
+import 'server-only';
+import {randomBytes,createCipheriv,createDecipheriv} from 'node:crypto';
+function key(){const v=process.env.APP_ENCRYPTION_KEY||'';if(!/^[A-Za-z0-9+/]{43}=$/.test(v))throw Error('Server encryption is not configured');const bytes=Buffer.from(v,'base64');if(bytes.length!==32)throw Error('Invalid encryption configuration');return bytes;}
+export function seal(value:string,context:string){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key(),iv);cipher.setAAD(Buffer.from(context));const encrypted=Buffer.concat([cipher.update(value,'utf8'),cipher.final()]);return ['v1',iv.toString('base64'),cipher.getAuthTag().toString('base64'),encrypted.toString('base64')].join('.');}
+export function unseal(value:string,context:string){const [version,iv,tag,content,...extra]=value.split('.');if(version!=='v1'||extra.length||!content)throw Error('Invalid secret');const decipher=createDecipheriv('aes-256-gcm',key(),Buffer.from(iv,'base64'));decipher.setAAD(Buffer.from(context));decipher.setAuthTag(Buffer.from(tag,'base64'));return Buffer.concat([decipher.update(Buffer.from(content,'base64')),decipher.final()]).toString('utf8');}

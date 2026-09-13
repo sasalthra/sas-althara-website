@@ -51,6 +51,7 @@ export type Lead = {
   name: string;
   phone: string;
   property_id: string;
+  property_other?: string;
   source?: string | null;
   stage: string;
   notes: string;
@@ -113,6 +114,8 @@ export default function LeadForm({
       propertyId ||
       data[0].id
   );
+
+  const [propertyOther, setPropertyOther] = useState(initial?.property_other || '');
 
   const initialSource =
     initial?.source?.trim() || '';
@@ -285,6 +288,7 @@ export default function LeadForm({
         name: string;
         phone: string;
         propertyId: string;
+        propertyOther: string;
         source: string;
         stage: string;
         notes: string;
@@ -296,6 +300,7 @@ export default function LeadForm({
         name,
         phone,
         propertyId: prop,
+        propertyOther: prop === 'other' ? propertyOther : '',
         source: resolvedSource,
         stage,
         notes,
@@ -409,6 +414,7 @@ export default function LeadForm({
             </SelectTrigger>
 
             <SelectContent>
+              <SelectItem value="other">أخرى — وصف حر</SelectItem>
               {data.map(property => (
                 <SelectItem
                   key={property.id}
@@ -421,6 +427,8 @@ export default function LeadForm({
           </Select>
         </label>
       )}
+
+      {prop === 'other' && <label>وصف العقار الآخر<input required minLength={2} maxLength={500} value={propertyOther} onChange={e => setPropertyOther(e.target.value)} /></label>}
 
       {!propertyId && (
         <>

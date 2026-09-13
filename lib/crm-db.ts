@@ -12,14 +12,19 @@ function database() {
   }
   return pool;
 }
-export function crmDb() {
+export function crmDb(executor: Pick<Pool, 'execute'> = {execute: (...args: Parameters<Pool['execute']>) => database().execute(...args)} as Pick<Pool, 'execute'>) {
   return {prepare(sql: string) {
-    let values: (string | number)[] = [];
+    let values: (string | number | null)[] = [];
     return {
-      bind(...args: (string | number)[]) { values = args; return this; },
-      async all() {const [rows] = await database().execute<RowDataPacket[]>(sql, values); return {results: rows};},
-      async first<T>() {const [rows] = await database().execute<RowDataPacket[]>(sql, values); return (rows[0] as T) || null;},
-      async run() {const [result] = await database().execute<ResultSetHeader>(sql, values); return {meta: {changes: result.affectedRows}};},
+      bind(...args: (string | number | null)[]) { values = args; return this; },
+      async all() {const [rows] = await executor.execute<RowDataPacket[]>(sql, values); return {results: rows};},
+      async first<T>() {const [rows] = await executor.execute<RowDataPacket[]>(sql, values); return (rows[0] as T) || null;},
+      async run() {const [result] = await executor.execute<ResultSetHeader>(sql, values); return {meta: {changes: result.affectedRows}};},
     };
   }};
+}
+export async function crmTransaction<T>(fn:(db:ReturnType<typeof crmDb>)=>Promise<T>):Promise<T>{
+ const connection=await database().getConnection();
+ try{await connection.beginTransaction();const result=await fn(crmDb(connection));await connection.commit();return result;}
+ catch(error){await connection.rollback();throw error;}finally{connection.release();}
 }
