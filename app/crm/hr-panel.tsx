@@ -18,7 +18,7 @@ import {
   localDay,
 } from "@/lib/hr-policy";
 import EmployeeAdmin, { type EmployeeProfile } from "./employee-admin";
-import { CrmLink, useCrmQuery } from "./navigation";
+import { CrmLink, navigateCrm, useCrmQuery } from "./navigation";
 type Kind = keyof typeof serviceTypes;
 type State = {
   month: string;
@@ -82,6 +82,7 @@ const categories: { title: string; kinds: Kind[] }[] = [
 export default function HrPanel({ admin }: { admin: boolean }) {
   const query = useCrmQuery(),
     requested = query.get("hr") || "home";
+  const calendarUser = admin ? query.get("attendanceEmployee") || "" : "";
   const section =
     sections.some((s) => s.id === requested) ||
     (admin && ["employees", "review"].includes(requested))
@@ -96,7 +97,6 @@ export default function HrPanel({ admin }: { admin: boolean }) {
   const [kind, setKind] = useState<Kind>("leave"),
     [details, setDetails] = useState(""),
     [month, setMonth] = useState(""),
-    [calendarUser, setCalendarUser] = useState(""),
     [day, setDay] = useState(""),
     [startDate, setStartDate] = useState(""),
     [endDate, setEndDate] = useState(""),
@@ -554,7 +554,7 @@ export default function HrPanel({ admin }: { admin: boolean }) {
                 <select
                   value={calendarUser}
                   onChange={(e) => {
-                    setCalendarUser(e.target.value);
+                    navigateCrm(`/crm?tab=hr&hr=attendance&attendanceEmployee=${encodeURIComponent(e.target.value)}`);
                     setDay("");
                   }}
                 >

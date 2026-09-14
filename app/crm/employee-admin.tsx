@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { CrmLink, useCrmQuery } from "./navigation";
+import { CrmLink, navigateCrm, useCrmQuery } from "./navigation";
 import { scheduleSchema } from "@/lib/hr-policy";
 export type EmployeeProfile = {
   user_id: string;
@@ -39,11 +39,13 @@ export default function EmployeeAdmin({
   const query = useCrmQuery(),
     requested = query.get("employee") || "";
   const [accounts, setAccounts] = useState<Account[]>([]),
-    [error, setError] = useState(""),
-    [choice, setChoice] = useState<string | null>(null);
-  const userId = choice ?? requested,
+    [error, setError] = useState("");
+  const userId = requested,
     selected = profiles.find((p) => p.user_id === userId),
     account = accounts.find((a) => a.id === userId);
+  function selectEmployee(id: string) {
+    navigateCrm(`/crm?tab=hr&hr=employees&employee=${encodeURIComponent(id)}`);
+  }
   useEffect(() => {
     const controller = new AbortController();
     fetch("/api/crm-users", { cache: "no-store", signal: controller.signal })
@@ -111,7 +113,7 @@ export default function EmployeeAdmin({
             type="button"
             key={a.id}
             aria-pressed={userId === a.id}
-            onClick={() => setChoice(a.id)}
+            onClick={() => selectEmployee(a.id)}
           >
             <strong>{a.name}</strong>
             <span dir="ltr">{a.username}</span>
@@ -142,7 +144,7 @@ export default function EmployeeAdmin({
             name="userId"
             required
             value={userId}
-            onChange={(e) => setChoice(e.target.value)}
+            onChange={(e) => selectEmployee(e.target.value)}
           >
             <option value="">اختر حساب CRM نشطاً</option>
             {accounts

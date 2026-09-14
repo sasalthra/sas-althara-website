@@ -17,6 +17,17 @@ export function useCrmQuery() {
   );
   return new URLSearchParams(search);
 }
+// Keep the explicitly selected employee in the URL, not component memory.
+// It is view state only; the API still determines identity and permissions.
+export function navigateCrm(href: string) {
+  const target = new URL(href, window.location.origin);
+  const current = new URL(window.location.href);
+  for (const key of ["tab", "hr", "lead"])
+    current.searchParams.delete(key);
+  target.searchParams.forEach((value, key) => current.searchParams.set(key, value));
+  window.history.pushState(null, "", current.pathname + current.search);
+  window.dispatchEvent(new Event("crm:navigate"));
+}
 export function CrmLink({
   href,
   children,
@@ -37,16 +48,7 @@ export function CrmLink({
     )
       return;
     event.preventDefault();
-    const target = new URL(href, window.location.origin);
-    // Retain unrelated query state, replace only CRM navigation parameters.
-    const current = new URL(window.location.href);
-    for (const key of ["tab", "hr", "employee", "lead"])
-      current.searchParams.delete(key);
-    target.searchParams.forEach((value, key) =>
-      current.searchParams.set(key, value),
-    );
-    window.history.pushState(null, "", current.pathname + current.search);
-    window.dispatchEvent(new Event("crm:navigate"));
+    navigateCrm(href);
     onNavigate?.();
   }
   return (
