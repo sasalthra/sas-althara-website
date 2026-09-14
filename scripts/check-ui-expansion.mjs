@@ -16,7 +16,8 @@ try {
  console.log('PASS rendered workspace navigation: Sheets admin-only, import managers-only, AI all CRM roles');
  await build({stdin:{contents:`import React from 'react';import {renderToStaticMarkup} from 'react-dom/server';import HrPanel from './app/crm/hr-panel';export const html=renderToStaticMarkup(<HrPanel admin={false}/>);`,resolveDir:process.cwd(),loader:'tsx'},outfile:join(out,'hr-ui.cjs'),bundle:true,platform:'node',format:'cjs'});
  const {html}=createRequire(import.meta.url)(join(out,'hr-ui.cjs'));
- assert.match(html,/type="month"/,'monthly calendar navigation available');
- assert.match(html,/بداية الإجازة/);assert.match(html,/نهاية الإجازة/);
- console.log('PASS HR monthly navigation and dated leave request form rendered');
+ assert.match(html,/hr=attendance/,'calendar destination available');
+ assert.match(html,/hr=requests/,'dated requests destination available; forms exercised in check-crm-browser');
+ assert.match(html,/hr=profile/,'employee profile destination available');
+ console.log('PASS HR calendar/request/profile destinations rendered; browser suite exercises their forms');
 } finally {rmSync(out,{recursive:true,force:true});}

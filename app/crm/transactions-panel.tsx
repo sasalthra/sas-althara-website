@@ -4,9 +4,9 @@ import type {Lead} from '@/app/lead-form';
 import {transactionFields,transactionSchema,confirmedDue,type TransactionInput} from '@/lib/transactions';
 import {Table,TableHeader,TableHead,TableBody,TableRow,TableCell} from '@/components/ui/table';
 type RecordRow={id:string;version:number;data:TransactionInput;client_name:string;updated_at:string;confirmed_due:string|null};
-export default function TransactionsPanel({leads}:{leads:Lead[]}){
+export default function TransactionsPanel({leads,initialLeadId=''}:{leads:Lead[];initialLeadId?:string}){
  const [rows,setRows]=useState<RecordRow[]>([]),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
- const [form,setForm]=useState<TransactionInput>({leadId:'',debtPayer:'unset'}),[id,setId]=useState(''),[version,setVersion]=useState(0),[confirmed,setConfirmed]=useState(false);
+ const [form,setForm]=useState<TransactionInput>({leadId:initialLeadId,debtPayer:'unset'}),[id,setId]=useState(''),[version,setVersion]=useState(0),[confirmed,setConfirmed]=useState(false);
  async function load(){setBusy(true);try{const r=await fetch('/api/transactions');const d=await r.json();if(!r.ok)throw Error(d.error);setRows(d);setMessage('تم تحديث السجل');}catch(e){setMessage(e instanceof Error?e.message:'تعذر التحميل');}finally{setBusy(false);}}
  async function save(e:React.FormEvent){e.preventDefault();setBusy(true);try{const r=await fetch('/api/transactions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id||crypto.randomUUID(),version,confirmed,data:form})});const d=await r.json();if(!r.ok)throw Error(d.error);setId(d.id);setVersion(d.version);setConfirmed(false);await load();setMessage('تم حفظ المعاملة');}catch(e){setMessage(e instanceof Error?e.message:'تعذر الحفظ');}finally{setBusy(false);}}
  const valid=transactionSchema.safeParse(form),lead=leads.find(l=>l.id===form.leadId);

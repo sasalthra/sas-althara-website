@@ -6,6 +6,9 @@ import {
   useState,
 } from 'react';
 
+import Link from 'next/link';
+import {CrmLink,useCrmQuery,workspaceItems} from './navigation';
+import './crm.css';
 import {LogoutButton} from './auth-buttons';
 import UsersPanel from './users-panel';
 import HrPanel from './hr-panel';
@@ -23,8 +26,6 @@ import LeadForm, {
 import {
   Tabs,
   TabsContent,
-  TabsList,
-  TabsTrigger,
 } from '@/components/ui/tabs';
 
 import {
@@ -113,6 +114,29 @@ function compactPropertyTitle(
 export default function CRM({
   role,
 }: WorkspaceProps) {
+  const query=useCrmQuery();
+  const items=workspaceItems.filter(item=>item.roles.includes(role));
+  const tab=items.some(item=>item.id===query.get('tab'))?query.get('tab')!:'leads';
+  const [menuOpen,setMenuOpen]=useState(false);
+  useEffect(()=>{
+    if(!menuOpen)return;
+    const sidebar=document.querySelector<HTMLElement>('.crm-sidebar');
+    const previous=document.activeElement as HTMLElement|null;
+    const links=Array.from(sidebar?.querySelectorAll<HTMLElement>('a,button')||[]).filter(el=>el.getClientRects().length>0);
+    links[0]?.focus();
+    const overflow=document.body.style.overflow;
+    document.body.style.overflow='hidden';
+    function keyboard(event:KeyboardEvent){
+      if(event.key==='Escape'){event.preventDefault();setMenuOpen(false);}
+      if(event.key==='Tab'&&links.length){
+        const first=links[0],last=links[links.length-1];
+        if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
+        else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+      }
+    }
+    window.addEventListener('keydown',keyboard);
+    return()=>{window.removeEventListener('keydown',keyboard);document.body.style.overflow=overflow;previous?.focus();};
+  },[menuOpen]);
   const [leads, setLeads] =
     useState<Lead[]>([]);
 
@@ -134,7 +158,6 @@ export default function CRM({
   const refresh =
     useCallback(async () => {
       setLoading(true);
-
       try {
         const response =
           await fetch(
@@ -167,8 +190,13 @@ export default function CRM({
     }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    const controller=new AbortController();
+    fetch('/api/leads',{cache:'no-store',signal:controller.signal})
+      .then(async response=>{const result=await response.json();if(!response.ok)throw Error(result.error||'تعذر التحميل');setLeads(result);setError('');})
+      .catch(error=>{if(!controller.signal.aborted)setError(error instanceof Error?error.message:'تعذر التحميل');})
+      .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
+    return()=>controller.abort();
+  }, []);
 
   const today =
     new Date().toLocaleDateString(
@@ -214,104 +242,29 @@ export default function CRM({
 
   return (
     <>
-      <header className="crm-top">
-        <div>
-          <a
-            href="/"
-            className="brand"
-          >
-            ساس الثراء
-          </a>
-
-          <span>
-            إدارة العملاء والعقارات
-          </span>
-        </div>
-
-        <a href="/">
-          معاينة الموقع ↗
-        </a>
+      <div className="crm-shell" dir="rtl">
+      <a className="crm-skip" href="#crm-main">تخطي إلى المحتوى</a>
+      {menuOpen&&<button className="crm-scrim" aria-label="إغلاق القائمة" onClick={()=>setMenuOpen(false)}/>}
+      <aside className={`crm-sidebar ${menuOpen?'is-open':''}`} aria-label="قائمة مساحة العمل">
+        <Link href="/" className="crm-wordmark">ساس الثراء<span>مساحة العمل</span></Link>
+        <button className="crm-menu-close" onClick={()=>setMenuOpen(false)}>إغلاق القائمة ×</button>
+        <nav aria-label="التنقل الرئيسي">{['إدارة الأعمال','مساحة الموظف','إدارة النظام'].map(group=>{
+          const entries=items.filter(item=>item.group===group);
+          return entries.length>0&&<div className="crm-nav-group" key={group}><h2>{group}</h2>{entries.map(item=><CrmLink key={item.id} href={`/crm?tab=${item.id}`} aria-current={tab===item.id?'page':undefined} onNavigate={()=>setMenuOpen(false)}>{item.label}</CrmLink>)}</div>;
+        })}</nav>
+        <div className="crm-sidebar-footer"><span>جلسة {({admin:'الإدارة',supervisor:'الإشراف',sales:'المبيعات',field:'الميدان'})[role]}</span><LogoutButton /></div>
+      </aside>
+      <div className="crm-stage" inert={menuOpen||undefined}>
+      <header className="crm-toolbar">
+        <button className="crm-menu-toggle" aria-label="فتح القائمة" aria-expanded={menuOpen} onClick={()=>setMenuOpen(true)}>☰</button>
+        <div><span className="crm-breadcrumb">مساحة العمل /</span><h1>{items.find(item=>item.id===tab)?.label}</h1></div>
+        <Link href="/" className="crm-site-link">معاينة الموقع ↗</Link>
+        {tab==='leads'&&<button className="primary" onClick={()=>{setEdit(undefined);setOpen(true);}}>+ إضافة عميل</button>}
       </header>
-
-      <div className="page-wrap">
-        <LogoutButton />
-      </div>
-
-      <main className="crm-content">
-        <div className="section-head">
-          <div>
-            <span className="eyebrow">
-              مساحة العمل
-            </span>
-
-            <h2>
-              كل متابعة، في مكان واحد.
-            </h2>
-          </div>
-
-          <button
-            className="primary"
-            onClick={() => {
-              setEdit(undefined);
-              setOpen(true);
-            }}
-          >
-            + إضافة عميل
-          </button>
-        </div>
-
-        <div className="stats">
-          <div className="panel">
-            طلبات العملاء
-
-            <strong>
-              {leads.length}
-            </strong>
-          </div>
-
-          <div className="panel">
-            تحتاج متابعة
-
-            <strong>
-              {followUps}
-            </strong>
-          </div>
-
-          <div className="panel">
-            العقارات في المعاينة
-
-            <strong>
-              {data.length}
-            </strong>
-          </div>
-        </div>
-
-        <Tabs
-          defaultValue="leads"
-          dir="rtl"
-        >
-          <TabsList className="h-auto flex-wrap justify-start">
-            <TabsTrigger value="ai">المساعد الداخلي</TabsTrigger>
-            {role === 'admin' && <TabsTrigger value="sheets">إعدادات Google Sheets</TabsTrigger>}
-            {['admin','supervisor'].includes(role) && <TabsTrigger value="import">استيراد Excel</TabsTrigger>}
-            <TabsTrigger value="hr">الموظفون والحضور</TabsTrigger>
-            {role === 'admin' && <TabsTrigger value="transactions">المعاملات والمالية</TabsTrigger>}
-            <TabsTrigger value="leads">
-              العملاء والمتابعات
-            </TabsTrigger>
-
-            <TabsTrigger value="properties">
-              العقارات
-            </TabsTrigger>
-
-            {role === 'admin' && (
-              <TabsTrigger value="users">
-                المستخدمون والصلاحيات
-              </TabsTrigger>
-            )}
-          </TabsList>
-
-          {role === 'admin' && <TabsContent value="transactions"><TransactionsPanel leads={leads}/></TabsContent>}
+      <main className="crm-main" id="crm-main">
+        {tab==='leads'&&<div className="crm-summary"><span>طلبات العملاء <strong>{loading?'—':leads.length}</strong></span><span>تحتاج متابعة <strong>{loading?'—':followUps}</strong></span><span>العقارات <strong>{data.length}</strong></span></div>}
+        <Tabs value={tab} dir="rtl">
+          {role === 'admin' && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} leads={leads} initialLeadId={query.get('lead')||''}/></TabsContent>}
           <TabsContent value="hr"><HrPanel admin={role === 'admin'}/></TabsContent>
           <TabsContent value="ai"><AiPanel admin={role === 'admin'}/></TabsContent>
           {role === 'admin' && <TabsContent value="sheets"><SheetsPanel/></TabsContent>}
@@ -718,6 +671,7 @@ export default function CRM({
           </DialogContent>
         </Dialog>
       </main>
+      </div></div>
     </>
   );
 }

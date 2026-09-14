@@ -1,6 +1,7 @@
 'use client';
 
 import {useCallback, useEffect, useState} from 'react';
+import {CrmLink} from './navigation';
 
 type CrmUser = {
   id: string;
@@ -38,8 +39,6 @@ export default function UsersPanel() {
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
-    setError('');
-
     try {
       const response = await fetch('/api/crm-users', {
         cache: 'no-store',
@@ -52,6 +51,7 @@ export default function UsersPanel() {
       }
 
       setUsers(data);
+      setError('');
     } catch (error) {
       setError(
         error instanceof Error
@@ -64,8 +64,13 @@ export default function UsersPanel() {
   }, []);
 
   useEffect(() => {
-    void loadUsers();
-  }, [loadUsers]);
+    const controller=new AbortController();
+    fetch('/api/crm-users',{cache:'no-store',signal:controller.signal})
+      .then(async response=>{const result=await response.json();if(!response.ok)throw Error(result.error||'تعذر التحميل');setUsers(result);setError('');})
+      .catch(error=>{if(!controller.signal.aborted)setError(error instanceof Error?error.message:'تعذر التحميل');})
+      .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
+    return()=>controller.abort();
+  }, []);
 
   async function createUser(
     event: React.FormEvent<HTMLFormElement>
@@ -279,6 +284,7 @@ export default function UsersPanel() {
                   <th className="p-3">الدور</th>
                   <th className="p-3">الجوال</th>
                   <th className="p-3">الحالة</th>
+                  <th className="p-3">الموظف</th>
                 </tr>
               </thead>
 
@@ -309,6 +315,7 @@ export default function UsersPanel() {
                         ? 'نشط'
                         : 'موقوف'}
                     </td>
+                    <td className="p-3"><CrmLink className="crm-button" href={`/crm?tab=hr&hr=employees&employee=${encodeURIComponent(user.id)}`}>الملف الوظيفي</CrmLink></td>
                   </tr>
                 ))}
               </tbody>

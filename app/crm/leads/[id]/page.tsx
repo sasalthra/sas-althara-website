@@ -630,6 +630,7 @@ export default function LeadDetailsPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              {role === 'admin' && <a href={`/crm?tab=transactions&lead=${encodeURIComponent(lead.id)}`} className="rounded-xl border border-[#53115c]/20 px-4 py-2.5 text-sm font-semibold text-[#53115c]">معاملات العميل والمالية</a>}
               <button
                 type="button"
                 onClick={() => {
