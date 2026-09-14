@@ -276,6 +276,13 @@ try {
   await page.locator('[name="jobTitle"]').waitFor();
   await page.getByRole("button",{name:"حفظ الملف والدوام",exact:true}).click();
   assert.equal(writes.length,0,"required new employee schedule prevents submission");
+  const requiredFields = ['jobTitle', 'department', 'leaveBalance', 'start', 'end', 'grace', 'timezone', 'days', 'latitude', 'longitude', 'radius', 'maxAccuracy', 'confirmation'];
+  for (const name of requiredFields) {
+    assert.equal(await page.locator(`[name="${name}"]`).first().getAttribute('aria-invalid'), 'true', `blank ${name} has field error`);
+    assert.ok(await page.locator(`#employee-${name}-error`).textContent(), `${name} has Arabic explanation`);
+    assert.equal(await page.locator(`.hr-employee-form [role="alert"] a[href="#employee-${name}"]`).count(), 1, `${name} named in summary`);
+  }
+  assert.equal(await page.evaluate(() => document.activeElement.name), 'jobTitle');
   for (const [name, value] of Object.entries({
     jobTitle: "اختصاصي تجريبي",
     department: "فريق تجريبي",
@@ -294,10 +301,38 @@ try {
   await page
     .getByLabel("راجعت الحساب والدوام والموقع وأوافق على حفظ الملف")
     .check();
+  // Several simultaneous errors must all be visible, including the cross-field
+  // time error when a blank numeric value would abort Zod's object refinement.
+  const invalid = { latitude: '', longitude: '181', radius: '5001', maxAccuracy: '0', grace: '1.5', end: '08:00', timezone: 'Invalid/Zone' };
+  for (const [name, value] of Object.entries(invalid)) await page.locator(`[name="${name}"]`).fill(value);
+  await page.locator('[name="days"][value="1"]').uncheck();
+  const snapshot = () => page.locator('.hr-employee-form').evaluate(form => Array.from(form.elements).filter(el => el.name).map(el => ({name:el.name,value:el.value,checked:el.checked})));
+  const beforeInvalid = await snapshot();
+  await page.getByRole('button', {name:'حفظ الملف والدوام',exact:true}).click();
+  assert.equal(writes.length, 0, 'invalid schedule never POSTs');
+  assert.deepEqual(await snapshot(), beforeInvalid, 'every input and confirmation retained after validation failure');
+  for (const name of [...Object.keys(invalid), 'days']) {
+    assert.equal(await page.locator(`[name="${name}"]`).first().getAttribute('aria-invalid'), 'true');
+    assert.equal(await page.locator(`.hr-employee-form [role="alert"] a[href="#employee-${name}"]`).count(), 1);
+  }
+  assert.equal(await page.evaluate(() => document.activeElement.name), 'end', 'first invalid field in visual/DOM order receives focus');
+  await page.locator('.hr-employee-form [role="alert"] a[href="#employee-latitude"]').click();
+  assert.equal(await page.evaluate(() => document.activeElement.name), 'latitude', 'summary links focus fields');
+  await page.locator('.hr-employee-form').screenshot({path:resolve(out,'employee-validation-errors.png')});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'validation summary does not overflow mobile');
+  await page.locator('.hr-employee-form').screenshot({path:resolve(out,'mobile-employee-validation-errors.png')});
+  await page.setViewportSize({width:1440,height:1000});
+  for (const [name,value] of Object.entries({latitude:'0',longitude:'0',radius:'200',maxAccuracy:'50',grace:'0',end:'17:00',timezone:'Asia/Riyadh'})) await page.locator(`[name="${name}"]`).fill(value);
+  await page.locator('[name="days"][value="1"]').check();
   await page
     .getByRole("button", { name: "حفظ الملف والدوام", exact: true })
     .click();
   await page.getByText("تم الحفظ", { exact: true }).waitFor();
+  assert.equal(writes.filter(w=>w.action==='profile').length, 1);
+  assert.equal(writes.at(-1).data.schedule.latitude, 0, 'explicit zero latitude preserved');
+  assert.equal(writes.at(-1).data.schedule.longitude, 0, 'explicit zero longitude preserved');
+  assert.equal(await page.locator('.hr-employee-form [aria-invalid="true"]').count(), 0);
   assert.equal(writes.at(-1)?.data.userId, id);
   assert.equal(await page.locator('[name="jobTitle"]').inputValue(),"اختصاصي تجريبي","profile readback preserves selected employee change");
   await page.locator(".hr-employee-form").screenshot({path:resolve(out,"employee-form-full.png")});

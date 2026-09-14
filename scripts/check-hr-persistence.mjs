@@ -100,12 +100,34 @@ try {
   for (const [key, value] of Object.entries(fields)) await page.locator(`[name=${key}]`).fill(value);
   for (let i = 0; i < 7; i++) await page.locator(`[name=days][value="${i}"]`).check();
   await page.locator('.hr-check input').check();
+  await page.locator('[name=radius]').fill('');
+  await page.locator('[name=end]').fill('00:00');
+  await page.getByRole('button', { name: 'حفظ الملف والدوام', exact: true }).click();
+  assert.equal(traffic.filter(t => t.method === 'POST').length, 0, 'invalid form blocked before real API');
+  assert.equal(profile(), undefined, 'invalid form creates no SQL row');
+  assert.equal(await page.locator('[name=radius]').inputValue(), '');
+  assert.equal(await page.locator('[name=end]').getAttribute('aria-invalid'), 'true');
+  for (const [key, value] of Object.entries(fields)) {
+    if (!['radius', 'end'].includes(key)) assert.equal(await page.locator(`[name=${key}]`).inputValue(), value, `invalid submit retains ${key}`);
+  }
+  assert.equal(await page.locator('[name=days]:checked').count(), 7);
+  assert.equal(await page.locator('.hr-check input').isChecked(), true);
+  await page.locator('[name=radius]').fill(fields.radius);
+  await page.locator('[name=end]').fill(fields.end);
   await page.getByRole('button', { name: 'حفظ الملف والدوام', exact: true }).click();
   await page.getByRole('status').filter({ hasText: /^تم الحفظ$/ }).waitFor();
   assert.equal(profile().job_title, fields.jobTitle);
   assert.equal(profile().leave_balance, 23.5);
   assert.equal(traffic.at(-1).data.profiles[0].job_title, fields.jobTitle);
   console.log('PASS browser form -> real POST -> SQL commit -> GET mapping');
+  const savedBeforeInvalid = profile();
+  const validSchedule = JSON.parse(savedBeforeInvalid.schedule);
+  for (const invalid of [{latitude:null},{latitude:91},{longitude:-181},{radius:0},{radius:5001},{maxAccuracy:0},{maxAccuracy:501},{grace:1.5},{grace:121},{days:[]},{start:'24:00'},{end:'00:00'},{timezone:'Invalid/Zone'}]) {
+    const response = await post({action:'profile',data:{userId:employee,jobTitle:fields.jobTitle,department:fields.department,leaveBalance:23.5,schedule:{...validSchedule,...invalid}}});
+    assert.equal(response.status, 400, `real API rejects ${JSON.stringify(invalid)}`);
+    assert.deepEqual(profile(), savedBeforeInvalid, 'API rejection preserves saved profile');
+  }
+  console.log('PASS real API schedule constraints unchanged; invalid direct requests cannot update saved row');
   await page.locator('.crm-sidebar a[href="/crm?tab=leads"]').click();
   assert.equal(await page.locator('.hr-workspace').count(), 0, 'actual HR unmount');
   await page.locator('.crm-sidebar a[href="/crm?tab=hr"]').click();
