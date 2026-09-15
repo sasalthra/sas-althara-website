@@ -1,3 +1,50 @@
+/* Reports: dense, scoped RTL monitor; no global table overrides. */
+.reports-center { min-width: 0; display: grid; gap: 16px; }
+.report-heading, .report-actions, .report-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.report-filters { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; align-items: end; }
+.crm-shell .report-scope, .crm-shell .report-caveat { color: #554e5b; font-size: 14px; }
+.report-table-scroll { max-width: 100%; overflow-x: auto; padding: 0 !important; }
+.report-table-scroll table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.crm-shell .report-table-scroll td { line-height: 1.5; }
+.report-table-scroll th, .report-table-scroll td { text-align: start; vertical-align: top; border-bottom: 1px solid var(--crm-border); padding: 12px; min-width: 115px; max-width: 460px; overflow-wrap: anywhere; }
+.report-table-scroll th { background: #f4f1f5; font-weight: 600; }
+.report-table-scroll a, .report-group a { color: #641a67; text-decoration: underline; }
+.report-overview { min-width: 0; }
+.report-overview h3 { padding: 14px; }
+.report-overview th:first-child { min-width: 190px; font-size: 14px; color: #302d35; }
+.report-metrics { margin: 0; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 1px; background: var(--crm-border); border: 1px solid var(--crm-border); }
+.report-metrics > div { padding: 12px; background: white; }
+.report-metrics dd { margin: 5px 0 0; font-size: 18px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.report-metrics small { font-size: 12px; color: var(--crm-muted); }
+.report-group { border-bottom: 1px solid var(--crm-border); padding: 10px 0; }
+.report-group summary { cursor: pointer; min-height: 44px; }
+.report-group ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.report-group li { min-width: 110px; overflow-wrap: anywhere; }
+.report-pagination { justify-content: start; }
+@media (max-width: 700px) {
+ .report-filters { grid-template-columns: repeat(2,minmax(0,1fr)); }
+ .report-filters label:first-child { grid-column: 1 / -1; }
+ .report-metrics { grid-template-columns: minmax(0,1fr); }
+ .report-overview .report-table-scroll table { min-width: 670px; }
+}
+@media print {
+ @page { size: A4 landscape; margin: 12mm; }
+ .crm-shell .crm-sidebar, .crm-shell .crm-toolbar, .crm-skip, .crm-shell .report-filters, .crm-shell .report-actions, .crm-shell .report-pagination, .report-heading > a { display: none !important; }
+ .crm-shell .crm-stage, .crm-shell .crm-main { margin: 0 !important; padding: 0 !important; width: 100% !important; }
+ .crm-shell, .reports-center { background: white !important; font-size: 12pt; }
+ .report-table-scroll { overflow: visible; }
+ .report-table-scroll table { table-layout: fixed; font-size: 12pt; }
+ .report-table-scroll th, .report-table-scroll td { min-width: 0; padding: 4px; overflow-wrap: anywhere; }
+ .report-table-scroll thead { display: table-header-group; }
+ .report-table-scroll tr { break-inside: avoid; }
+ .report-metrics { grid-template-columns: repeat(3,minmax(0,1fr)); }
+ .report-group { display: none; }
+ .report-detail-table, .report-detail-table tbody { display: block; width: 100%; }
+ .report-detail-table thead { display: none; }
+ .report-detail-table tbody tr { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); margin-bottom: 14px; border: 1px solid #888; }
+ .report-detail-table td { display: block; max-width: none; }
+ .report-detail-table td::before { content: attr(data-label) ": "; font-weight: 600; }
+}
 /* SAS operational surfaces. Scoped to CRM; retains RB and the original plum brand. */
 .crm-shell {
   --crm-ink: #302d35;

@@ -16,6 +16,7 @@ import TransactionsPanel from './transactions-panel';
 import ImportPanel from './import-panel';
 import AiPanel from './ai-panel';
 import SheetsPanel from './sheets-panel';
+import ReportsPanel from './reports-panel';
 
 import data from '@/data/properties.json';
 import LeadForm, {
@@ -264,6 +265,7 @@ export default function CRM({
       <main className="crm-main" id="crm-main">
         {tab==='leads'&&<div className="crm-summary"><span>طلبات العملاء <strong>{loading?'—':leads.length}</strong></span><span>تحتاج متابعة <strong>{loading?'—':followUps}</strong></span><span>العقارات <strong>{data.length}</strong></span></div>}
         <Tabs value={tab} dir="rtl">
+          <TabsContent value="reports"><ReportsPanel role={role}/></TabsContent>
           {role === 'admin' && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} leads={leads} initialLeadId={query.get('lead')||''}/></TabsContent>}
           <TabsContent value="hr"><HrPanel admin={role === 'admin'}/></TabsContent>
           <TabsContent value="ai"><AiPanel admin={role === 'admin'}/></TabsContent>

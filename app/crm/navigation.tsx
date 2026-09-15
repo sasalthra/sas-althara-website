@@ -22,7 +22,7 @@ export function useCrmQuery() {
 export function navigateCrm(href: string) {
   const target = new URL(href, window.location.origin);
   const current = new URL(window.location.href);
-  for (const key of ["tab", "hr", "lead"])
+  for (const key of ["tab", "hr", "lead", "module", "from", "to", "source", "stage", "funding", "page", "pageSize", "reportEmployee"])
     current.searchParams.delete(key);
   target.searchParams.forEach((value, key) => current.searchParams.set(key, value));
   window.history.pushState(null, "", current.pathname + current.search);
@@ -58,6 +58,7 @@ export function CrmLink({
   );
 }
 export const workspaceItems = [
+  {id: "reports", label: "تقارير", group: "إدارة الأعمال", roles: ["admin", "supervisor", "sales", "field"]},
   {
     id: "leads",
     label: "العملاء والمتابعات",

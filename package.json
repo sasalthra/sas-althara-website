@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "eslint .",
     "test": "node scripts/check-hostinger.mjs && npm run test:expansion",
-    "test:expansion": "node scripts/check-expansion.mjs && node scripts/check-api-expansion.mjs && node scripts/check-hr-calendar.mjs && node scripts/check-ui-expansion.mjs && node scripts/check-storage-expansion.mjs"
+    "test:expansion": "node scripts/check-expansion.mjs && node scripts/check-api-expansion.mjs && node scripts/check-hr-calendar.mjs && node scripts/check-ui-expansion.mjs && node scripts/check-storage-expansion.mjs && node scripts/check-reports.mjs && node scripts/check-reports-api.mjs && node scripts/check-reports-ui.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
