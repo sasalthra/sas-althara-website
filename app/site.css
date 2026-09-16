@@ -23,3 +23,200 @@
 .loan-success{margin-top:.8rem;color:#166534;font-weight:600}
 .loan-hp{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden}
 
+
+
+/* ===== UX polish: public property cards + detail ===== */
+.property-card,
+a.property-card{
+  display:flex;
+  flex-direction:column;
+  background:#fff;
+  border:1px solid #e7e0d6;
+  border-radius:18px;
+  overflow:hidden;
+  box-shadow:0 10px 28px rgba(20,53,42,.05);
+  transition:transform .18s ease, box-shadow .18s ease;
+  color:inherit;
+}
+.property-card:hover{
+  transform:translateY(-5px);
+  box-shadow:0 16px 34px rgba(20,53,42,.10);
+}
+.property-card .card-image,
+.card-image{
+  position:relative;
+  height:220px;
+  background:#edf2f0;
+}
+.property-card .card-image img,
+.card-image img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+}
+.property-card .card-image > span,
+.card-image > span{
+  position:absolute;
+  top:12px;
+  inset-inline-start:12px;
+  background:rgba(255,255,255,.94);
+  color:#14352a;
+  border-radius:999px;
+  padding:4px 12px;
+  font-size:12px;
+  font-weight:700;
+}
+.property-card .card-body,
+.card-body{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  padding:16px 16px 18px;
+}
+.property-card .location,
+.card-body .location{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  margin:0;
+  color:#6b7280;
+  font-size:13px;
+}
+.property-card h3,
+.card-body h3{
+  margin:0;
+  font-size:1.05rem;
+  line-height:1.55;
+  color:#14352a;
+  min-height:auto;
+}
+.property-card .specs,
+.card-body .specs,
+.detail-panel .specs{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+.property-card .specs span,
+.card-body .specs span,
+.detail-panel .specs span{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:5px 10px;
+  border-radius:999px;
+  background:#f3faf6;
+  color:#255744;
+  font-size:12.5px;
+  font-weight:600;
+}
+.property-card .price,
+.card-body .price{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-top:4px;
+  padding-top:12px;
+  border-top:1px solid #efe8df;
+  font-size:1.15rem;
+  color:#14352a;
+}
+.property-card .price small,
+.card-body .price small{
+  font-size:.8rem;
+  font-weight:600;
+  color:#6b7280;
+}
+
+/* Detail page */
+.property-detail{
+  min-height:100vh;
+  background:linear-gradient(180deg,#f7f4ef 0%,#fff 40%);
+}
+.property-detail .page-wrap{
+  max-width:1120px;
+  margin:0 auto;
+  padding:24px 18px 48px;
+}
+.property-detail .detail-title{
+  margin:8px 0 18px;
+  font-size:clamp(1.6rem,3vw,2.2rem);
+  color:#14352a;
+  letter-spacing:0;
+}
+.property-detail .detail-grid{
+  display:grid;
+  grid-template-columns:minmax(0,1.6fr) minmax(280px,.9fr);
+  gap:20px;
+  align-items:start;
+}
+.property-detail .gallery{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
+}
+.property-detail .gallery img{
+  width:100%;
+  height:220px;
+  object-fit:cover;
+  border-radius:16px;
+  background:#e8eee9;
+}
+.property-detail .gallery img:first-child{
+  grid-column:1 / -1;
+  height:360px;
+}
+.property-detail .detail-panel,
+.property-detail .panel{
+  background:#fff;
+  border:1px solid #e7e0d6;
+  border-radius:18px;
+  padding:18px;
+  box-shadow:0 10px 28px rgba(20,53,42,.05);
+}
+.property-detail .detail-panel h2{
+  margin:0 0 10px;
+  color:#14352a;
+  font-size:1.45rem;
+}
+.property-detail .detail-panel h3{
+  margin:18px 0 8px;
+  color:#255744;
+  font-size:1rem;
+}
+.property-detail .description{
+  margin:0;
+  white-space:pre-line;
+  color:#4b5563;
+  line-height:1.85;
+}
+.property-detail .cta-aside{
+  position:sticky;
+  top:18px;
+}
+.property-detail .cta-aside .primary,
+.property-detail a.primary{
+  display:inline-flex;
+  justify-content:center;
+  width:100%;
+  margin-top:12px;
+  border:0;
+  border-radius:12px;
+  padding:12px 16px;
+  background:#1f6b4a;
+  color:#fff;
+  font-weight:700;
+}
+.property-detail .subtle{
+  color:#6b7280;
+}
+@media (max-width:900px){
+  .property-detail .detail-grid{grid-template-columns:1fr}
+  .property-detail .gallery img:first-child{height:260px}
+  .property-detail .cta-aside{position:static}
+}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:22px}
+.property-card .card-image,.card-image{position:relative;height:220px;overflow:hidden;background:#edf2f0}
+.property-card .card-image img,.card-image img{width:100%;height:100%;object-fit:cover}
+.property-card .card-body,.card-body{display:flex;flex-direction:column;gap:10px;padding:16px}
