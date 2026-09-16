@@ -5,6 +5,13 @@ try{
  let response=await f.get(),body=await response.json();assert.equal(response.status,200);
  const ids=body.summaries.map(r=>r.id);assert.equal(ids.length,15);assert.equal(new Set(ids).size,15);
  assert.equal(body.summaries.filter(r=>r.status!=='ok').length,0,JSON.stringify(body.summaries));
+ assert.ok(body.snapshots,'overview exposes system snapshots');
+ assert.equal(body.snapshots.clients.status,'ok');
+ assert.ok(body.snapshots.clients.total>=body.summaries.find(s=>s.id==='leads').total,'client snapshot is not date-window limited below leads period total');
+ assert.equal(body.snapshots.clients.interested+body.snapshots.clients.notInterested,body.snapshots.clients.total);
+ assert.equal(body.snapshots.properties.status,'ok');
+ assert.ok(body.snapshots.properties.total>0);
+ assert.ok(body.snapshots.properties.byNeighborhood.length>0);
  for(const id of ids){response=await f.get('module='+id);assert.equal(response.status,200,id);body=await response.json();assert.ok(body.report.total>0,id+' must exercise seeded rows');assert.ok(!JSON.stringify(body).includes('SECRET_SENTINEL'),id+' secret leak');response=await f.get('module='+id+'&format=csv');assert.equal(response.status,200);assert.ok(!((await response.text()).includes('SECRET_SENTINEL')));}
  response=await f.get('module=leads&page=2');body=await response.json();assert.equal(body.report.total,31);assert.equal(body.report.rows.length,6);assert.equal(body.report.groups.source.reduce((n,g)=>n+g.count,0),31);
  response=await f.get('module=leads&format=csv');const bytes=new Uint8Array(await response.arrayBuffer());assert.deepEqual([...bytes.slice(0,3)],[239,187,191]);const csv=new TextDecoder().decode(bytes);assert.ok(csv.includes("'=SYNTHETIC()"));assert.equal(csv.trim().split('\r\n').length,32);

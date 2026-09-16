@@ -5,7 +5,12 @@ import {allowedReports,type ReportResult} from '@/lib/report-catalog';
 import {CrmLink,navigateCrm,useCrmQuery} from './navigation';
 
 type Summary={id:string;label:string;kind:string;note:string;status:string;total:number|null;error?:string;metrics?:ReportResult['metrics']};
-type Payload={report?:ReportResult;summaries?:Summary[];employees:{id:string;name:string}[];canExport:boolean;filters:{from:string;to:string;employee:string;source:string;stage:string;funding:string;page:number;pageSize:number};generatedAt?:string};
+type ReportSnapshotsPayload={
+ note:string;
+ clients:{status:'ok';total:number;interested:number;notInterested:number;byStage:{stage:string;label:string;count:number}[]}|{status:'unavailable';error:string};
+ properties:{status:'ok';total:number;byNeighborhood:{label:string;count:number}[]}|{status:'unavailable';error:string};
+};
+type Payload={report?:ReportResult;summaries?:Summary[];snapshots?:ReportSnapshotsPayload;employees:{id:string;name:string}[];canExport:boolean;filters:{from:string;to:string;employee:string;source:string;stage:string;funding:string;page:number;pageSize:number};generatedAt?:string};
 type Metric=NonNullable<ReportResult['metrics']>[number];
 
 const groupNames:Record<string,string>={source:'المصادر',stage:'المراحل',sales:'المبيعات',field:'الميدان',follow_up_age:'عمر المتابعة',city:'المدن',action:'الأعمال',user_id:'المستخدمون',name:'الموظفون',department:'الأقسام',schedule_status:'الدوام',type:'الخدمات',status:'الحالات',role:'الأدوار',active:'تفعيل الحساب',actor_id:'الفاعلون',fundingEntity:'جهات التمويل',debtPayer:'جهة السداد',requestStage:'مرحلة الطلب'};
@@ -69,6 +74,32 @@ export default function ReportsPanel({role}:{role:string}){
   <p className="report-scope">الفترة المطبقة: {stateData?.filters.from||'…'} — {stateData?.filters.to||'…'} بتقويم الرياض (UTC+03)، والافتراضي آخر 30 يوماً. المصدر يؤثر في وحدات العملاء، والمرحلة تعني مرحلة طلب التمويل في المعاملات ومرحلة العميل في غيرها، وجهة التمويل للمعاملات فقط. الموظف يحدد التكليف/الملكية في وحدات العملاء، والموظف/الفاعل في HR والتدقيق. الإعلانات وSheets لا يرتبطان بموظف. لكل وحدة أساس تاريخ موضح؛ اللقطات الحالية ليست تاريخاً للحالة. الرابط يحفظ المرشحات.</p>
   {loading&&<p role="status">جارٍ تحميل التقارير…</p>}
   {error&&<div role="alert" className="error">{error} <button onClick={()=>setRetry(n=>n+1)}>إعادة المحاولة</button></div>}
+  {stateData?.snapshots&&<div className="report-overview panel" aria-label="لقطات النظام">
+   <h3>لقطات النظام — العملاء والعقارات</h3>
+   <p className="subtle">{stateData.snapshots.note}</p>
+   {stateData.snapshots.clients.status==='unavailable'?<p role="alert" className="error">العملاء: {stateData.snapshots.clients.error}</p>:
+    <><dl className="report-metrics">
+     <div><dt>عدد العملاء في النظام</dt><dd>{stateData.snapshots.clients.total}</dd></div>
+     <div><dt>المهتمين</dt><dd>{stateData.snapshots.clients.interested}</dd></div>
+     <div><dt>غير مهتم</dt><dd>{stateData.snapshots.clients.notInterested}</dd></div>
+    </dl>
+    <div className="report-charts-grid">
+     {stateData.snapshots.clients.byStage.length>0&&<div className="report-chart panel"><h4>توزيع العملاء حسب المرحلة</h4><ResponsiveContainer width="100%" height={280}><BarChart data={stateData.snapshots.clients.byStage.map(s=>({name:s.label,value:s.count}))}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="name" tick={{fontSize:11}} angle={-35} textAnchor="end" height={70}/><YAxis allowDecimals={false}/><Tooltip/><Bar dataKey="value" name="العملاء" radius={[6,6,0,0]}>{stateData.snapshots.clients.byStage.map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}</Bar></BarChart></ResponsiveContainer></div>}
+     {stateData.snapshots.clients.byStage.length>1&&stateData.snapshots.clients.byStage.length<=8&&<div className="report-chart panel"><h4>نسب المراحل</h4><ResponsiveContainer width="100%" height={280}><PieChart><Pie data={stateData.snapshots.clients.byStage.map(s=>({name:s.label,value:s.count}))} dataKey="value" nameKey="name" innerRadius={50} outerRadius={90} label>{stateData.snapshots.clients.byStage.map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}</Pie><Tooltip/><Legend/></PieChart></ResponsiveContainer></div>}
+    </div>
+    <details className="report-group" open><summary>كل مرحلة — عدد العملاء ({stateData.snapshots.clients.byStage.length})</summary><ul>{stateData.snapshots.clients.byStage.map(s=><li key={s.stage}>{s.label} <strong>{s.count}</strong></li>)}</ul></details>
+    </>}
+   {stateData.snapshots.properties.status==='unavailable'?<p role="alert" className="error">العقارات: {stateData.snapshots.properties.error}</p>:
+    <><dl className="report-metrics">
+     <div><dt>عدد العقارات الموجودة</dt><dd>{stateData.snapshots.properties.total}</dd></div>
+     <div><dt>عدد الأحياء في الكتالوج</dt><dd>{stateData.snapshots.properties.byNeighborhood.length}</dd></div>
+    </dl>
+    <div className="report-charts-grid">
+     {stateData.snapshots.properties.byNeighborhood.length>0&&<div className="report-chart panel"><h4>توزيع العقارات حسب الحي</h4><ResponsiveContainer width="100%" height={280}><BarChart data={stateData.snapshots.properties.byNeighborhood.slice(0,12).map(n=>({name:n.label,value:n.count}))}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="name" tick={{fontSize:11}} angle={-35} textAnchor="end" height={70}/><YAxis allowDecimals={false}/><Tooltip/><Bar dataKey="value" name="العقارات" radius={[6,6,0,0]}>{stateData.snapshots.properties.byNeighborhood.slice(0,12).map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}</Bar></BarChart></ResponsiveContainer></div>}
+    </div>
+    <details className="report-group" open><summary>كل حي — عدد العقارات ({stateData.snapshots.properties.byNeighborhood.length})</summary><ul>{stateData.snapshots.properties.byNeighborhood.map(n=><li key={n.label}>{n.label} <strong>{n.count}</strong></li>)}</ul></details>
+    </>}
+  </div>}
   {stateData?.summaries&&<div className="report-overview panel"><h3>تغطية النظام ضمن الصلاحية</h3><div className="report-table-scroll" tabIndex={0} aria-label="ملخص الوحدات"><table><thead><tr><th>التقرير</th><th>السجلات</th><th>أساس القراءة وحدودها</th><th>التفاصيل</th></tr></thead><tbody>{stateData.summaries.map(s=><tr key={s.id}><th scope="row">{s.label}</th><td>{s.status==='ok'?s.total:'غير متاح'}</td><td><strong>{s.kind}</strong><p>{s.status==='ok'?s.note:s.error}</p>{s.metrics?.slice(0,2).map((m,i)=><p key={i}>{m.label}: {m.value??'غير مسجل'}{m.missing?` · ${m.missing} غير مسجل`:''}</p>)}</td><td><CrmLink href={href({module:s.id,page:'1'})}>عرض التفاصيل</CrmLink></td></tr>)}</tbody></table></div>
    <div className="report-charts-grid">
     <div className="report-chart panel"><h4>توزيع السجلات حسب الوحدة</h4><ResponsiveContainer width="100%" height={280}><BarChart data={stateData.summaries.filter(s=>s.status==='ok'&&s.total!==null).map(s=>({name:s.label,value:s.total}))}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="name" tick={{fontSize:11}} angle={-35} textAnchor="end" height={70}/><YAxis allowDecimals={false}/><Tooltip/><Bar dataKey="value" name="السجلات" radius={[6,6,0,0]}>{stateData.summaries.filter(s=>s.status==='ok').map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}</Bar></BarChart></ResponsiveContainer></div>

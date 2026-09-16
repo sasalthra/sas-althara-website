@@ -1,4 +1,5 @@
 import {reportCatalog,type ReportColumn,type ReportResult,type ReportRow,type ReportId} from './report-catalog';
+import {stageLabel} from './lead-stages';
 export class ReportError extends Error {constructor(public status:number,message:string){super(message);}}
 type Actor={userId:string;role:string};
 type Database={prepare(sql:string):{bind(...args:(string|number|null)[]):{all():Promise<{results:Record<string,unknown>[]}>}}};
@@ -141,4 +142,54 @@ function buildTrend(spec:Spec,id:string,records:Record<string,unknown>[],f:Repor
 export function reportCsv(report:{columns:ReportColumn[];rows:ReportRow[]}){
  const quote=(v:unknown)=>{let s=v==null?'':String(v);if(/^[\s\u0000-\u001f\u007f\uFEFF]*[=+\-@]/.test(s)||/^[\t\r\n]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';};
  return '\uFEFF'+[report.columns.map(c=>quote(c.label)).join(','),...report.rows.map(r=>report.columns.map(c=>quote(r[c.key])).join(','))].join('\r\n')+'\r\n';
+}
+
+
+const NEIGHBORHOOD_FROM_TITLE=/حي\s+([\u0600-\u06FF\w]+)/;
+/** Derive الحي: non-empty address, else title match, else غير محدد. */
+export function propertyNeighborhood(property:{address?:unknown;title?:unknown}):string{
+ const address=String(property.address??'').trim();
+ if(address)return address;
+ const match=NEIGHBORHOOD_FROM_TITLE.exec(String(property.title??''));
+ return match?.[1]||'غير محدد';
+}
+export function buildPropertiesSnapshot(properties:Record<string,unknown>[]){
+ if(!Array.isArray(properties))throw new ReportError(503,'كتالوج العقارات غير متاح؛ لا يمثل صفراً');
+ const counts=new Map<string,number>();
+ for(const property of properties){const label=propertyNeighborhood(property);counts.set(label,(counts.get(label)||0)+1);}
+ return {total:properties.length,byNeighborhood:Array.from(counts,([label,count])=>({label,count})).sort((a,b)=>b.count-a.count||a.label.localeCompare(b.label,'ar'))};
+}
+/** Auth + optional employee filter only — no date/source/stage/funding window. */
+function snapshotLeadWhere(user:Actor,f:Pick<ReportFilters,'employee'>){
+ const clauses:string[]=[],args:(string|number|null)[]=[];const add=(sql:string,...values:(string|number|null)[])=>{clauses.push(sql);args.push(...values);};
+ if(user.role!=='admin'){const assignment=user.role==='field'?'l.field_assigned_to':user.role==='supervisor'?'l.assigned_to = ? OR l.field_assigned_to':'l.assigned_to';add(`(l.owner = ? OR l.created_by = ? OR ${assignment} = ?)`,user.userId,user.userId,...(user.role==='supervisor'?[user.userId]:[]),user.userId);}
+ if(f.employee)add('(l.assigned_to = ? OR l.field_assigned_to = ? OR l.owner = ? OR l.created_by = ?)',f.employee,f.employee,f.employee,f.employee);
+ return {sql:clauses.length?' WHERE '+clauses.join(' AND '):'',args};
+}
+export type SnapshotCount={label:string;count:number};
+export type SnapshotStageCount={stage:string;label:string;count:number};
+export type ReportSnapshots={
+ note:string;
+ clients:{status:'ok';total:number;interested:number;notInterested:number;byStage:SnapshotStageCount[]}|{status:'unavailable';error:string};
+ properties:{status:'ok';total:number;byNeighborhood:SnapshotCount[]}|{status:'unavailable';error:string};
+};
+export const REPORT_SNAPSHOT_NOTE='لقطات النظام ضمن صلاحيتك: إجمالي العملاء بلا فلتر تاريخ/مصدر/مرحلة (يُحترم فلتر الموظف إن وُجد). المهتمون = كل من ليس غير مهتم. العقارات من الكتالوج الحالي مع توزيع الأحياء — ليست طلب عملاء الفترة.';
+export async function readClientsSnapshot(db:Database,user:Actor,f:Pick<ReportFilters,'employee'>){
+ const w=snapshotLeadWhere(user,f);
+ const result=await db.prepare(`SELECT l.stage FROM leads l${w.sql} ORDER BY l.id LIMIT 10001`).bind(...w.args).all();
+ if(result.results.length>10000)throw new ReportError(422,'أكثر من 10000 عميل في اللقطة؛ ضيق مرشح الموظف. لم يعرض مجموع جزئي');
+ const counts=new Map<string,number>();
+ for(const row of result.results){const stage=String(row.stage??'');counts.set(stage,(counts.get(stage)||0)+1);}
+ const total=result.results.length,notInterested=counts.get('not_interested')||0;
+ const byStage=Array.from(counts,([stage,count])=>({stage,label:stageLabel(stage),count})).sort((a,b)=>b.count-a.count||a.label.localeCompare(b.label,'ar'));
+ return {total,interested:total-notInterested,notInterested,byStage};
+}
+export async function readReportSnapshots(db:Database,user:Actor,f:Pick<ReportFilters,'employee'>,properties:Record<string,unknown>[],mapError:(error:unknown)=>string):Promise<ReportSnapshots>{
+ let clients:ReportSnapshots['clients'];
+ try{clients={status:'ok',...await readClientsSnapshot(db,user,f)};}
+ catch(error){clients={status:'unavailable',error:mapError(error)};}
+ let propertiesSnap:ReportSnapshots['properties'];
+ try{propertiesSnap={status:'ok',...buildPropertiesSnapshot(properties)};}
+ catch(error){propertiesSnap={status:'unavailable',error:mapError(error)};}
+ return {note:REPORT_SNAPSHOT_NOTE,clients,properties:propertiesSnap};
 }

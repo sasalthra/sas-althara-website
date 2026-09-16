@@ -1,7 +1,7 @@
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
 import {allowedReports} from '@/lib/report-catalog';
-import {ReportError,authorizeReport,parseReportFilters,readReport,reportCsv} from '@/lib/reports';
+import {ReportError,authorizeReport,parseReportFilters,readReport,readReportSnapshots,reportCsv} from '@/lib/reports';
 import properties from '@/data/properties.json';
 export const dynamic='force-dynamic';
 export const runtime='nodejs';
@@ -25,7 +25,8 @@ export async function GET(req:Request){
     try{const r=await readReport(db,user,meta.id,filters,{properties});summaries.push({...meta,status:'ok',total:r.total,metrics:r.metrics});}
     catch(error){summaries.push({...meta,status:'unavailable',total:null,error:sourceError(error)});}
    }
-   return Response.json({summaries,employees,canExport:user.role==='admin',filters,generatedAt:new Date().toISOString()},{headers});
+   const snapshots=await readReportSnapshots(db,user,filters,properties as Record<string,unknown>[],sourceError);
+   return Response.json({summaries,snapshots,employees,canExport:user.role==='admin',filters,generatedAt:new Date().toISOString()},{headers});
   }
   return Response.json({report:await readReport(db,user,id,filters,{properties}),employees,canExport:user.role==='admin',filters},{headers});
  } catch(error){return Response.json({error:error instanceof ReportError?error.message:sourceError(error)},{status:error instanceof ReportError?error.status:503,headers});}
