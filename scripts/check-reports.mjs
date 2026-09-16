@@ -35,6 +35,21 @@ try {
  await assert.rejects(()=>readReport(db,alice,'leads',{...filters,employee:'bob'}),/صلاحية|مسموح/);
  await assert.rejects(()=>readReport(db,alice,'transactions',filters),/صلاحية|مسموح/);
  assert.equal((await readReport(db,admin,'leads',{...filters,source:"web' OR 1=1 --"})).total,1,'filter values are bound');
+ // Trend: continuous daily series over the filtered window, bucketed by Riyadh day, zero-filled, and scope-respecting.
+ {
+  const trendReport=await readReport(db,admin,'leads',filters);
+  assert.ok(trendReport.trend,'leads report exposes a trend series');
+  assert.equal(trendReport.trend.points.length,30,'trend covers every day of the 30-day window');
+  assert.equal(trendReport.trend.points[0].day,'2026-09-01');
+  assert.equal(trendReport.trend.points.at(-1).day,'2026-09-30');
+  assert.equal(trendReport.trend.points[0].count,1,'the in-window lead lands on its Riyadh day');
+  assert.equal(trendReport.trend.points.reduce((n,p)=>n+p.count,0),trendReport.total,'trend total equals the authorized report total');
+  assert.ok(trendReport.trend.points.some(p=>p.count===0),'days without records are zero-filled, not dropped');
+  const scoped=await readReport(db,alice,'leads',filters);
+  assert.equal(scoped.trend.points.reduce((n,p)=>n+p.count,0),scoped.total,'trend never leaks records outside the actor scope');
+  const snapshot=await readReport(db,admin,'users',filters);
+  assert.equal(snapshot.trend,undefined,'snapshot reports without a date basis expose no trend');
+ }
  const csv=reportCsv({columns:[{key:'value',label:'Value'}],rows:[{value:' =HYPERLINK("bad")'},{value:'\t+CMD'},{value:'سليم,\n"نص"'}]});
  assert.ok(csv.startsWith('\uFEFF'));assert.ok(csv.includes("' =HYPERLINK"));assert.ok(csv.includes("'\t+CMD"));assert.ok(csv.includes('""نص""'));
  assert.equal(sql.prepare('SELECT COUNT(*) n FROM leads').get().n,3);

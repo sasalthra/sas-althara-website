@@ -98,7 +98,45 @@ export async function readReport(db:Database,user:Actor,id:string,f:ReportFilter
  if(id==='ai'){if(rows.length===0)throw new ReportError(404,'لا توجد بيانات استخدام AI محفوظة ضمن الفترة؛ الاستخدام والتكلفة غير متاحين.');metrics.push({label:'محاولات الطلبات المسجلة',value:rows.reduce((n,r)=>n+Number(r.requests||0),0)});}
  if(id==='imports')metrics.push({label:'الصفوف المقبولة المسجلة في التشغيلات',value:rows.reduce((n,r)=>n+Number(r.inserted||0),0)});
  const groups:ReportResult['groups']={};for(const key of spec.groups||[]){const counts=new Map<string,number>();for(const r of rows){const label=String(r[key]??'غير محدد');counts.set(label,(counts.get(label)||0)+1);}groups[key]=Array.from(counts,([label,count])=>({label,count})).sort((a,b)=>b.count-a.count||a.label.localeCompare(b.label));}
- return {...meta,columns:spec.columns.map(([key,label])=>({key,label})),rows:options.exporting?rows:rows.slice((f.page-1)*f.pageSize,f.page*f.pageSize),total:rows.length,page:f.page,pageSize:f.pageSize,groups,metrics,generatedAt:now.toISOString()};
+ // Trend is derived from the same authorized rows, bucketed by the module's own Riyadh-local date basis. No extra query, no extra scope.
+ const trend=buildTrend(spec,id,raw.results,f);
+ return {...meta,columns:spec.columns.map(([key,label])=>({key,label})),rows:options.exporting?rows:rows.slice((f.page-1)*f.pageSize,f.page*f.pageSize),total:rows.length,page:f.page,pageSize:f.pageSize,groups,metrics,...(trend?{trend}:{}),generatedAt:now.toISOString()};
+}
+const TREND_DATE_FIELD:Partial<Record<Exclude<ReportId,'properties'>,{field:string;basis:string;dateOnly?:boolean}>>={
+ leads:{field:'created_at',basis:'يوم إنشاء العميل (الرياض)'},
+ followups:{field:'follow_up',basis:'يوم موعد المتابعة',dateOnly:true},
+ activity:{field:'created_at',basis:'يوم الحدث (الرياض)'},
+ transactions:{field:'updated_at',basis:'يوم آخر تحديث للمعاملة (الرياض)'},
+ attendance:{field:'work_day',basis:'يوم العمل المسجل',dateOnly:true},
+ requests:{field:'created_at',basis:'يوم إنشاء الطلب (الرياض)'},
+ announcements:{field:'created_at',basis:'يوم النشر (الرياض)'},
+ audit:{field:'created_at',basis:'يوم الحدث (الرياض)'},
+ imports:{field:'created_at',basis:'يوم التشغيل (الرياض)'},
+ importRows:{field:'created_at',basis:'يوم الاستيراد (الرياض)'},
+ ai:{field:'hour_key',basis:'يوم الاستخدام (UTC كما هو مخزن)'},
+};
+function riyadhBucket(value:unknown,dateOnly:boolean):string|null{
+ if(value===null||value===undefined||value==='')return null;
+ const s=value instanceof Date?value.toISOString():String(value);
+ if(dateOnly)return /^\d{4}-\d{2}-\d{2}/.test(s)?s.slice(0,10):null;
+ const ms=Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)?s:s.replace(' ','T')+'Z');
+ if(!Number.isFinite(ms))return /^\d{4}-\d{2}-\d{2}/.test(s)?s.slice(0,10):null;
+ return new Date(ms+3*60*60*1000).toISOString().slice(0,10);
+}
+function buildTrend(spec:Spec,id:string,records:Record<string,unknown>[],f:ReportFilters):ReportResult['trend']{
+ const config=TREND_DATE_FIELD[id as Exclude<ReportId,'properties'>];
+ if(!config||!spec.date)return undefined;
+ const counts=new Map<string,number>();
+ for(const record of records){const day=riyadhBucket(record[config.field],!!config.dateOnly);if(day)counts.set(day,(counts.get(day)||0)+1);}
+ if(!counts.size)return undefined;
+ // Emit a continuous series across the filtered window so gaps read as zero, not as missing days.
+ const points:{day:string;count:number}[]=[];const cursor=new Date(f.from+'T00:00:00.000Z'),end=Date.parse(f.to+'T00:00:00.000Z');
+ if(!Number.isFinite(end))return undefined;
+ for(let guard=0;cursor.getTime()<=end&&guard<400;guard++){const day=cursor.toISOString().slice(0,10);points.push({day,count:counts.get(day)||0});cursor.setUTCDate(cursor.getUTCDate()+1);}
+ // Out-of-window buckets (e.g. upcoming follow-ups) must still be visible rather than silently dropped.
+ for(const [day,count] of counts)if(!points.some(p=>p.day===day))points.push({day,count});
+ points.sort((a,b)=>a.day.localeCompare(b.day));
+ return {basis:config.basis,points};
 }
 export function reportCsv(report:{columns:ReportColumn[];rows:ReportRow[]}){
  const quote=(v:unknown)=>{let s=v==null?'':String(v);if(/^[\s\u0000-\u001f\u007f\uFEFF]*[=+\-@]/.test(s)||/^[\t\r\n]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';};

@@ -1,6 +1,6 @@
 'use client';
 import {useEffect,useState,type FormEvent} from 'react';
-import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend,CartesianGrid} from 'recharts';
+import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend,CartesianGrid,AreaChart,Area} from 'recharts';
 import {allowedReports,type ReportResult} from '@/lib/report-catalog';
 import {CrmLink,navigateCrm,useCrmQuery} from './navigation';
 
@@ -79,7 +79,8 @@ export default function ReportsPanel({role}:{role:string}){
    <p className="report-caveat">{report.note}</p><p>عدد السجلات المطابقة: <strong>{report.total}</strong> · الصفحة {page} من {pages} · قراءة <time dateTime={report.generatedAt} dir="ltr">{report.generatedAt}</time> · «—» تعني غير مسجل، لا صفراً. الحد الآمن 10000 سجل؛ تجاوز الحد يرفض القراءة والتصدير بدلاً من مجموع جزئي.</p>
    {exportError&&<p role="alert" className="error">{exportError}</p>}
    {report.metrics.length>0&&<dl className="report-metrics">{report.metrics.map((m,i)=><div key={i}><dt>{m.label}</dt><dd>{m.value??'غير مسجل'}{m.missing!==undefined&&m.missing>0&&<small> · غير مسجل في {m.missing} سجل</small>}</dd></div>)}</dl>}
-   {(metricsChart.length>0||groupsCharts)&&<div className="report-charts-grid">
+   {(metricsChart.length>0||groupsCharts||report.trend)&&<div className="report-charts-grid">
+    {report.trend&&report.trend.points.length>1&&<div className="report-chart panel report-chart-wide"><h4>الخط الزمني — {report.trend.basis}</h4><ResponsiveContainer width="100%" height={260}><AreaChart data={report.trend.points}><defs><linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#c9a24b" stopOpacity={0.55}/><stop offset="100%" stopColor="#c9a24b" stopOpacity={0.05}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="day" tick={{fontSize:10}} minTickGap={18}/><YAxis allowDecimals={false}/><Tooltip/><Area type="monotone" dataKey="count" name="السجلات" stroke="#c9a24b" strokeWidth={2} fill="url(#trendFill)"/></AreaChart></ResponsiveContainer><p className="subtle">الأيام بلا سجلات تظهر صفراً وليست بيانات ناقصة.</p></div>}
     {metricsChart.length>0&&<div className="report-chart panel"><h4>المؤشرات الرقمية</h4><ResponsiveContainer width="100%" height={280}><BarChart data={metricsChart} layout="vertical"><CartesianGrid strokeDasharray="3 3"/><XAxis type="number"/><YAxis dataKey="name" type="category" width={160} tick={{fontSize:12}}/><Tooltip/><Bar dataKey="value" name="القيمة" radius={[0,6,6,0]}>{metricsChart.map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}</Bar></BarChart></ResponsiveContainer></div>}
     {groupsCharts?.map(gc=>(
       gc.data.length>1&&gc.data.length<=8?

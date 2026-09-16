@@ -25,6 +25,8 @@
 .report-group li { min-width: 96px; overflow-wrap: anywhere; white-space: normal; }
 .report-charts-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-block: 4px; }
 .report-chart { min-width: 0; padding: 12px; }
+.report-chart-wide { grid-column: 1 / -1; }
+.report-chart p.subtle { margin: 6px 0 0; font-size: 12px; color: #554e5b; }
 .report-chart h4 { margin: 0 0 10px; font-size: 15px; color: #302d35; }
 .report-chart .recharts-wrapper { direction: ltr; }
 .report-pagination { justify-content: start; flex-wrap: wrap; }

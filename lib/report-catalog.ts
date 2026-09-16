@@ -20,5 +20,5 @@ export type ReportId=typeof reportCatalog[number]['id'];
 export type ReportCell=string|number|null;
 export type ReportRow=Record<string,ReportCell>;
 export type ReportColumn={key:string;label:string};
-export type ReportResult={id:string;label:string;kind:string;note:string;columns:ReportColumn[];rows:ReportRow[];total:number;page:number;pageSize:number;groups:Record<string,{label:string;count:number}[]>;metrics:{label:string;value:ReportCell;missing?:number}[];generatedAt:string};
+export type ReportResult={id:string;label:string;kind:string;note:string;columns:ReportColumn[];rows:ReportRow[];total:number;page:number;pageSize:number;groups:Record<string,{label:string;count:number}[]>;metrics:{label:string;value:ReportCell;missing?:number}[];trend?:{basis:string;points:{day:string;count:number}[]};generatedAt:string};
 export function allowedReports(role:string){return reportCatalog.filter(r=>role==='admin'||!r.admin);}
