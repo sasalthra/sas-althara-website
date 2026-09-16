@@ -13,7 +13,10 @@
     "test": "node scripts/check-hostinger.mjs && npm run test:expansion",
     "test:expansion": "node scripts/check-expansion.mjs && node scripts/check-api-expansion.mjs && node scripts/check-hr-calendar.mjs && node scripts/check-ui-expansion.mjs && node scripts/check-storage-expansion.mjs && node scripts/check-schema-contract.mjs && node scripts/check-migration-plan.mjs && node scripts/check-reports.mjs && node scripts/check-reports-api.mjs && node scripts/check-reports-ui.mjs",
     "db:check": "node scripts/migrate-leads.mjs --check",
-    "db:migrate": "node scripts/migrate-leads.mjs"
+    "db:migrate": "node scripts/migrate-leads.mjs",
+    "db:inspect": "node scripts/inspect-db.mjs",
+    "db:verify": "node scripts/verify-reports-live.mjs",
+    "db:fix-ownership": "node scripts/fix-lead-ownership.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

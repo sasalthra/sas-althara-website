@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {planMigration, LEGACY_COLUMNS, COLUMNS, INDEXES, STAGES} from './lib/migration-plan.mjs';
+import {parseEnv} from './lib/parse-env.mjs';
 
 // ── 1. Against the broken production schema, the plan must fix everything ──
 const legacyPlan = planMigration(LEGACY_COLUMNS, [{Key_name: 'PRIMARY'}, {Key_name: 'leads_owner_created_idx'}]);
@@ -98,4 +99,36 @@ assert.equal(props[0].property_id, '18494');
 const scoped = sql.prepare(`SELECT COUNT(*) n FROM ${leadFrom} WHERE (l.owner = ? OR l.created_by = ? OR l.assigned_to = ?)`).all('alice', 'alice', 'alice');
 assert.equal(scoped[0].n, 2, 'ownership scope must return only that user\'s leads');
 
-console.log('PASS leads migration plan: fixes legacy schema, non-destructive, idempotent, partial-safe, backfills ownership, and report queries resolve');
+// ── 6. .env parsing must survive Windows line endings ──
+// A CRLF .env.local appended "\r" to every value, so a correct file reported
+// "credentials incomplete" and, once past that, would have sent a hostname
+// ending in \r to MySQL.
+{
+  const crlf = 'DB_HOST=srv1903.hstgr.io\r\nDB_USER=u727276700_sas_admin\r\nDB_PASSWORD=p@ss#1\r\nDB_NAME=u727276700_sas_crm\r\n';
+  const parsed = parseEnv(crlf);
+  assert.equal(parsed.DB_HOST, 'srv1903.hstgr.io', 'CRLF must not leave a carriage return in the value');
+  assert.equal(parsed.DB_NAME, 'u727276700_sas_crm');
+  assert.equal(parsed.DB_USER, 'u727276700_sas_admin');
+  for (const [k, v] of Object.entries(parsed)) {
+    assert.ok(!/[\r\n]/.test(v), `${k} still contains a line-ending character`);
+  }
+  // An unquoted '#' inside a password must not be treated as a comment start
+  // unless whitespace precedes it.
+  assert.equal(parsed.DB_PASSWORD, 'p@ss#1', 'a # inside an unquoted value is part of the value');
+
+  // BOM, export prefix, quotes, comments, blank lines.
+  const messy = '\uFEFF# comment\n\nexport DB_HOST="srv1903.hstgr.io"\nDB_NAME=\'u727276700_sas_crm\'\nDB_PORT=3306 # inline\n';
+  const m2 = parseEnv(messy);
+  assert.equal(m2.DB_HOST, 'srv1903.hstgr.io', 'BOM + export + double quotes');
+  assert.equal(m2.DB_NAME, 'u727276700_sas_crm', 'single quotes');
+  assert.equal(m2.DB_PORT, '3306', 'inline comment stripped');
+  assert.deepEqual(Object.keys(m2).sort(), ['DB_HOST', 'DB_NAME', 'DB_PORT'],
+    'comments and blank lines must not become keys');
+
+  // A quoted value keeps everything inside the quotes verbatim.
+  assert.equal(parseEnv('DB_PASSWORD="a b # c"').DB_PASSWORD, 'a b # c');
+  // LF-only files must behave identically.
+  assert.deepEqual(parseEnv('DB_HOST=h\nDB_NAME=n\n'), {DB_HOST: 'h', DB_NAME: 'n'});
+}
+
+console.log('PASS leads migration plan: fixes legacy schema, non-destructive, idempotent, partial-safe, backfills ownership, report queries resolve, and .env parsing survives CRLF');

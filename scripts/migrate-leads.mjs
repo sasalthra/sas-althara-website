@@ -14,15 +14,17 @@ import mysql from 'mysql2/promise';
 // Decision logic lives in a pure module so it can be tested without a live
 // server — see scripts/check-migration-plan.mjs.
 import {planMigration, COLUMNS, STAGES} from './lib/migration-plan.mjs';
+import {parseEnv} from './lib/parse-env.mjs';
 
 const CHECK_ONLY = process.argv.includes('--check');
 
 // ── بيانات الاتصال ────────────────────────────────────────────
+// المحلّل في scripts/lib/parse-env.mjs يتقبّل CRLF و BOM والاقتباس،
+// وإلا حملت القيم حرف \r فظهرت رسالة "بيانات ناقصة" مع ملف صحيح.
 for (const file of ['.env.local', '.env', '.env.production']) {
   if (!existsSync(file)) continue;
-  for (const line of readFileSync(file, 'utf8').split('\n')) {
-    const m = /^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/.exec(line);
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+  for (const [key, value] of Object.entries(parseEnv(readFileSync(file, 'utf8')))) {
+    if (!process.env[key]) process.env[key] = value;
   }
 }
 const {DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT} = process.env;
