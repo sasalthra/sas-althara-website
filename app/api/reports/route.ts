@@ -23,10 +23,22 @@ export async function GET(req:Request){
    const summaries=[];
    for(const meta of allowedReports(user.role)){
     try{const r=await readReport(db,user,meta.id,filters,{properties});summaries.push({...meta,status:'ok',total:r.total,metrics:r.metrics});}
-    catch(error){summaries.push({...meta,status:'unavailable',total:null,error:error instanceof ReportError?error.message:'تعذر قراءة المصدر؛ راجع تهيئة الجدول وصلاحيات الاتصال. لا يمثل صفراً.'});}
+    catch(error){summaries.push({...meta,status:'unavailable',total:null,error:sourceError(error)});}
    }
    return Response.json({summaries,employees,canExport:user.role==='admin',filters,generatedAt:new Date().toISOString()},{headers});
   }
   return Response.json({report:await readReport(db,user,id,filters,{properties}),employees,canExport:user.role==='admin',filters},{headers});
- } catch(error){return Response.json({error:error instanceof ReportError?error.message:'تعذر تحميل التقرير؛ لا توجد نتيجة مؤكدة. راجع تهيئة المصدر ثم أعد المحاولة.'},{status:error instanceof ReportError?error.status:503,headers});}
+ } catch(error){return Response.json({error:error instanceof ReportError?error.message:sourceError(error)},{status:error instanceof ReportError?error.status:503,headers});}
+}
+// A read failure must never look like a zero, and a schema gap must name itself
+// instead of hiding behind a generic message. Only the column name is surfaced —
+// never SQL text, credentials or connection details.
+function sourceError(error:unknown){
+ if(error instanceof ReportError)return error.message;
+ const raw=error instanceof Error?error.message:'';
+ const column=/Unknown column '(?:\w+\.)?(\w+)'/i.exec(raw)?.[1];
+ if(column)return `عمود «${column}» غير موجود في قاعدة البيانات، فتعذّرت القراءة ولا يمثل صفراً. شغّل ترقية قاعدة البيانات db/mysql/003_leads_expansion_columns.sql ثم أعد المحاولة.`;
+ if(/Table '.*' doesn't exist|no such table/i.test(raw))return 'جدول مطلوب غير موجود في قاعدة البيانات، فتعذّرت القراءة ولا يمثل صفراً. شغّل ترقيات db/mysql بالترتيب ثم أعد المحاولة.';
+ if(/ER_ACCESS_DENIED|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|Database configuration missing/i.test(raw))return 'تعذّر الاتصال بقاعدة البيانات، فلا توجد نتيجة ولا يمثل صفراً. راجع بيانات الاتصال وصلاحيات المستخدم.';
+ return 'تعذر قراءة المصدر؛ راجع تهيئة الجدول وصلاحيات الاتصال. لا يمثل صفراً.';
 }
