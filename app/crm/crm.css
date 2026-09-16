@@ -23,6 +23,10 @@
 .report-group summary { cursor: pointer; min-height: 36px; padding: 4px 0; }
 .report-group ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 2px 0 0; }
 .report-group li { min-width: 96px; overflow-wrap: anywhere; white-space: normal; }
+.report-charts-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-block: 4px; }
+.report-chart { min-width: 0; padding: 12px; }
+.report-chart h4 { margin: 0 0 10px; font-size: 15px; color: #302d35; }
+.report-chart .recharts-wrapper { direction: ltr; }
 .report-pagination { justify-content: start; flex-wrap: wrap; }
 @media (max-width: 720px) { .report-filters { grid-template-columns: 1fr 1fr; } .report-filters label:first-child { grid-column: 1 / -1; } .report-metrics { grid-template-columns: 1fr; } .report-overview .report-table-scroll table { min-width: 0; } }
 @media print {
