@@ -12,22 +12,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-export const stages: Record<string, string> = {
-  new: 'عميل جديد',
-  received: 'تم استلام العميل',
-  no_answer: 'لم يتم الرد',
-  contacted: 'تم التواصل',
-  data_received: 'تم استلام بيانات العميل',
-  calculation_done: 'تم عمل حسبة للعميل',
-  visit_qualified: 'مؤهل زيارة',
-  property_visited: 'تم زيارة العقار',
-  bank_approval: 'مؤهل بانتظار موافقة البنك',
-  deposit_paid: 'دفع عربون',
-  contract_signed: 'وقع عقد',
-  transferred: 'إفراغ',
-  unqualified: 'غير مؤهل',
-  not_interested: 'غير مهتم',
-};
+import {stageLabels as stages} from '@/lib/lead-stages';
+export {stages};
 
 export const leadSources: Record<string, string> = {
   meta: 'ميتا',

@@ -10,7 +10,7 @@ assert.ok(existsSync('lib/reports.ts'),'Reports engine must exist');
 const out=mkdtempSync(join(tmpdir(),'sas-reports-'));
 try {
  await build({entryPoints:['lib/reports.ts'],outfile:join(out,'reports.cjs'),bundle:true,platform:'node',format:'cjs',external:['mysql2/promise']});
- const {parseReportFilters,readReport,reportCsv}=createRequire(import.meta.url)(join(out,'reports.cjs'));
+ const {parseReportFilters,readReport,reportCsv,propertyNeighborhood,buildPropertiesSnapshot,readClientsSnapshot,readReportSnapshots}=createRequire(import.meta.url)(join(out,'reports.cjs'));
  const sql=new DatabaseSync(':memory:');
  sql.function('CONVERT_TZ',(value,from,to)=>{assert.equal(from,'+00:00');assert.equal(to,'+03:00');if(value==null)return null;const text=String(value).replace(' ','T');const parsed=Date.parse(text.endsWith('Z')?text:text+'Z');return new Date(parsed+3*60*60*1000).toISOString().replace('T',' ');});
  const bounded=parseReportFilters(new URLSearchParams(),new Date('2026-09-15T22:30:00.000Z'));
@@ -53,6 +53,30 @@ try {
  const csv=reportCsv({columns:[{key:'value',label:'Value'}],rows:[{value:' =HYPERLINK("bad")'},{value:'\t+CMD'},{value:'سليم,\n"نص"'}]});
  assert.ok(csv.startsWith('\uFEFF'));assert.ok(csv.includes("' =HYPERLINK"));assert.ok(csv.includes("'\t+CMD"));assert.ok(csv.includes('""نص""'));
  assert.equal(sql.prepare('SELECT COUNT(*) n FROM leads').get().n,3);
+ // System snapshots: no date window, auth scope, interested/not_interested pairing, neighborhoods.
+ put.run('d','alice','alice','alice','','d','p','','web','not_interested','2026-09-10','2025-01-01T00:00:00.000Z','2025-01-01T00:00:00.000Z');
+ put.run('e','bob','bob','bob','','e','p','','web','viewing','2026-09-10','2025-06-01T00:00:00.000Z','2025-06-01T00:00:00.000Z');
+ {
+  const snap=await readClientsSnapshot(db,admin,{employee:''});
+  assert.equal(snap.total,5,'snapshot ignores the default date window');
+  assert.equal(snap.notInterested,1);
+  assert.equal(snap.interested,4,'interested = all stages except not_interested');
+  assert.ok(snap.byStage.some(s=>s.stage==='viewing'&&s.label==='معاينة'));
+  const aliceSnap=await readClientsSnapshot(db,alice,{employee:''});
+  assert.equal(aliceSnap.total,3,'sales scope still applies without a date filter');
+  assert.equal(aliceSnap.notInterested,1);
+  assert.equal(propertyNeighborhood({address:'الروضة',title:'شقق حي النزهه'}),'الروضة');
+  assert.equal(propertyNeighborhood({address:'',title:'فيلا حي النزهه مشروع'}),'النزهه');
+  assert.equal(propertyNeighborhood({address:'  ',title:'بدون حي'}),'غير محدد');
+  const props=buildPropertiesSnapshot([{id:'1',title:'فيلا حي النزهه',address:''},{id:'2',title:'x',address:'الروضة'},{id:'3',title:'y',address:''}]);
+  assert.equal(props.total,3);
+  assert.equal(props.byNeighborhood.find(n=>n.label==='النزهه').count,1);
+  assert.equal(props.byNeighborhood.find(n=>n.label==='غير محدد').count,1);
+  const wrapped=await readReportSnapshots(db,admin,{employee:''},[{id:'1',title:'فيلا حي النزهه',address:''}],e=>e instanceof Error?e.message:'fail');
+  assert.equal(wrapped.clients.status,'ok');
+  assert.equal(wrapped.properties.status,'ok');
+  assert.equal(wrapped.properties.total,1);
+ }
  sql.exec(`CREATE TABLE crm_transactions(id TEXT,lead_id TEXT,data TEXT,confirmed_due TEXT,updated_at TEXT);
  CREATE TABLE hr_attendance(user_id TEXT,work_day TEXT,check_in TEXT,check_out TEXT,late_minutes INTEGER);
  CREATE TABLE hr_profiles(user_id TEXT,job_title TEXT,department TEXT,leave_balance TEXT,schedule TEXT,updated_at TEXT);
