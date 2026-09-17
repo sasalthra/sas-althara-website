@@ -1,6 +1,6 @@
 'use client';
 
-import {useMemo, useState} from 'react';
+import {useEffect, useMemo, useState} from 'react';
 import {
   Bath,
   BedDouble,
@@ -114,6 +114,15 @@ export default function ListingsClient({
   const [district, setDistrict] = useState('all');
   const [priceFrom, setPriceFrom] = useState('');
   const [priceTo, setPriceTo] = useState('');
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get('q') || params.get('keyword') || '';
+    const nextType = params.get('type') || 'all';
+    const nextCity = params.get('city') || 'all';
+    if (q) setQuery(q);
+    if (nextType !== 'all') setType(nextType);
+    if (nextCity !== 'all') setCity(nextCity);
+  }, []);
 
   const filtered = useMemo(() => {
     const from = Number(priceFrom) || 0;
