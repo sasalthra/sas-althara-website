@@ -17,8 +17,8 @@ export type ListingProperty = {
   title: string;
   price: number;
   area: number;
-  beds: string;
-  baths: string;
+  beds: string | null;
+  baths: string | null;
   city: string;
   address: string;
   type: string;
