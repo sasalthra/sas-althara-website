@@ -249,7 +249,7 @@ export default function UsersPanel() {
             ) : null}
 
             {success ? (
-              <p className="mb-3 text-sm text-green-700">
+              <p className="mb-3 text-sm text-[#3F1A44]">
                 {success}
               </p>
             ) : null}

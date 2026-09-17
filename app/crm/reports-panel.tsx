@@ -1,6 +1,7 @@
 'use client';
-import {useEffect,useState,type FormEvent} from 'react';
+import {useEffect,useState,type FormEvent,type ReactNode} from 'react';
 import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend,CartesianGrid,AreaChart,Area} from 'recharts';
+import {Bell,CheckCircle2,Filter,TrendingUp,Users,Wallet} from 'lucide-react';
 import {allowedReports,type ReportResult} from '@/lib/report-catalog';
 import {CrmLink,navigateCrm,useCrmQuery} from './navigation';
 
@@ -14,7 +15,9 @@ type Payload={report?:ReportResult;summaries?:Summary[];snapshots?:ReportSnapsho
 type Metric=NonNullable<ReportResult['metrics']>[number];
 
 const groupNames:Record<string,string>={source:'المصادر',stage:'المراحل',sales:'المبيعات',field:'الميدان',follow_up_age:'عمر المتابعة',city:'المدن',action:'الأعمال',user_id:'المستخدمون',name:'الموظفون',department:'الأقسام',schedule_status:'الدوام',type:'الخدمات',status:'الحالات',role:'الأدوار',active:'تفعيل الحساب',actor_id:'الفاعلون',fundingEntity:'جهات التمويل',debtPayer:'جهة السداد',requestStage:'مرحلة الطلب'};
-const CHART_COLORS=['#c9a24b','#2f6f5e','#3d6fa8','#a84e3d','#7a4fa8','#4f8fa8','#8f7a3d','#5e8f3d','#a83d7a','#666'];
+const CHART_COLORS=['#3F1A44','#6B5A70','#9CA3AF','#5B245F','#D1D5DB','#8B6B90','#4B5563','#C4B5C8','#374151','#E5E7EB'];
+const PURPLE='#3F1A44';
+const GREY_BAR='#E5E7EB';
 
 function isNumericValue(v:unknown):boolean{
  if(v===null||v===undefined||v==='')return false;
@@ -23,6 +26,46 @@ function isNumericValue(v:unknown):boolean{
 }
 function numericOf(v:unknown):number{
  return Number(String(v).replace(/[,٬]/g,''));
+}
+
+function HorizontalBars({items,title}:{items:{label:string;count:number}[];title:string}){
+ const total=items.reduce((n,i)=>n+i.count,0)||1;
+ return (
+  <div className="report-hbar-card panel">
+   <h4>{title}</h4>
+   <ul className="report-hbar-list">
+    {items.map((item,idx)=>{
+     const pct=Math.round((item.count/total)*100);
+     const isTop=idx===0;
+     const isNotQualified=/غير مؤهل|not.?qualif/i.test(item.label);
+     const fill=isNotQualified?'#9CA3AF':isTop?PURPLE:GREY_BAR;
+     return (
+      <li key={item.label+idx}>
+       <div className="report-hbar-meta">
+        <span className="report-hbar-label">{item.label}</span>
+        <span className="report-hbar-stats">({pct}%) {item.count}</span>
+       </div>
+       <div className="report-hbar-track" aria-hidden="true">
+        <span className="report-hbar-fill" style={{width:`${Math.max(pct, pct>0?2:0)}%`,background:fill}}/>
+       </div>
+      </li>
+     );
+    })}
+   </ul>
+  </div>
+ );
+}
+
+function KpiCard({value,label,icon,tone}:{value:string|number;label:string;icon:ReactNode;tone?:'purple'|'muted'|'warn'|'danger'}){
+ return (
+  <div className={`report-kpi-card tone-${tone||'purple'}`}>
+   <div className="report-kpi-copy">
+    <strong>{value}</strong>
+    <span>{label}</span>
+   </div>
+   <div className="report-kpi-icon" aria-hidden="true">{icon}</div>
+  </div>
+ );
 }
 
 export default function ReportsPanel({role}:{role:string}){
@@ -39,7 +82,6 @@ export default function ReportsPanel({role}:{role:string}){
  const page=report?.page||1,pages=Math.max(1,Math.ceil((report?.total||0)/(report?.pageSize||25)));
  function deepLink(column:string,value:unknown){if(value===null||value===undefined||value==='')return '';if(column==='lead_id'||(column==='id'&&['leads','followups'].includes(selectedModule)))return '/crm/leads/'+encodeURIComponent(String(value));if(column==='property_id'||(column==='id'&&selectedModule==='properties'&&!['other'].includes(String(value))))return '/properties/'+encodeURIComponent(String(value));return '';}
 
- // Chart data builders
  function groupChartData(){
   if(!report)return null;
   const entries=Object.entries(report.groups).filter(([,g])=>g.length>0);
@@ -59,61 +101,177 @@ export default function ReportsPanel({role}:{role:string}){
  const groupsCharts=report?groupChartData():null;
  const metricsChart=report?metricChartData():[];
 
+ const snap=stateData?.snapshots;
+ const clientsOk=snap?.clients.status==='ok'?snap.clients:null;
+ const propsOk=snap?.properties.status==='ok'?snap.properties:null;
+ const followupsSummary=stateData?.summaries?.find(s=>s.id==='followups');
+ const stageBars=clientsOk?.byStage.map(s=>({label:s.label,count:s.count}))||[];
+ // Overview secondary bars: neighborhoods when source groups are not on overview payload
+ const sourceBars = propsOk?.byNeighborhood.slice(0,8).map(n=>({label:n.label,count:n.count})) || [];
+
+ // Team-ish table from sales group if present in a loaded leads report, else from summaries employee list + totals
+ const salesGroups = report?.groups?.sales || [];
+
  return <section className="reports-center" aria-label="مركز التقارير">
-  <div className="report-heading"><div><h2>مركز التقارير</h2><p className="subtle">قراءة فقط · {role==='admin'?'نطاق الإدارة':'سجلاتك المملوكة أو المسندة لك؛ بيانات الموظفين خاصة بك فقط'}</p></div><CrmLink className="crm-button" href="/crm?tab=reports">نظرة عامة</CrmLink></div>
-  <form className="report-filters panel" onSubmit={submit} key={key+(stateData?.filters.from||'')}>
-   <label>الوحدة<select name="module" defaultValue={selectedModule}><option value="overview">نظرة عامة — كل المسموح</option>{modules.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
-   <label>من تاريخ — الرياض<input type="date" name="from" defaultValue={query.get('from')||stateData?.filters.from||''}/></label><label>إلى تاريخ — الرياض<input type="date" name="to" defaultValue={query.get('to')||stateData?.filters.to||''}/></label>
-   <label>الموظف المسموح<select name="reportEmployee" defaultValue={query.get('reportEmployee')||''}><option value="">{role==='admin'?'كل الموظفين':'نطاقي فقط'}</option>{stateData?.employees.map(e=><option key={e.id} value={e.id}>{e.name} — {e.id}</option>)}</select></label>
-   <label>مصدر العميل<input name="source" placeholder="كل المصادر" defaultValue={query.get('source')||''}/></label>
-   <label>المرحلة<input name="stage" placeholder={selectedModule==='transactions'?'مرحلة طلب التمويل':'مرحلة العميل'} defaultValue={query.get('stage')||''}/></label>
-   <label>جهة التمويل<input name="funding" placeholder="للمعاملات فقط" defaultValue={query.get('funding')||''}/></label>
-   <label>حجم الصفحة<select name="pageSize" defaultValue={query.get('pageSize')||'25'}>{[25,50,100].map(n=><option key={n}>{n}</option>)}</select></label>
-   <button className="primary" type="submit">تطبيق المرشحات</button><CrmLink className="crm-button" href="/crm?tab=reports">إعادة ضبط المرشحات</CrmLink>
+  <div className="report-heading">
+   <div>
+    <h2>التقارير</h2>
+    <p className="subtle">أداء المشرفين والموظفين والتقرير التفصيلي للعملاء · {role==='admin'?'نطاق الإدارة':'سجلاتك المملوكة أو المسندة لك'}</p>
+   </div>
+   <div className="report-heading-actions">
+    {stateData?.canExport && selectedModule!=='overview' ? (
+     <button type="button" className="report-primary-btn" disabled={exporting} onClick={()=>void download()}>
+      <Wallet size={16}/> {exporting?'جارٍ التصدير…':'تصدير CSV'}
+     </button>
+    ) : (
+     <CrmLink className="report-primary-btn" href="/crm?tab=reports&module=leads">
+      <Wallet size={16}/> تفاصيل العملاء
+     </CrmLink>
+    )}
+   </div>
+  </div>
+
+  <form className="report-filters panel report-filter-card" onSubmit={submit} key={key+(stateData?.filters.from||'')}>
+   <div className="report-filter-head">
+    <h3><Filter size={16} aria-hidden="true"/> تصفية التقارير</h3>
+    <CrmLink className="report-clear-link" href="/crm?tab=reports">مسح الفلاتر</CrmLink>
+   </div>
+   <div className="report-filter-grid">
+    <label>الوحدة<select name="module" defaultValue={selectedModule}><option value="overview">نظرة عامة — كل المسموح</option>{modules.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
+    <label>بحث / مصدر العميل<input name="source" placeholder="اسم العميل أو الجوال أو المصدر" defaultValue={query.get('source')||''}/></label>
+    <label>الموظف<select name="reportEmployee" defaultValue={query.get('reportEmployee')||''}><option value="">{role==='admin'?'كل الموظفين':'نطاقي فقط'}</option>{stateData?.employees.map(e=><option key={e.id} value={e.id}>{e.name} — {e.id}</option>)}</select></label>
+    <label>مرحلة العميل<input name="stage" placeholder={selectedModule==='transactions'?'مرحلة طلب التمويل':'كل المراحل'} defaultValue={query.get('stage')||''}/></label>
+    <label>من تاريخ — الرياض<input type="date" name="from" defaultValue={query.get('from')||stateData?.filters.from||''}/></label>
+    <label>إلى تاريخ — الرياض<input type="date" name="to" defaultValue={query.get('to')||stateData?.filters.to||''}/></label>
+    <label>جهة التمويل<input name="funding" placeholder="للمعاملات فقط" defaultValue={query.get('funding')||''}/></label>
+    <label>حجم الصفحة<select name="pageSize" defaultValue={query.get('pageSize')||'25'}>{[25,50,100].map(n=><option key={n}>{n}</option>)}</select></label>
+   </div>
+   <div className="report-filter-actions">
+    <button className="primary report-primary-btn" type="submit">تطبيق المرشحات</button>
+   </div>
+   <p className="report-filter-help">التصدير إلى Excel/PDF يتبع نفس الفلاتر المطبقة أعلاه. الفترة الافتراضية آخر 30 يوماً بتوقيت الرياض.</p>
   </form>
+
   <p className="report-scope">الفترة المطبقة: {stateData?.filters.from||'…'} — {stateData?.filters.to||'…'} بتقويم الرياض (UTC+03)، والافتراضي آخر 30 يوماً. المصدر يؤثر في وحدات العملاء، والمرحلة تعني مرحلة طلب التمويل في المعاملات ومرحلة العميل في غيرها، وجهة التمويل للمعاملات فقط. الموظف يحدد التكليف/الملكية في وحدات العملاء، والموظف/الفاعل في HR والتدقيق. الإعلانات وSheets لا يرتبطان بموظف. لكل وحدة أساس تاريخ موضح؛ اللقطات الحالية ليست تاريخاً للحالة. الرابط يحفظ المرشحات.</p>
+
   {loading&&<p role="status">جارٍ تحميل التقارير…</p>}
   {error&&<div role="alert" className="error">{error} <button onClick={()=>setRetry(n=>n+1)}>إعادة المحاولة</button></div>}
-  {stateData?.snapshots&&<div className="report-overview panel" aria-label="لقطات النظام">
-   <h3>لقطات النظام — العملاء والعقارات</h3>
-   <p className="subtle">{stateData.snapshots.note}</p>
-   {stateData.snapshots.clients.status==='unavailable'?<p role="alert" className="error">العملاء: {stateData.snapshots.clients.error}</p>:
-    <><dl className="report-metrics">
-     <div><dt>عدد العملاء في النظام</dt><dd>{stateData.snapshots.clients.total}</dd></div>
-     <div><dt>المهتمين</dt><dd>{stateData.snapshots.clients.interested}</dd></div>
-     <div><dt>غير مهتم</dt><dd>{stateData.snapshots.clients.notInterested}</dd></div>
-    </dl>
-    <div className="report-charts-grid">
-     {stateData.snapshots.clients.byStage.length>0&&<div className="report-chart panel"><h4>توزيع العملاء حسب المرحلة</h4><ResponsiveContainer width="100%" height={280}><BarChart data={stateData.snapshots.clients.byStage.map(s=>({name:s.label,value:s.count}))}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="name" tick={{fontSize:11}} angle={-35} textAnchor="end" height={70}/><YAxis allowDecimals={false}/><Tooltip/><Bar dataKey="value" name="العملاء" radius={[6,6,0,0]}>{stateData.snapshots.clients.byStage.map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}</Bar></BarChart></ResponsiveContainer></div>}
-     {stateData.snapshots.clients.byStage.length>1&&stateData.snapshots.clients.byStage.length<=8&&<div className="report-chart panel"><h4>نسب المراحل</h4><ResponsiveContainer width="100%" height={280}><PieChart><Pie data={stateData.snapshots.clients.byStage.map(s=>({name:s.label,value:s.count}))} dataKey="value" nameKey="name" innerRadius={50} outerRadius={90} label>{stateData.snapshots.clients.byStage.map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}</Pie><Tooltip/><Legend/></PieChart></ResponsiveContainer></div>}
+
+  {stateData?.snapshots&&selectedModule==='overview'&&(
+   <div className="report-overview" aria-label="لقطات النظام">
+    <div className="report-kpi-row">
+     <KpiCard value={clientsOk?clientsOk.total:'—'} label="إجمالي العملاء" icon={<Users size={18}/>} tone="purple"/>
+     <KpiCard value={clientsOk?clientsOk.interested:'—'} label="مهتم / وقع عقد أو أفرغ" icon={<CheckCircle2 size={18}/>} tone="muted"/>
+     <KpiCard value={followupsSummary?.status==='ok'&&followupsSummary.total!==null?followupsSummary.total:'—'} label="التذكرات / المتابعات" icon={<Bell size={18}/>} tone="warn"/>
+     <KpiCard value={propsOk?propsOk.total:'—'} label="عقارات الكتالوج" icon={<TrendingUp size={18}/>} tone="danger"/>
     </div>
-    <details className="report-group" open><summary>كل مرحلة — عدد العملاء ({stateData.snapshots.clients.byStage.length})</summary><ul>{stateData.snapshots.clients.byStage.map(s=><li key={s.stage}>{s.label} <strong>{s.count}</strong></li>)}</ul></details>
-    </>}
-   {stateData.snapshots.properties.status==='unavailable'?<p role="alert" className="error">العقارات: {stateData.snapshots.properties.error}</p>:
-    <><dl className="report-metrics">
-     <div><dt>عدد العقارات الموجودة</dt><dd>{stateData.snapshots.properties.total}</dd></div>
-     <div><dt>عدد الأحياء في الكتالوج</dt><dd>{stateData.snapshots.properties.byNeighborhood.length}</dd></div>
-    </dl>
-    <div className="report-charts-grid">
-     {stateData.snapshots.properties.byNeighborhood.length>0&&<div className="report-chart panel"><h4>توزيع العقارات حسب الحي</h4><ResponsiveContainer width="100%" height={280}><BarChart data={stateData.snapshots.properties.byNeighborhood.slice(0,12).map(n=>({name:n.label,value:n.count}))}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="name" tick={{fontSize:11}} angle={-35} textAnchor="end" height={70}/><YAxis allowDecimals={false}/><Tooltip/><Bar dataKey="value" name="العقارات" radius={[6,6,0,0]}>{stateData.snapshots.properties.byNeighborhood.slice(0,12).map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}</Bar></BarChart></ResponsiveContainer></div>}
+
+    <div className="report-charts-grid report-hbar-grid">
+     {stageBars.length>0&&<HorizontalBars title="توزيع المراحل" items={stageBars}/>}
+     {sourceBars.length>0&&<HorizontalBars title="توزيع العقارات حسب الحي" items={sourceBars}/>}
     </div>
-    <details className="report-group" open><summary>كل حي — عدد العقارات ({stateData.snapshots.properties.byNeighborhood.length})</summary><ul>{stateData.snapshots.properties.byNeighborhood.map(n=><li key={n.label}>{n.label} <strong>{n.count}</strong></li>)}</ul></details>
-    </>}
-  </div>}
-  {stateData?.summaries&&<div className="report-overview panel"><h3>تغطية النظام ضمن الصلاحية</h3><div className="report-table-scroll" tabIndex={0} aria-label="ملخص الوحدات"><table><thead><tr><th>التقرير</th><th>السجلات</th><th>أساس القراءة وحدودها</th><th>التفاصيل</th></tr></thead><tbody>{stateData.summaries.map(s=><tr key={s.id}><th scope="row">{s.label}</th><td>{s.status==='ok'?s.total:'غير متاح'}</td><td><strong>{s.kind}</strong><p>{s.status==='ok'?s.note:s.error}</p>{s.metrics?.slice(0,2).map((m,i)=><p key={i}>{m.label}: {m.value??'غير مسجل'}{m.missing?` · ${m.missing} غير مسجل`:''}</p>)}</td><td><CrmLink href={href({module:s.id,page:'1'})}>عرض التفاصيل</CrmLink></td></tr>)}</tbody></table></div>
+
+    <div className="report-snapshot-note panel">
+     <h3>لقطات النظام — العملاء والعقارات</h3>
+     <p className="subtle">{stateData.snapshots.note}</p>
+     {stateData.snapshots.clients.status==='unavailable'?<p role="alert" className="error">العملاء: {stateData.snapshots.clients.error}</p>:
+      <dl className="report-metrics">
+       <div><dt>عدد العملاء في النظام</dt><dd>{stateData.snapshots.clients.total}</dd></div>
+       <div><dt>المهتمين</dt><dd>{stateData.snapshots.clients.interested}</dd></div>
+       <div><dt>غير مهتم</dt><dd>{stateData.snapshots.clients.notInterested}</dd></div>
+      </dl>}
+     {stateData.snapshots.properties.status==='unavailable'?<p role="alert" className="error">العقارات: {stateData.snapshots.properties.error}</p>:
+      <dl className="report-metrics">
+       <div><dt>عدد العقارات الموجودة</dt><dd>{stateData.snapshots.properties.total}</dd></div>
+       <div><dt>عدد الأحياء في الكتالوج</dt><dd>{stateData.snapshots.properties.byNeighborhood.length}</dd></div>
+      </dl>}
+    </div>
+
+    {stateData.employees.length>0&&(
+     <div className="report-team-card panel">
+      <div className="report-team-head">
+       <div>
+        <h3>أداء الفريق ضمن النطاق</h3>
+        <p className="subtle">عدد الموظفين: {stateData.employees.length}</p>
+       </div>
+       <span className="report-total-badge">إجمالي العملاء: {clientsOk?clientsOk.total:'—'}</span>
+      </div>
+      <div className="report-table-scroll" tabIndex={0} aria-label="أداء الفريق">
+       <table className="report-team-table">
+        <thead>
+         <tr>
+          <th>الموظف</th>
+          <th>المعرّف</th>
+          <th>الإجمالي</th>
+         </tr>
+        </thead>
+        <tbody>
+         <tr className="report-team-total-row">
+          <th scope="row">إجمالي الفريق</th>
+          <td>—</td>
+          <td><strong>{clientsOk?clientsOk.total:'—'}</strong></td>
+         </tr>
+         {stateData.employees.slice(0,40).map(emp=>(
+          <tr key={emp.id}>
+           <th scope="row">{emp.name}</th>
+           <td><bdi>{emp.id}</bdi></td>
+           <td>
+             <CrmLink href={href({module:'leads',reportEmployee:emp.id,page:'1'})}>عرض</CrmLink>
+           </td>
+          </tr>
+         ))}
+        </tbody>
+       </table>
+      </div>
+     </div>
+    )}
+   </div>
+  )}
+
+  {stateData?.summaries&&selectedModule==='overview'&&<div className="report-overview panel"><h3>تغطية النظام ضمن الصلاحية</h3><div className="report-table-scroll" tabIndex={0} aria-label="ملخص الوحدات"><table><thead><tr><th>التقرير</th><th>السجلات</th><th>أساس القراءة وحدودها</th><th>التفاصيل</th></tr></thead><tbody>{stateData.summaries.map(s=><tr key={s.id}><th scope="row">{s.label}</th><td>{s.status==='ok'?s.total:'غير متاح'}</td><td><strong>{s.kind}</strong><p>{s.status==='ok'?s.note:s.error}</p>{s.metrics?.slice(0,2).map((m,i)=><p key={i}>{m.label}: {m.value??'غير مسجل'}{m.missing?` · ${m.missing} غير مسجل`:''}</p>)}</td><td><CrmLink href={href({module:s.id,page:'1'})}>عرض التفاصيل</CrmLink></td></tr>)}</tbody></table></div>
    <div className="report-charts-grid">
     <div className="report-chart panel"><h4>توزيع السجلات حسب الوحدة</h4><ResponsiveContainer width="100%" height={280}><BarChart data={stateData.summaries.filter(s=>s.status==='ok'&&s.total!==null).map(s=>({name:s.label,value:s.total}))}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="name" tick={{fontSize:11}} angle={-35} textAnchor="end" height={70}/><YAxis allowDecimals={false}/><Tooltip/><Bar dataKey="value" name="السجلات" radius={[6,6,0,0]}>{stateData.summaries.filter(s=>s.status==='ok').map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}</Bar></BarChart></ResponsiveContainer></div>
    </div>
   </div>}
+
   {report&&<>
-   <div className="report-heading"><div><h3>{report.label}</h3><p>{report.kind}</p></div><div className="report-actions">{stateData?.canExport?<button disabled={exporting} onClick={()=>void download()}>{exporting?'جارٍ التصدير…':'تصدير CSV لكل النتائج'}</button>:<span>التصدير للإدارة فقط</span>}<button onClick={()=>window.print()}>طباعة الصفحة الحالية</button></div></div>
+   <div className="report-heading"><div><h3>{report.label}</h3><p>{report.kind}</p></div><div className="report-actions">{stateData?.canExport?<button className="report-primary-btn" disabled={exporting} onClick={()=>void download()}>{exporting?'جارٍ التصدير…':'تصدير CSV لكل النتائج'}</button>:<span>التصدير للإدارة فقط</span>}<button className="crm-button" onClick={()=>window.print()}>طباعة الصفحة الحالية</button></div></div>
    <p className="report-caveat">{report.note}</p><p>عدد السجلات المطابقة: <strong>{report.total}</strong> · الصفحة {page} من {pages} · قراءة <time dateTime={report.generatedAt} dir="ltr">{report.generatedAt}</time> · «—» تعني غير مسجل، لا صفراً. الحد الآمن 10000 سجل؛ تجاوز الحد يرفض القراءة والتصدير بدلاً من مجموع جزئي.</p>
    {exportError&&<p role="alert" className="error">{exportError}</p>}
    {report.metrics.length>0&&<dl className="report-metrics">{report.metrics.map((m,i)=><div key={i}><dt>{m.label}</dt><dd>{m.value??'غير مسجل'}{m.missing!==undefined&&m.missing>0&&<small> · غير مسجل في {m.missing} سجل</small>}</dd></div>)}</dl>}
+
+   {(report.groups.stage?.length||report.groups.source?.length)?(
+    <div className="report-charts-grid report-hbar-grid">
+     {report.groups.stage?.length>0&&<HorizontalBars title="توزيع المراحل" items={report.groups.stage.map(g=>({label:g.label,count:g.count}))}/>}
+     {report.groups.source?.length>0&&<HorizontalBars title="مصادر العملاء" items={report.groups.source.map(g=>({label:g.label,count:g.count}))}/>}
+    </div>
+   ):null}
+
+   {salesGroups.length>0&&(
+    <div className="report-team-card panel">
+     <div className="report-team-head">
+      <div>
+       <h3>أداء فريق المبيعات</h3>
+       <p className="subtle">عدد الصفوف: {salesGroups.length}</p>
+      </div>
+      <span className="report-total-badge">إجمالي العملاء: {report.total}</span>
+     </div>
+     <div className="report-table-scroll" tabIndex={0}>
+      <table className="report-team-table">
+       <thead><tr><th>الموظف</th><th>الإجمالي</th></tr></thead>
+       <tbody>
+        <tr className="report-team-total-row"><th scope="row">إجمالي الفريق</th><td><strong>{report.total}</strong></td></tr>
+        {salesGroups.map(g=><tr key={g.label}><th scope="row">{g.label}</th><td><strong>{g.count}</strong></td></tr>)}
+       </tbody>
+      </table>
+     </div>
+    </div>
+   )}
+
    {(metricsChart.length>0||groupsCharts||report.trend)&&<div className="report-charts-grid">
-    {report.trend&&report.trend.points.length>1&&<div className="report-chart panel report-chart-wide"><h4>الخط الزمني — {report.trend.basis}</h4><ResponsiveContainer width="100%" height={260}><AreaChart data={report.trend.points}><defs><linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#c9a24b" stopOpacity={0.55}/><stop offset="100%" stopColor="#c9a24b" stopOpacity={0.05}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="day" tick={{fontSize:10}} minTickGap={18}/><YAxis allowDecimals={false}/><Tooltip/><Area type="monotone" dataKey="count" name="السجلات" stroke="#c9a24b" strokeWidth={2} fill="url(#trendFill)"/></AreaChart></ResponsiveContainer><p className="subtle">الأيام بلا سجلات تظهر صفراً وليست بيانات ناقصة.</p></div>}
+    {report.trend&&report.trend.points.length>1&&<div className="report-chart panel report-chart-wide"><h4>الخط الزمني — {report.trend.basis}</h4><ResponsiveContainer width="100%" height={260}><AreaChart data={report.trend.points}><defs><linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3F1A44" stopOpacity={0.55}/><stop offset="100%" stopColor="#3F1A44" stopOpacity={0.05}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="day" tick={{fontSize:10}} minTickGap={18}/><YAxis allowDecimals={false}/><Tooltip/><Area type="monotone" dataKey="count" name="السجلات" stroke="#3F1A44" strokeWidth={2} fill="url(#trendFill)"/></AreaChart></ResponsiveContainer><p className="subtle">الأيام بلا سجلات تظهر صفراً وليست بيانات ناقصة.</p></div>}
     {metricsChart.length>0&&<div className="report-chart panel"><h4>المؤشرات الرقمية</h4><ResponsiveContainer width="100%" height={280}><BarChart data={metricsChart} layout="vertical"><CartesianGrid strokeDasharray="3 3"/><XAxis type="number"/><YAxis dataKey="name" type="category" width={160} tick={{fontSize:12}}/><Tooltip/><Bar dataKey="value" name="القيمة" radius={[0,6,6,0]}>{metricsChart.map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}</Bar></BarChart></ResponsiveContainer></div>}
-    {groupsCharts?.map(gc=>(
+    {groupsCharts?.filter(gc=>!['stage','source','sales'].includes(gc.gkey)).map(gc=>(
       gc.data.length>1&&gc.data.length<=8?
        <div className="report-chart panel" key={gc.gkey}><h4>توزيع {gc.title}</h4><ResponsiveContainer width="100%" height={280}><PieChart><Pie data={gc.data} dataKey="value" nameKey="name" innerRadius={50} outerRadius={90} label>{gc.data.map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}</Pie><Tooltip/><Legend/></PieChart></ResponsiveContainer></div>
       :

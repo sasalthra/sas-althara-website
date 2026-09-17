@@ -434,7 +434,7 @@ export default function CRM({
                                 </TableCell>
 
                                 <TableCell className="px-2">
-                                  <span className="inline-flex max-w-full truncate rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                                  <span className="inline-flex max-w-full truncate rounded-full border border-[#e8e3e9] bg-[#f3eaf4] px-2.5 py-1 text-xs font-medium text-[#3F1A44]">
                                     {stages[
                                       lead
                                         .stage

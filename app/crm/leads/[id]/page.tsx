@@ -591,17 +591,17 @@ export default function LeadDetailsPage() {
             <div className="min-w-0">
               <a
                 href="/crm"
-                className="mb-4 inline-flex text-sm text-muted-foreground hover:text-[#53115c]"
+                className="mb-4 inline-flex text-sm text-muted-foreground hover:text-[#3F1A44]"
               >
                 ← العودة إلى سجل العملاء
               </a>
 
               <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-bold text-[#43104d]">
+                <h1 className="text-3xl font-bold text-[#3F1A44]">
                   {lead.name}
                 </h1>
 
-                <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                <span className="inline-flex rounded-full border border-[#e8e3e9] bg-[#f3eaf4] text-[#3F1A44]">
                   {stages[
                     lead.stage
                   ] || lead.stage}
@@ -630,7 +630,7 @@ export default function LeadDetailsPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {role === 'admin' && <a href={`/crm?tab=transactions&lead=${encodeURIComponent(lead.id)}`} className="rounded-xl border border-[#53115c]/20 px-4 py-2.5 text-sm font-semibold text-[#53115c]">معاملات العميل والمالية</a>}
+              {role === 'admin' && <a href={`/crm?tab=transactions&lead=${encodeURIComponent(lead.id)}`} className="rounded-xl border border-[#3F1A44]/20 px-4 py-2.5 text-sm font-semibold text-[#3F1A44]">معاملات العميل والمالية</a>}
               <button
                 type="button"
                 onClick={() => {
@@ -643,7 +643,7 @@ export default function LeadDetailsPage() {
                     'followup'
                   );
                 }}
-                className="rounded-xl border border-[#53115c]/20 bg-[#53115c]/5 px-4 py-2.5 text-sm font-semibold text-[#53115c] transition hover:bg-[#53115c]/10"
+                className="rounded-xl border border-[#3F1A44]/20 bg-[#3F1A44]/5 px-4 py-2.5 text-sm font-semibold text-[#3F1A44] transition hover:bg-[#3F1A44]/10"
               >
                 + إضافة متابعة
               </button>
@@ -673,7 +673,7 @@ export default function LeadDetailsPage() {
                     'edit'
                   );
                 }}
-                className="rounded-xl bg-[#53115c] px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
+                className="rounded-xl bg-[#3F1A44] px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
               >
                 تحديث بيانات العميل
               </button>
@@ -738,7 +738,7 @@ export default function LeadDetailsPage() {
                 {property && (
                   <a
                     href={`/properties/${property.id}`}
-                    className="text-sm font-semibold text-[#53115c] hover:underline"
+                    className="text-sm font-semibold text-[#3F1A44] hover:underline"
                   >
                     فتح العقار ↗
                   </a>
@@ -863,7 +863,7 @@ export default function LeadDetailsPage() {
                           <div className="absolute right-[7px] top-5 h-[calc(100%-8px)] w-px bg-slate-200" />
                         )}
 
-                        <div className="relative z-10 mt-1.5 h-4 w-4 shrink-0 rounded-full border-4 border-white bg-[#53115c] shadow-sm" />
+                        <div className="relative z-10 mt-1.5 h-4 w-4 shrink-0 rounded-full border-4 border-white bg-[#3F1A44] shadow-sm" />
 
                         <div className="min-w-0 flex-1 rounded-2xl bg-slate-50 p-4">
                           <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
@@ -1025,7 +1025,7 @@ export default function LeadDetailsPage() {
                       event.target.value
                     )
                 }
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#53115c]"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#3F1A44]"
               />
             </div>
 
@@ -1046,7 +1046,7 @@ export default function LeadDetailsPage() {
                     )
                 }
                 placeholder="مثال: التواصل مع العميل بعد موافقة البنك..."
-                className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#53115c]"
+                className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#3F1A44]"
               />
             </div>
 
@@ -1070,7 +1070,7 @@ export default function LeadDetailsPage() {
               <button
                 type="submit"
                 disabled={saving}
-                className="rounded-xl bg-[#53115c] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                className="rounded-xl bg-[#3F1A44] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
               >
                 {saving
                   ? 'جارٍ الحفظ...'
@@ -1125,7 +1125,7 @@ export default function LeadDetailsPage() {
                       event.target.value
                     )
                 }
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none focus:border-[#53115c]"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none focus:border-[#3F1A44]"
               >
                 {Object.entries(
                   stages
@@ -1160,7 +1160,7 @@ export default function LeadDetailsPage() {
                     )
                 }
                 placeholder="مثال: تم التواصل مع العميل وتحديد موعد للمعاينة..."
-                className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#53115c]"
+                className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#3F1A44]"
               />
             </div>
 
@@ -1184,7 +1184,7 @@ export default function LeadDetailsPage() {
               <button
                 type="submit"
                 disabled={saving}
-                className="rounded-xl bg-[#53115c] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                className="rounded-xl bg-[#3F1A44] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
               >
                 {saving
                   ? 'جارٍ الحفظ...'
