@@ -150,6 +150,9 @@ export default function CRM({
   const [q, setQ] =
     useState('');
 
+  const [leadView, setLeadView] =
+    useState<'all' | 'followups'>('all');
+
   const [open, setOpen] =
     useState(false);
 
@@ -204,8 +207,19 @@ export default function CRM({
       'en-CA'
     );
 
+  const needsFollowUp = (lead: Lead) =>
+    Boolean(
+      lead.follow_up &&
+      lead.follow_up <= today &&
+      !['won', 'closed'].includes(lead.stage)
+    );
+
   const shown =
     leads.filter(lead => {
+      if (leadView === 'followups' && !needsFollowUp(lead)) {
+        return false;
+      }
+
       const property =
         data.find(
           property =>
@@ -229,17 +243,7 @@ export default function CRM({
     });
 
   const followUps =
-    leads.filter(
-      lead =>
-        lead.follow_up &&
-        lead.follow_up <= today &&
-        ![
-          'won',
-          'closed',
-        ].includes(
-          lead.stage
-        )
-    ).length;
+    leads.filter(needsFollowUp).length;
 
   return (
     <>
@@ -263,7 +267,7 @@ export default function CRM({
         {tab==='leads'&&<button className="primary" onClick={()=>{setEdit(undefined);setOpen(true);}}>+ إضافة عميل</button>}
       </header>
       <main className="crm-main" id="crm-main">
-        {tab==='leads'&&<div className="crm-summary"><span>طلبات العملاء <strong>{loading?'—':leads.length}</strong></span><span>تحتاج متابعة <strong>{loading?'—':followUps}</strong></span><span>العقارات <strong>{data.length}</strong></span></div>}
+        {tab==='leads'&&<div className="crm-summary"><button type="button" className="crm-summary-btn" data-active={leadView==='all'} onClick={()=>setLeadView('all')}>طلبات العملاء <strong>{loading?'—':leads.length}</strong></button><button type="button" className="crm-summary-btn" data-active={leadView==='followups'} onClick={()=>setLeadView('followups')}>تحتاج متابعة <strong>{loading?'—':followUps}</strong></button><span>العقارات <strong>{data.length}</strong></span></div>}
         <Tabs value={tab} dir="rtl">
           <TabsContent value="reports"><ReportsPanel role={role}/></TabsContent>
           {role === 'admin' && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} leads={leads} initialLeadId={query.get('lead')||''}/></TabsContent>}
@@ -276,11 +280,13 @@ export default function CRM({
               <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <h2 className="mb-1">
-                    سجل العملاء
+                    {leadView === 'followups' ? 'المتابعات المستحقة' : 'سجل العملاء'}
                   </h2>
 
                   <p className="subtle">
-                    اضغط على اسم العميل لعرض الملف الكامل.
+                    {leadView === 'followups'
+                      ? 'العملاء الذين موعد متابعتهم اليوم أو قبله، باستثناء المكسب والمغلق.'
+                      : 'اضغط على اسم العميل لعرض الملف الكامل.'}
                   </p>
                 </div>
 
@@ -537,11 +543,15 @@ export default function CRM({
                     <h3>
                       {q
                         ? 'لا توجد نتائج'
-                        : 'لا توجد طلبات عملاء بعد'}
+                        : leadView === 'followups'
+                          ? 'لا توجد متابعات مستحقة'
+                          : 'لا توجد طلبات عملاء بعد'}
                     </h3>
 
                     <p>
-                      أضف عميلًا أو سجّل طلب اهتمام من صفحة العقار.
+                      {leadView === 'followups'
+                        ? 'يظهر هنا من له تاريخ متابعة في ملف العميل بعد الاستيراد أو التعديل.'
+                        : 'أضف عميلًا أو سجّل طلب اهتمام من صفحة العقار.'}
                     </p>
                   </div>
                 )

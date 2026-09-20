@@ -11,7 +11,7 @@ const out=mkdtempSync(join(tmpdir(),'sas-storage-')),sql=new DatabaseSync(':memo
 const employee=crypto.randomUUID(),admin=crypto.randomUUID();
 sql.exec(`
 CREATE TABLE leads(id TEXT PRIMARY KEY,owner TEXT,created_by TEXT,assigned_to TEXT,field_assigned_to TEXT,name TEXT,phone TEXT,property_id TEXT,property_other TEXT,source TEXT,stage TEXT,notes TEXT,follow_up TEXT,created_at TEXT,updated_at TEXT);
-CREATE TABLE crm_users(id TEXT PRIMARY KEY,name TEXT,active INTEGER);
+CREATE TABLE crm_users(id TEXT PRIMARY KEY,name TEXT,active INTEGER,role TEXT);
 CREATE TABLE crm_import_lock(id TEXT PRIMARY KEY); INSERT INTO crm_import_lock VALUES ('leads');
 CREATE TABLE crm_import_rows(id TEXT PRIMARY KEY,lead_id TEXT,source TEXT,raw_data TEXT,created_at TEXT);
 CREATE TABLE lead_activity(id TEXT PRIMARY KEY,lead_id TEXT,user_id TEXT,action TEXT,details TEXT);
@@ -22,8 +22,8 @@ CREATE TABLE hr_attendance(user_id TEXT,work_day TEXT,check_in TEXT,check_out TE
 CREATE TABLE hr_requests(id TEXT PRIMARY KEY,user_id TEXT,type TEXT,details TEXT,status TEXT,created_at TEXT,start_date TEXT,end_date TEXT,review_note TEXT,reviewed_by TEXT,reviewed_at TEXT);
 CREATE TABLE hr_announcements(id TEXT PRIMARY KEY,title TEXT,details TEXT,created_at TEXT);
 `);
-sql.prepare('INSERT INTO crm_users VALUES (?,?,1)').run(employee,'Synthetic employee');
-sql.prepare('INSERT INTO crm_users VALUES (?,?,1)').run(admin,'Synthetic admin');
+sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?)').run(employee,'Synthetic employee','sales');
+sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?)').run(admin,'Synthetic admin','admin');
 let failAudit=false;
 globalThis.storageUser={userId:admin,role:'admin',name:'Synthetic admin'};
 const driver={async execute(query,args){
@@ -52,7 +52,20 @@ try{
  assert.deepEqual(JSON.parse(sql.prepare('SELECT raw_data FROM crm_import_rows').get().raw_data),rows[0]);
  failAudit=true;await assert.rejects(()=>runImport([['Rollback','0500000001','Other']],mapping,admin,true));failAudit=false;
  assert.equal(sql.prepare('SELECT COUNT(*) n FROM leads').get().n,1,'all import inserts rollback if audit fails');
+ const salesA=crypto.randomUUID(),salesB=crypto.randomUUID();
+ sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?)').run(salesA,'Sales A','sales');
+ sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?)').run(salesB,'Sales B','sales');
+ assert.equal((await runImport([['No property column','0500000014']],{name:0,phone:1},admin,true)).inserted,1);
+ assert.equal(sql.prepare('SELECT property_other,stage,assigned_to FROM leads WHERE phone=?').get('+966500000014').property_other,'غير محدد');
+ const distributed=await runImport([['Assign one','0500000010','Other'],['Assign two','0500000011','Other'],['Assign three','0500000012','Other']],mapping,admin,true,'excel',{mode:'distribute',userIds:[salesA,salesB]});
+ assert.equal(distributed.inserted,3);
+ const assigned=Object.fromEntries(sql.prepare('SELECT phone,assigned_to FROM leads WHERE phone IN (?,?,?)').all('+966500000010','+966500000011','+966500000012').map(r=>[r.phone,r.assigned_to]));
+ assert.equal(assigned['+966500000010'],salesA);
+ assert.equal(assigned['+966500000011'],salesB);
+ assert.equal(assigned['+966500000012'],salesA);
+ await assert.rejects(()=>runImport([['Bad assignee','0500000013','Other']],mapping,admin,true,'excel',{mode:'one',userIds:[crypto.randomUUID()]}));
  console.log('PASS SQL import preview/no-write, normalized duplicate replay, Other/raw-source persistence and atomic rollback');
+ console.log('PASS SQL import without property column, round-robin sales assignment, reject unknown assignee');
  const finance=await load('app/api/transactions/route.ts','finance'),id=crypto.randomUUID();
  const data={leadId:lead.id,debtPayer:'company',debtSettlement:'100.25',brokerage:'20.10'};
  assert.equal((await finance.POST(request({id,version:0,confirmed:true,data}))).status,200);
