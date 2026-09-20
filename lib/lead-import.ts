@@ -40,9 +40,34 @@ export const importSchema=z.object({
 
 export const DEFAULT_PROPERTY_OTHER='غير محدد';
 const PLACEHOLDER=/^(?:[-–—_=*.]+|null|none|n\/?a|na|nil|\(empty\)|empty|لا يوجد|بدون|غير محدد)$/i;
-const headerMatchers: {key:keyof typeof importFields; test:(folded:string)=>boolean}[] = [
-  {key:'name', test:h=>/^(اسم\s*(العميل|الزبون)|الاسم|العميل|الزبون|name|client|full\s*name)$/.test(h)},
-  {key:'phone', test:h=>/جوال|هاتف|whatsapp|^phone$|^mobile$|^tel$/.test(h)},
+/** Strip tatweel, bidi marks, harakat; unify alef/ta marbuta so Excel headers like «رقم الجــــوال» match. */
+export function foldHeader(value:string){
+ return value
+  .normalize('NFKC')
+  .replace(/^\uFEFF/, '')
+  .replace(/[\u0640\u200B-\u200F\u202A-\u202E\u2060-\u206F]/g,'')
+  .replace(/[\u0610-\u061A\u064B-\u065F\u0670]/g,'')
+  .replace(/[أإآٱ]/g,'ا')
+  .replace(/ة/g,'ه')
+  .replace(/ى/g,'ي')
+  .replace(/[\s\u00a0\u202f]+/g,' ')
+  .replace(/[_./\\,;|:]+/g,' ')
+  .replace(/\s+/g,' ')
+  .trim()
+  .toLowerCase();
+}
+
+const requiredHeaderMatchers: {key:'name'|'phone'; test:(folded:string)=>boolean}[] = [
+  {key:'name', test:h=>
+    (/اسم/.test(h)&&/(عميل|زبون)/.test(h)) ||
+    /^(الاسم|اسم|العميل|الزبون|name|client|customer|full\s*name)$/.test(h)
+  },
+  {key:'phone', test:h=>
+    /جوال|هاتف|موبايل|تلفون|whatsapp/.test(h) ||
+    /^(phone|mobile|tel|cell)$/.test(h)
+  },
+];
+const optionalHeaderMatchers: {key:keyof typeof importFields; test:(folded:string)=>boolean}[] = [
   {key:'stage', test:h=>/^(حاله(\s*العميل)?|المرحله|الحاله|stage|status)$/.test(h)},
   {key:'followUp', test:h=>/متابعه|follow\s*up|^followup$/.test(h)},
   {key:'propertyId', test:h=>/^(معرف|رقم)\s*العقار$|^property\s*id$|^listing\s*id$/.test(h)},
@@ -51,36 +76,25 @@ const headerMatchers: {key:keyof typeof importFields; test:(folded:string)=>bool
   {key:'notes', test:h=>/^(الملاحظات|ملاحظات|ملاحظة|notes|note|comment)$/.test(h)},
 ];
 
-/** Strip tatweel, bidi marks, harakat; unify alef/ta marbuta so Excel headers like «رقم الجــــوال» match. */
-export function foldHeader(value:string){
- return value
-  .normalize('NFKC')
-  .replace(/[\u0640\u200B-\u200F\u202A-\u202E\u2060-\u206F]/g,'')
-  .replace(/[\u0610-\u061A\u064B-\u065F\u0670]/g,'')
-  .replace(/[أإآٱ]/g,'ا')
-  .replace(/ة/g,'ه')
-  .replace(/ى/g,'ي')
-  .replace(/[_./\\,;|:]+/g,' ')
-  .replace(/\s+/g,' ')
-  .trim()
-  .toLowerCase();
-}
-
 export function suggestMapping(headers: string[]): Mapping {
   const mapping: Mapping = {};
   const used = new Set<number>();
-  headers.forEach((header, index) => {
-    const folded = foldHeader(header);
-    if (!folded) return;
-    for (const {key, test} of headerMatchers) {
-      if (mapping[key] !== undefined || used.has(index)) continue;
-      if (test(folded)) {
-        mapping[key] = index;
-        used.add(index);
-        break;
+  function apply(matchers:{key:keyof typeof importFields; test:(folded:string)=>boolean}[]){
+    headers.forEach((header, index) => {
+      const folded = foldHeader(header);
+      if (!folded || used.has(index)) return;
+      for (const {key, test} of matchers) {
+        if (mapping[key] !== undefined) continue;
+        if (test(folded)) {
+          mapping[key] = index;
+          used.add(index);
+          break;
+        }
       }
-    }
-  });
+    });
+  }
+  apply(requiredHeaderMatchers);
+  apply(optionalHeaderMatchers);
   return mapping;
 }
 
@@ -90,6 +104,10 @@ function easternDigits(value:string){
 
 export function normalizePhone(value:string){
  let v=easternDigits(value.normalize('NFKC').replace(/[\u0640\u200B-\u200F\u202A-\u202E\u2060-\u206F]/g,'')).trim();
+ if(/^\d+\.?\d*e[+-]?\d+$/i.test(v)){
+  const n=Number(v);
+  if(Number.isFinite(n))v=String(Math.round(n));
+ }
  const digits=v.replace(/[^\d]/g,'');
  let n=digits;
  if(n.startsWith('00'))n=n.slice(2);
@@ -164,10 +182,11 @@ function stubLead(mapped:Record<string,string>,phone:string|null,property:{prope
 
 export function previewImport(rows:string[][],mapping:Mapping,existingPhones:string[]){
  const parsed=mappingSchema.safeParse(mapping);if(!parsed.success)throw Error('راجع ربط الأعمدة');
- const seen=new Set(existingPhones.map(normalizePhone).filter(Boolean));
+ const seen=new Set(existingPhones.map(normalizePhone).filter(Boolean) as string[]);
  return rows.map((raw,index)=>{
   const mapped:Record<string,string>={};for(const [key,col] of Object.entries(parsed.data))mapped[key]=String(raw[col]??'').trim();
   const warnings:string[]=[];
+  const name=(mapped.name||'').trim().slice(0,100);
   const phone=normalizePhone(mapped.phone||'');
   const property=resolveProperty(mapped);
   const followUpParsed=parseFollowUpDate(mapped.followUp||'');
@@ -181,21 +200,35 @@ export function previewImport(rows:string[][],mapping:Mapping,existingPhones:str
    if(resolved&&(stageKeys as readonly string[]).includes(resolved))stage=resolved as (typeof stageKeys)[number];
    else warnings.push(`مرحلة غير معروفة «${stageCell}»؛ استُخدمت «${stageLabel('new')}» دون إنشاء مرحلة جديدة`);
   }
+  const sourceRaw=(mapped.source||'').trim();
+  const source=(isBlankPropertyText(sourceRaw)?'excel':sourceRaw).slice(0,80)||'excel';
+  const notes=(mapped.notes||'').slice(0,3000);
   const followUp=followUpParsed||'';
-  const display=stubLead(mapped,phone,property,stage,followUp);
+  const display=stubLead({...mapped,name,source,notes},phone,property,stage,followUp);
+  const base={row:index+1,raw,warnings};
+  if(!name)return {...base,status:'invalid' as const,errors:['name'],lead:display};
+  if(!phone)return {...base,status:'invalid' as const,errors:['phone'],lead:display};
   const v=leadSchema.safeParse({
    id:crypto.randomUUID(),
-   name:mapped.name||'',
-   phone:phone||'',
+   name,
+   phone,
    propertyId:property.propertyId,
-   propertyOther:property.propertyOther,
-   source:mapped.source||'excel',
-   notes:mapped.notes||'',
+   propertyOther:property.propertyOther||DEFAULT_PROPERTY_OTHER,
+   source,
+   notes,
    followUp,
    stage,
   });
-  const base={row:index+1,raw,warnings};
-  if(!v.success)return {...base,status:'invalid' as const,errors:v.error.issues.map(i=>String(i.path[0])),lead:display};
+  if(!v.success){
+   const optional=new Set(['propertyOther','propertyId','source','notes','followUp','stage']);
+   const required=v.error.issues.map(i=>String(i.path[0])).filter(field=>!optional.has(field));
+   if(!required.length){
+    const forced={id:crypto.randomUUID(),name,phone,propertyId:'other' as const,propertyOther:DEFAULT_PROPERTY_OTHER,source,notes,followUp,stage};
+    if(seen.has(phone))return {...base,status:'duplicate' as const,errors:['رقم جوال مكرر؛ لم يستبدل السجل الأصلي'],lead:forced};
+    seen.add(phone);return {...base,status:'ready' as const,errors:[],lead:forced};
+   }
+   return {...base,status:'invalid' as const,errors:required,lead:display};
+  }
   if(seen.has(phone))return {...base,status:'duplicate' as const,errors:['رقم جوال مكرر؛ لم يستبدل السجل الأصلي'],lead:v.data};
   seen.add(phone);return {...base,status:'ready' as const,errors:[],lead:v.data};
  });

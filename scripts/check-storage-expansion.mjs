@@ -64,8 +64,14 @@ try{
  assert.equal(assigned['+966500000011'],salesB);
  assert.equal(assigned['+966500000012'],salesA);
  await assert.rejects(()=>runImport([['Bad assignee','0500000013','Other']],mapping,admin,true,'excel',{mode:'one',userIds:[crypto.randomUUID()]}));
+ const assignedOne=await runImport([['One A','0500000020'],['One B','0500000021','-']],{name:0,phone:1},admin,true,'excel',{mode:'one',userIds:[salesA]});
+ assert.equal(assignedOne.inserted,2);
+ assert.equal(sql.prepare('SELECT assigned_to,property_other FROM leads WHERE phone=?').get('+966500000020').assigned_to,salesA);
+ assert.equal(sql.prepare('SELECT assigned_to,property_other FROM leads WHERE phone=?').get('+966500000020').property_other,'غير محدد');
+ assert.equal(sql.prepare('SELECT assigned_to FROM leads WHERE phone=?').get('+966500000021').assigned_to,salesA);
  console.log('PASS SQL import preview/no-write, normalized duplicate replay, Other/raw-source persistence and atomic rollback');
  console.log('PASS SQL import without property column, round-robin sales assignment, reject unknown assignee');
+ console.log('PASS SQL assign-all-to-one sales assigned_to and default propertyOther');
  const finance=await load('app/api/transactions/route.ts','finance'),id=crypto.randomUUID();
  const data={leadId:lead.id,debtPayer:'company',debtSettlement:'100.25',brokerage:'20.10'};
  assert.equal((await finance.POST(request({id,version:0,confirmed:true,data}))).status,200);

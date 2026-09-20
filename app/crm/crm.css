@@ -1645,6 +1645,20 @@ form.report-filters,
   box-shadow: inset 0 0 0 1px #3F1A44;
   background: #f3eaf4;
 }
+.crm-shell .import-assign-option[data-primary="true"] {
+  border-color: #3F1A44;
+}
+.crm-shell .import-assign-option[data-primary="true"][data-active="true"] {
+  background: #3F1A44;
+  color: #fff;
+  box-shadow: none;
+}
+.crm-shell .import-assign-option[data-primary="true"][data-active="true"] small {
+  color: rgba(255,255,255,.85);
+}
+.crm-shell .import-assign-option[data-primary="true"][data-active="true"] .import-assign-icon {
+  color: #fff;
+}
 .crm-shell .import-assign-option strong,
 .crm-shell .import-assign-option small {
   display: block;

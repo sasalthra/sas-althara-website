@@ -20,4 +20,14 @@ try {
  assert.match(html,/hr=requests/,'dated requests destination available; forms exercised in check-crm-browser');
  assert.match(html,/hr=profile/,'employee profile destination available');
  console.log('PASS HR calendar/request/profile destinations rendered; browser suite exercises their forms');
+ await build({stdin:{contents:`import React from 'react';import {renderToStaticMarkup} from 'react-dom/server';import ImportPanel from './app/crm/import-panel';export const html=renderToStaticMarkup(<ImportPanel onSaved={()=>{}}/>);`,resolveDir:process.cwd(),loader:'tsx'},outfile:join(out,'import-ui.cjs'),bundle:true,platform:'node',format:'cjs'});
+ const {html:importHtml}=createRequire(import.meta.url)(join(out,'import-ui.cjs'));
+ assert.match(importHtml,/الاسم والجوال فقط مطلوبان/,'import copy states only name and phone are required');
+ assert.match(importHtml,/data-primary="true"[^>]*data-active="true"|data-active="true"[^>]*data-primary="true"/,'assign-all-to-one is selected by default');
+ assert.match(importHtml,/تعيين الكل لمندوب واحد/,'assign-all-to-one control is present');
+ const oneIndex=importHtml.indexOf('تعيين الكل لمندوب واحد');
+ const distIndex=importHtml.indexOf('توزيع بالتساوي على عدة مناديب');
+ const noneIndex=importHtml.indexOf('<strong>بدون تعيين</strong>');
+ assert.ok(oneIndex>=0&&oneIndex<distIndex&&distIndex<noneIndex,'assign-one is listed before distribute and unassigned');
+ console.log('PASS import panel defaults to assign-all-to-one as the primary path');
 } finally {rmSync(out,{recursive:true,force:true});}
