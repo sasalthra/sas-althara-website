@@ -4,8 +4,8 @@ assert.match(readFileSync('app/crm/navigation.tsx','utf8'),/id: ["']reports["']/
 assert.match(readFileSync('app/crm/workspace.tsx','utf8'),/ReportsPanel/,'Workspace must render actual reports component');
 assert.match(readFileSync('app/crm/reports-panel.tsx','utf8'),/\/api\/reports/,'Reports must use server-authorized API');
 assert.match(readFileSync('app/crm/reports-panel.tsx','utf8'),/\/properties\//,'Property report must expose catalog deep links');
-assert.match(readFileSync('app/crm/reports-panel.tsx','utf8'),/لقطات النظام/,'Overview must render system snapshot section');
-assert.match(readFileSync('app/crm/reports-panel.tsx','utf8'),/عدد العملاء في النظام/,'Client system total must be labeled');
-assert.match(readFileSync('app/crm/reports-panel.tsx','utf8'),/عدد العقارات الموجودة/,'Property catalog total must be labeled');
+assert.match(readFileSync('app/crm/reports-panel.tsx','utf8'),/اللقطات الحالية/,'Overview must render system snapshot section');
+assert.match(readFileSync('app/crm/reports-panel.tsx','utf8'),/عدد العملاء/,'Client system total must be labeled');
+assert.match(readFileSync('app/crm/reports-panel.tsx','utf8'),/عقارات الكتالوج/,'Property catalog total must be labeled');
 assert.match(readFileSync('app/api/reports/route.ts','utf8'),/readReportSnapshots/,'Overview API must attach snapshots');
 console.log('PASS reports navigation wiring, API boundary, deep links and snapshots UI');
