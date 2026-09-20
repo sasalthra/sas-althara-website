@@ -30,7 +30,7 @@ export const stageAliasGroups: Record<string, string[]> = {
   no_answer: ['لم يتم الرد', 'لم يرد', 'لا يرد', 'ما يرد', 'no answer', 'no_answer', 'no-answer'],
   contacted: ['تم التواصل', 'تواصل', 'تم الاتصال', 'اتصال', 'contacted', 'contact'],
   data_received: ['تم استلام بيانات العميل', 'استلام بيانات', 'بيانات مستلمة', 'data received'],
-  calculation_done: ['تم عمل حسبة للعميل', 'تم عمل حسبة', 'حسبة', 'حسابه', 'calculation'],
+  calculation_done: ['تم عمل حسبة للعميل', 'تم عمل حسبة', 'حسبة', 'حسبه', 'حسابه', 'calculation'],
   visit_qualified: ['مؤهل زيارة', 'مؤهل للزيارة', 'visit qualified'],
   property_visited: ['تم زيارة العقار', 'زيارة العقار', 'زار العقار', 'property visited'],
   bank_approval: ['مؤهل بانتظار موافقة البنك', 'موافقة البنك', 'انتظار البنك', 'بانتظار موافقة البنك', 'bank approval'],
@@ -52,7 +52,8 @@ export function stageLabel(stage: string): string {
 export function foldStageText(value: string): string {
   return value
     .normalize('NFKC')
-    .replace(/[ً-ٰٟـ]/g, '')
+    .replace(/[\u0640\u200B-\u200F\u202A-\u202E\u2060-\u206F]/g, '')
+    .replace(/[ً-ٰٟ]/g, '')
     .replace(/[أإآٱ]/g, 'ا')
     .replace(/ة/g, 'ه')
     .replace(/ى/g, 'ي')

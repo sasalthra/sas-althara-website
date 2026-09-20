@@ -73,8 +73,44 @@ try {
   const a='11111111-1111-1111-1111-111111111111',b='22222222-2222-2222-2222-222222222222';
   assert.deepEqual(assigneesForReady(4,{mode:'distribute',userIds:[a,b]}),[a,b,a,b]);
   assert.deepEqual(assigneesForReady(2,{mode:'one',userIds:[a]}),[a,a]);
+  const altharaHeaders=['العمود 1','اسم العميل','رقم الجــــوال','المصدر','الطلب','الملاحظات','حاله العميل ','تاريخ التحديث','التحديث'];
+  const altharaMap=suggestMapping(altharaHeaders);
+  assert.deepEqual(altharaMap,{name:1,phone:2,source:3,propertyOther:4,notes:5,stage:6});
+  assert.equal(altharaMap.followUp,undefined);
+  const altharaRows=[
+    ['45937','ابو محمد علاء خلاشي','551697456','بيوت','فيلا دورين وملحق','بانتظار البيانات','غير مؤهل','45965','ملاحظة'],
+    ['45937','مشعل','594358813','داتا','-','اجل الاتصال','غير مهتم','45946','x'],
+    ['45937','ولاء','582903618','داتا','','ملاحظات','غير مهتم','45939','x'],
+    ['45937','محمد حريص','5568399159','داتا','شقه استثمار','تم التواصل','غير مهتم','45943','x'],
+    ['45937','سامي',' 561619056\u2069','داتا','-','ملاحظات','حسبه','45950','x'],
+    ['45937','خالد سداد','500765399','داتا','-','يحتاج سداد','سداد','45939','x'],
+    ['45937','A','501822472','داتا','-','','غير مهتم','45940','x'],
+  ];
+  const althara=previewImport(altharaRows,altharaMap,[]);
+  assert.deepEqual(althara.map(r=>r.status),['ready','ready','ready','ready','ready','ready','ready']);
+  assert.equal(althara[0].lead.name,'ابو محمد علاء خلاشي');
+  assert.equal(althara[0].lead.phone,'+966551697456');
+  assert.equal(althara[0].lead.propertyOther,'فيلا دورين وملحق');
+  assert.equal(althara[0].lead.stage,'unqualified');
+  assert.equal(althara[1].lead.propertyOther,'غير محدد');
+  assert.equal(althara[1].lead.stage,'not_interested');
+  assert.equal(althara[2].lead.propertyOther,'غير محدد');
+  assert.equal(althara[3].lead.phone,'+966568399159');
+  assert.equal(althara[4].lead.phone,'+966561619056');
+  assert.equal(althara[4].lead.stage,'calculation_done');
+  assert.equal(althara[5].lead.stage,'new');
+  assert.match(althara[5].warnings[0],/مرحلة غير معروفة/);
+  assert.equal(althara[5].lead.propertyOther,'غير محدد');
+  assert.equal(althara[6].status,'ready');
+  assert.equal(althara[6].lead.name,'A');
+  assert.equal(althara[6].lead.phone,'+966501822472');
+  const dashOnly=previewImport([['عميل شرطة','551697456','-']],{name:0,phone:1,propertyOther:2},[]);
+  assert.equal(dashOnly[0].status,'ready');
+  assert.equal(dashOnly[0].lead.propertyOther,'غير محدد');
+  assert.equal(dashOnly[0].lead.name,'عميل شرطة');
   console.log('PASS import mapping, Arabic digits, canonical phone dedup, invalid rows and raw preservation');
   console.log('PASS import name/phone-only visibility, existing stage aliases, unknown stage warning, follow-up parse, round-robin');
+  console.log('PASS Althara workbook headers, tatweel phone, dash/empty الطلب, 9-digit mobiles, حسبه/سداد stages');
   await build({entryPoints:['lib/secrets.server.ts'],outfile:join(output,'secret.cjs'),bundle:true,platform:'node',format:'cjs',plugins:[{name:'server-only-test',setup(b){b.onResolve({filter:/^server-only$/},()=>({path:'guard',namespace:'guard'}));b.onLoad({filter:/.*/,namespace:'guard'},()=>({contents:'',loader:'js'}));}}]});
   const {seal,unseal}=createRequire(import.meta.url)(join(output,'secret.cjs'));
   delete process.env.APP_ENCRYPTION_KEY;assert.throws(()=>seal('test-provider-key','openai'));

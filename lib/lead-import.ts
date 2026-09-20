@@ -7,7 +7,7 @@ export const importFields={
   name:'اسم العميل',
   phone:'الجوال',
   propertyId:'معرف العقار',
-  propertyOther:'وصف العقار الآخر',
+  propertyOther:'وصف العقار / الطلب',
   source:'المصدر',
   notes:'الملاحظات',
   followUp:'تاريخ المتابعة',
@@ -38,26 +38,43 @@ export const importSchema=z.object({
   assignment:assignmentSchema.optional(),
 }).strict();
 
-const DEFAULT_PROPERTY_OTHER='غير محدد';
-const headerMatchers: [keyof typeof importFields, RegExp][] = [
-  ['name', /^(اسم\s*العميل|اسم\s*الزبون|الاسم|العميل|الزبون|name|client|full\s*name)$/i],
-  ['phone', /^(الجوال|الهاتف|رقم\s*الجوال|رقم\s*الهاتف|جوال|هاتف|phone|mobile|whatsapp)$/i],
-  ['stage', /^(حاله\s*العميل|حالة\s*العميل|المرحله|المرحلة|الحاله|الحالة|stage|status)$/i],
-  ['followUp', /^(تاريخ\s*المتابعه|تاريخ\s*المتابعة|موعد\s*المتابعه|موعد\s*المتابعة|المتابعه|المتابعة|follow\s*up|followup)$/i],
-  ['propertyId', /^(معرف\s*العقار|رقم\s*العقار|property\s*id|listing\s*id)$/i],
-  ['propertyOther', /^(وصف\s*العقار\s*الاخر|وصف\s*العقار\s*الآخر|وصف\s*العقار|العقار\s*الاخر|العقار\s*الآخر|العقار|property)$/i],
-  ['source', /^(المصدر|مصدر|source|channel)$/i],
-  ['notes', /^(الملاحظات|ملاحظات|ملاحظة|notes|note|comment)$/i],
+export const DEFAULT_PROPERTY_OTHER='غير محدد';
+const PLACEHOLDER=/^(?:[-–—_=*.]+|null|none|n\/?a|na|nil|\(empty\)|empty|لا يوجد|بدون|غير محدد)$/i;
+const headerMatchers: {key:keyof typeof importFields; test:(folded:string)=>boolean}[] = [
+  {key:'name', test:h=>/^(اسم\s*(العميل|الزبون)|الاسم|العميل|الزبون|name|client|full\s*name)$/.test(h)},
+  {key:'phone', test:h=>/جوال|هاتف|whatsapp|^phone$|^mobile$|^tel$/.test(h)},
+  {key:'stage', test:h=>/^(حاله(\s*العميل)?|المرحله|الحاله|stage|status)$/.test(h)},
+  {key:'followUp', test:h=>/متابعه|follow\s*up|^followup$/.test(h)},
+  {key:'propertyId', test:h=>/^(معرف|رقم)\s*العقار$|^property\s*id$|^listing\s*id$/.test(h)},
+  {key:'propertyOther', test:h=>/^(الطلب|وصف\s*العقار(\s*الاخر)?|العقار(\s*الاخر)?|property)$/.test(h)},
+  {key:'source', test:h=>/^(المصدر|مصدر|source|channel)$/.test(h)},
+  {key:'notes', test:h=>/^(الملاحظات|ملاحظات|ملاحظة|notes|note|comment)$/.test(h)},
 ];
+
+/** Strip tatweel, bidi marks, harakat; unify alef/ta marbuta so Excel headers like «رقم الجــــوال» match. */
+export function foldHeader(value:string){
+ return value
+  .normalize('NFKC')
+  .replace(/[\u0640\u200B-\u200F\u202A-\u202E\u2060-\u206F]/g,'')
+  .replace(/[\u0610-\u061A\u064B-\u065F\u0670]/g,'')
+  .replace(/[أإآٱ]/g,'ا')
+  .replace(/ة/g,'ه')
+  .replace(/ى/g,'ي')
+  .replace(/[_./\\,;|:]+/g,' ')
+  .replace(/\s+/g,' ')
+  .trim()
+  .toLowerCase();
+}
 
 export function suggestMapping(headers: string[]): Mapping {
   const mapping: Mapping = {};
   const used = new Set<number>();
   headers.forEach((header, index) => {
-    const folded = header.normalize('NFKC').replace(/[أإآٱ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, ' ').trim();
-    for (const [key, pattern] of headerMatchers) {
+    const folded = foldHeader(header);
+    if (!folded) return;
+    for (const {key, test} of headerMatchers) {
       if (mapping[key] !== undefined || used.has(index)) continue;
-      if (pattern.test(folded)) {
+      if (test(folded)) {
         mapping[key] = index;
         used.add(index);
         break;
@@ -67,11 +84,27 @@ export function suggestMapping(headers: string[]): Mapping {
   return mapping;
 }
 
+function easternDigits(value:string){
+ return value.replace(/[٠-٩]/g,c=>String(c.charCodeAt(0)-1632)).replace(/[۰-۹]/g,c=>String(c.charCodeAt(0)-1776));
+}
+
 export function normalizePhone(value:string){
- let v=value.trim().replace(/[٠-٩]/g,c=>String(c.charCodeAt(0)-1632)).replace(/[۰-۹]/g,c=>String(c.charCodeAt(0)-1776));
+ let v=easternDigits(value.normalize('NFKC').replace(/[\u0640\u200B-\u200F\u202A-\u202E\u2060-\u206F]/g,'')).trim();
+ const digits=v.replace(/[^\d]/g,'');
+ let n=digits;
+ if(n.startsWith('00'))n=n.slice(2);
+ if(n.startsWith('966'))n=n.slice(3);
+ if(n.startsWith('0'))n=n.slice(1);
+ if(/^5\d{8}$/.test(n))return '+966'+n;
+ if(n.length>9){
+  const tail=n.slice(-9);
+  if(/^5\d{8}$/.test(tail))return '+966'+tail;
+  const head=n.slice(0,9);
+  if(/^5\d{8}$/.test(head))return '+966'+head;
+ }
+ if(!v)return null;
  if(!/^[+\d\s()-]+$/.test(v)){
-  const extracted=v.replace(/[^\d+]/g,'');
-  v=extracted.startsWith('00')||extracted.startsWith('+')||/^0?\d{9,}/.test(extracted)?extracted:'';
+  v=digits.startsWith('00')||v.includes('+')||/^0?\d{9,}/.test(digits)?digits:'';
  }
  if(!v)return null;
  v=v.replace(/[\s()-]/g,'');if(v.startsWith('00'))v='+'+v.slice(2);
@@ -90,7 +123,7 @@ export function parseFollowUpDate(value:string):string|null{
  if(isCalendarDate(raw))return raw;
  const iso=raw.match(/^(\d{4}-\d{2}-\d{2})[ T].*/);
  if(iso&&isCalendarDate(iso[1]))return iso[1];
- const arabic=raw.replace(/[٠-٩]/g,c=>String(c.charCodeAt(0)-1632)).replace(/[۰-۹]/g,c=>String(c.charCodeAt(0)-1776));
+ const arabic=easternDigits(raw);
  const dmy=arabic.match(/^(\d{1,2})[/.+-](\d{1,2})[/.+-](\d{4})$/);
  if(dmy){
   const day=dmy[1].padStart(2,'0'),month=dmy[2].padStart(2,'0'),year=dmy[3];
@@ -110,19 +143,30 @@ export function parseFollowUpDate(value:string):string|null{
  return null;
 }
 
+export function isBlankPropertyText(value:string){
+ const folded=foldHeader(value);
+ return !folded || PLACEHOLDER.test(folded);
+}
+
 function resolveProperty(mapped:Record<string,string>){
  const id=(mapped.propertyId||'').trim();
  const other=(mapped.propertyOther||'').trim();
- if(id && id!=='other' && properties.some(p=>p.id===id))return {propertyId:id,propertyOther:''};
- const description=other||(id && id!=='other'?id:'')||DEFAULT_PROPERTY_OTHER;
- return {propertyId:'other',propertyOther:description};
+ if(id && id!=='other' && !isBlankPropertyText(id) && properties.some(p=>p.id===id))return {propertyId:id,propertyOther:''};
+ const fromOther=isBlankPropertyText(other)?'':other;
+ const fromId=id && id!=='other' && !isBlankPropertyText(id)?id:'';
+ const description=fromOther||fromId||DEFAULT_PROPERTY_OTHER;
+ return {propertyId:'other',propertyOther:description.length>=2?description:DEFAULT_PROPERTY_OTHER};
+}
+
+function stubLead(mapped:Record<string,string>,phone:string|null,property:{propertyId:string;propertyOther:string},stage:string,followUp:string){
+ return {name:mapped.name||'',phone:phone||mapped.phone||'',propertyOther:property.propertyOther,propertyId:property.propertyId,stage,followUp,source:mapped.source||'excel',notes:mapped.notes||''};
 }
 
 export function previewImport(rows:string[][],mapping:Mapping,existingPhones:string[]){
  const parsed=mappingSchema.safeParse(mapping);if(!parsed.success)throw Error('راجع ربط الأعمدة');
  const seen=new Set(existingPhones.map(normalizePhone).filter(Boolean));
  return rows.map((raw,index)=>{
-  const mapped:Record<string,string>={};for(const [key,col] of Object.entries(parsed.data))mapped[key]=raw[col]?.trim()||'';
+  const mapped:Record<string,string>={};for(const [key,col] of Object.entries(parsed.data))mapped[key]=String(raw[col]??'').trim();
   const warnings:string[]=[];
   const phone=normalizePhone(mapped.phone||'');
   const property=resolveProperty(mapped);
@@ -137,6 +181,8 @@ export function previewImport(rows:string[][],mapping:Mapping,existingPhones:str
    if(resolved&&(stageKeys as readonly string[]).includes(resolved))stage=resolved as (typeof stageKeys)[number];
    else warnings.push(`مرحلة غير معروفة «${stageCell}»؛ استُخدمت «${stageLabel('new')}» دون إنشاء مرحلة جديدة`);
   }
+  const followUp=followUpParsed||'';
+  const display=stubLead(mapped,phone,property,stage,followUp);
   const v=leadSchema.safeParse({
    id:crypto.randomUUID(),
    name:mapped.name||'',
@@ -145,11 +191,11 @@ export function previewImport(rows:string[][],mapping:Mapping,existingPhones:str
    propertyOther:property.propertyOther,
    source:mapped.source||'excel',
    notes:mapped.notes||'',
-   followUp:followUpParsed||'',
+   followUp,
    stage,
   });
   const base={row:index+1,raw,warnings};
-  if(!v.success)return {...base,status:'invalid' as const,errors:v.error.issues.map(i=>String(i.path[0])),lead:null};
+  if(!v.success)return {...base,status:'invalid' as const,errors:v.error.issues.map(i=>String(i.path[0])),lead:display};
   if(seen.has(phone))return {...base,status:'duplicate' as const,errors:['رقم جوال مكرر؛ لم يستبدل السجل الأصلي'],lead:v.data};
   seen.add(phone);return {...base,status:'ready' as const,errors:[],lead:v.data};
  });
