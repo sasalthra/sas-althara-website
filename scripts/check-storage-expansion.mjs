@@ -11,7 +11,7 @@ const out=mkdtempSync(join(tmpdir(),'sas-storage-')),sql=new DatabaseSync(':memo
 const employee=crypto.randomUUID(),admin=crypto.randomUUID();
 sql.exec(`
 CREATE TABLE leads(id TEXT PRIMARY KEY,owner TEXT,created_by TEXT,assigned_to TEXT,field_assigned_to TEXT,name TEXT,phone TEXT,property_id TEXT,property_other TEXT,source TEXT,stage TEXT,notes TEXT,follow_up TEXT,created_at TEXT,updated_at TEXT);
-CREATE TABLE crm_users(id TEXT PRIMARY KEY,name TEXT,active INTEGER,role TEXT);
+CREATE TABLE crm_users(id TEXT PRIMARY KEY,name TEXT,active INTEGER,role TEXT,email TEXT);
 CREATE TABLE crm_import_lock(id TEXT PRIMARY KEY); INSERT INTO crm_import_lock VALUES ('leads');
 CREATE TABLE crm_import_rows(id TEXT PRIMARY KEY,lead_id TEXT,source TEXT,raw_data TEXT,created_at TEXT);
 CREATE TABLE lead_activity(id TEXT PRIMARY KEY,lead_id TEXT,user_id TEXT,action TEXT,details TEXT);
@@ -22,8 +22,8 @@ CREATE TABLE hr_attendance(user_id TEXT,work_day TEXT,check_in TEXT,check_out TE
 CREATE TABLE hr_requests(id TEXT PRIMARY KEY,user_id TEXT,type TEXT,details TEXT,status TEXT,created_at TEXT,start_date TEXT,end_date TEXT,review_note TEXT,reviewed_by TEXT,reviewed_at TEXT);
 CREATE TABLE hr_announcements(id TEXT PRIMARY KEY,title TEXT,details TEXT,created_at TEXT);
 `);
-sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?)').run(employee,'Synthetic employee','sales');
-sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?)').run(admin,'Synthetic admin','admin');
+sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?,?)').run(employee,'Synthetic employee','sales','emp@sas.test');
+sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?,?)').run(admin,'Synthetic admin','admin','admin@sas.test');
 let failAudit=false;
 globalThis.storageUser={userId:admin,role:'admin',name:'Synthetic admin'};
 const driver={async execute(query,args){
@@ -34,10 +34,12 @@ const driver={async execute(query,args){
 },async beginTransaction(){sql.exec('BEGIN');},async commit(){sql.exec('COMMIT');},async rollback(){sql.exec('ROLLBACK');},release(){}};
 globalThis.storagePool={execute:driver.execute,async getConnection(){return driver;}};
 Object.assign(process.env,{DB_HOST:'synthetic',DB_USER:'synthetic',DB_PASSWORD:'synthetic',DB_NAME:'synthetic',NEXTAUTH_URL:'https://sas.test'});
+globalThis.sentMail=[];
 const boundary={name:'isolated-storage',setup(b){
  b.onResolve({filter:/^mysql2\/promise$/},()=>({path:'mysql',namespace:'test'}));
  b.onResolve({filter:/[\\/]admin$/},()=>({path:'auth',namespace:'test'}));
- b.onLoad({filter:/.*/,namespace:'test'},a=>({loader:'js',contents:a.path==='mysql'?'export default {createPool(){return globalThis.storagePool}}':'export async function getCrmUser(){return globalThis.storageUser}'}));
+ b.onResolve({filter:/[\\/]mail$/},()=>({path:'mail',namespace:'test'}));
+ b.onLoad({filter:/.*/,namespace:'test'},a=>({loader:'js',contents:a.path==='mysql'?'export default {createPool(){return globalThis.storagePool}}':a.path==='auth'?'export async function getCrmUser(){return globalThis.storageUser}':'export async function sendMail(msg){globalThis.sentMail.push(msg);return true}'}));
 }};
 async function load(path,name){await build({entryPoints:[path],outfile:join(out,name+'.cjs'),bundle:true,platform:'node',format:'cjs',plugins:[boundary]});return createRequire(import.meta.url)(join(out,name+'.cjs'));}
 const request=v=>new Request('https://sas.test/api/test',{method:'POST',headers:{origin:'https://sas.test','content-type':'application/json'},body:JSON.stringify(v)});
@@ -53,8 +55,11 @@ try{
  failAudit=true;await assert.rejects(()=>runImport([['Rollback','0500000001','Other']],mapping,admin,true));failAudit=false;
  assert.equal(sql.prepare('SELECT COUNT(*) n FROM leads').get().n,1,'all import inserts rollback if audit fails');
  const salesA=crypto.randomUUID(),salesB=crypto.randomUUID();
- sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?)').run(salesA,'Sales A','sales');
- sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?)').run(salesB,'Sales B','sales');
+ sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?,?)').run(salesA,'Sales A','sales','sales-a@sas.test');
+ sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?,?)').run(salesB,'Sales B','sales','sales-b@sas.test');
+ const salesNoMail=crypto.randomUUID();
+ sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?,?)').run(salesNoMail,'Sales No Mail','sales','');
+ globalThis.sentMail=[];
  assert.equal((await runImport([['No property column','0500000014']],{name:0,phone:1},admin,true)).inserted,1);
  assert.equal(sql.prepare('SELECT property_other,stage,assigned_to FROM leads WHERE phone=?').get('+966500000014').property_other,'غير محدد');
  const distributed=await runImport([['Assign one','0500000010','Other'],['Assign two','0500000011','Other'],['Assign three','0500000012','Other']],mapping,admin,true,'excel',{mode:'distribute',userIds:[salesA,salesB]});
@@ -63,15 +68,43 @@ try{
  assert.equal(assigned['+966500000010'],salesA);
  assert.equal(assigned['+966500000011'],salesB);
  assert.equal(assigned['+966500000012'],salesA);
+ assert.equal(globalThis.sentMail.length,3,'one summary per assignee plus one admin summary');
+ const distToA=globalThis.sentMail.find(m=>m.to==='sales-a@sas.test');
+ const distToB=globalThis.sentMail.find(m=>m.to==='sales-b@sas.test');
+ const distAdmin=globalThis.sentMail.find(m=>Array.isArray(m.to)&&m.to.includes('admin@sas.test')&&m.to.includes('sasalthra.sa@gmail.com'));
+ assert.match(distToA.subject,/2 عملاء/);
+ assert.match(distToA.text,/Assign one/);
+ assert.match(distToA.text,/Assign three/);
+ assert.doesNotMatch(distToA.text,/Assign two/);
+ assert.match(distToB.text,/Assign two/);
+ assert.match(distToB.html,/dir="rtl"/);
+ assert.match(distAdmin.subject,/3 عملاء/);
+ assert.match(distAdmin.text,/Sales A/);
+ assert.match(distAdmin.text,/Sales B/);
+ globalThis.sentMail=[];
  await assert.rejects(()=>runImport([['Bad assignee','0500000013','Other']],mapping,admin,true,'excel',{mode:'one',userIds:[crypto.randomUUID()]}));
  const assignedOne=await runImport([['One A','0500000020'],['One B','0500000021','-']],{name:0,phone:1},admin,true,'excel',{mode:'one',userIds:[salesA]});
  assert.equal(assignedOne.inserted,2);
  assert.equal(sql.prepare('SELECT assigned_to,property_other FROM leads WHERE phone=?').get('+966500000020').assigned_to,salesA);
  assert.equal(sql.prepare('SELECT assigned_to,property_other FROM leads WHERE phone=?').get('+966500000020').property_other,'غير محدد');
  assert.equal(sql.prepare('SELECT assigned_to FROM leads WHERE phone=?').get('+966500000021').assigned_to,salesA);
+ assert.equal(globalThis.sentMail.length,2,'one summary to the single rep and one to admin');
+ const oneToA=globalThis.sentMail.find(m=>m.to==='sales-a@sas.test');
+ const oneAdmin=globalThis.sentMail.find(m=>Array.isArray(m.to)&&m.to.includes('admin@sas.test'));
+ assert.match(oneToA.subject,/2 عملاء/);
+ assert.match(oneToA.text,/One A/);
+ assert.match(oneToA.text,/One B/);
+ assert.match(oneAdmin.subject,/Sales A/);
+ assert.match(oneAdmin.text,/sales-a@sas.test/);
+ globalThis.sentMail=[];
+ assert.equal((await runImport([['No mail client','0500000022']],{name:0,phone:1},admin,true,'excel',{mode:'one',userIds:[salesNoMail]})).inserted,1);
+ assert.equal(globalThis.sentMail.length,1,'skip assignee without email; still notify admin');
+ assert.equal(globalThis.sentMail[0].to.includes('admin@sas.test'),true);
+ assert.match(globalThis.sentMail[0].text,/Sales No Mail/);
  console.log('PASS SQL import preview/no-write, normalized duplicate replay, Other/raw-source persistence and atomic rollback');
  console.log('PASS SQL import without property column, round-robin sales assignment, reject unknown assignee');
  console.log('PASS SQL assign-all-to-one sales assigned_to and default propertyOther');
+ console.log('PASS SQL assignment emails: bulk summary per assignee, admin copy, skip missing email');
  const finance=await load('app/api/transactions/route.ts','finance'),id=crypto.randomUUID();
  const data={leadId:lead.id,debtPayer:'company',debtSettlement:'100.25',brokerage:'20.10'};
  assert.equal((await finance.POST(request({id,version:0,confirmed:true,data}))).status,200);

@@ -1,3 +1,5 @@
+import {notifyImportAssignments} from './assignment-notify';
+import {propertyRequestText} from './assignment-email';
 import {crmDb,crmTransaction} from './crm-db';
 import {assigneesForReady,previewImport,type Assignment,type Mapping} from './lead-import';
 import {ApiError} from './secure-api';
@@ -17,6 +19,7 @@ export async function runImport(rows:string[][],mapping:Mapping,userId:string,co
   if(commit&&assignment&&assignment.mode!=='unassigned')await activeSalesIds(db,assignment.userIds);
   const existing=await db.prepare('SELECT phone FROM leads').all();
   const preview=previewImport(rows,mapping,existing.results.map(r=>String(r.phone)));
+  const assignedClients:{assignedTo:string;client:{name:string;phone:string;stage:string;source:string;notes:string;propertyRequest:string;followUp:string}}[]=[];
   if(commit){
    const now=new Date().toISOString();
    const ready=preview.filter(r=>r.status==='ready'&&r.lead);
@@ -25,13 +28,20 @@ export async function runImport(rows:string[][],mapping:Mapping,userId:string,co
    for(const r of preview){
     if(r.status!=='ready'||!r.lead)continue;const v=r.lead;
     const assignedTo=assigned[i++]||'';
-    await db.prepare('INSERT INTO leads (id,owner,created_by,assigned_to,field_assigned_to,name,phone,property_id,property_other,source,stage,notes,follow_up,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(v.id,userId,userId,assignedTo,'',v.name,v.phone,v.propertyId,v.propertyOther,v.source==='excel'?source:v.source,v.stage,v.notes,v.followUp,now,now).run();
+    const leadSource=v.source==='excel'?source:v.source;
+    await db.prepare('INSERT INTO leads (id,owner,created_by,assigned_to,field_assigned_to,name,phone,property_id,property_other,source,stage,notes,follow_up,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(v.id,userId,userId,assignedTo,'',v.name,v.phone,v.propertyId,v.propertyOther,leadSource,v.stage,v.notes,v.followUp,now,now).run();
     await db.prepare('INSERT INTO crm_import_rows (id,lead_id,source,raw_data,created_at) VALUES (?,?,?,?,?)').bind(crypto.randomUUID(),v.id,source,JSON.stringify(r.raw),now).run();
     await db.prepare('INSERT INTO lead_activity (id,lead_id,user_id,action,details) VALUES (?,?,?,?,?)').bind(crypto.randomUUID(),v.id,userId,'imported',JSON.stringify({source,assignedTo:assignedTo||null,stage:v.stage})).run();
+    if(assignedTo)assignedClients.push({assignedTo,client:{name:v.name,phone:v.phone,stage:v.stage,source:leadSource,notes:v.notes,propertyRequest:propertyRequestText(v.propertyId,v.propertyOther),followUp:v.followUp}});
    }
    await db.prepare('INSERT INTO crm_audit (id,actor_id,action,target_id,details,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(),userId,'leads.import',source,JSON.stringify({inserted:ready.length,assignment:assignment?.mode||'unassigned'}),now).run();
   }
-  return {rows:preview,inserted:commit?preview.filter(r=>r.status==='ready').length:0};
+  return {rows:preview,inserted:commit?preview.filter(r=>r.status==='ready').length:0,assignedClients};
  };
- return commit?crmTransaction(execute):execute(crmDb());
+ const result=commit?await crmTransaction(execute):await execute(crmDb());
+ if(commit&&result.assignedClients.length){
+  try{await notifyImportAssignments(result.assignedClients);}
+  catch(error){console.error('Import assignment email failed:',error);}
+ }
+ return {rows:result.rows,inserted:result.inserted};
 }

@@ -1,4 +1,6 @@
 import {getCrmUser} from '@/lib/admin';
+import {propertyRequestText} from '@/lib/assignment-email';
+import {notifyLeadAssignment} from '@/lib/assignment-notify';
 import {crmDb} from '@/lib/crm-db';
 import {leadSchema as schema} from '@/lib/lead-input';
 
@@ -52,6 +54,38 @@ async function validUserForRole(
     .first<{id: string}>();
 
   return Boolean(user);
+}
+
+async function notifySalesAssignment(
+  previousAssignedTo: string | null | undefined,
+  assignedTo: string | null | undefined,
+  value: {
+    name: string;
+    phone: string;
+    stage: string;
+    source: string;
+    notes: string;
+    followUp: string;
+    propertyId: string;
+    propertyOther: string;
+  }
+) {
+  await notifyLeadAssignment({
+    previousAssignedTo,
+    assignedTo,
+    client: {
+      name: value.name,
+      phone: value.phone,
+      stage: value.stage,
+      source: value.source,
+      notes: value.notes,
+      followUp: value.followUp,
+      propertyRequest: propertyRequestText(
+        value.propertyId,
+        value.propertyOther
+      ),
+    },
+  });
 }
 
 function leadSelect() {
@@ -479,6 +513,12 @@ async function write(
           )
           .run();
 
+        await notifySalesAssignment(
+          existing.assigned_to,
+          finalAssignedTo,
+          value
+        );
+
         return reply({
           ok: true,
           id: value.id,
@@ -736,6 +776,14 @@ async function write(
           })
         )
         .run();
+
+      if (canAssign(user.role)) {
+        await notifySalesAssignment(
+          null,
+          newAssignedTo,
+          value
+        );
+      }
     }
 
     return reply({

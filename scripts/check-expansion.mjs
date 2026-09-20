@@ -138,4 +138,45 @@ try {
   assert.equal(sheetConfigSchema.safeParse({...config,sourceConfirmed:false}).success,false);
   assert.throws(()=>checkSheetHeaders(config,['الجوال','الاسم','العقار','الملاحظات']));
   console.log('PASS Sheets source confirmation, bounded mapping and header-drift rejection');
+  await build({entryPoints:['lib/assignment-email.ts'],outfile:join(output,'assign-mail.cjs'),bundle:true,platform:'node',format:'cjs'});
+  const {
+    assignmentChanged,
+    adminRecipientEmails,
+    groupClientsByAssignee,
+    assigneeAssignmentEmail,
+    adminAssignmentEmail,
+    formatClientText,
+  }=createRequire(import.meta.url)(join(output,'assign-mail.cjs'));
+  assert.equal(assignmentChanged('','sales-1'),true);
+  assert.equal(assignmentChanged('sales-1','sales-1'),false);
+  assert.equal(assignmentChanged('sales-1',''),false);
+  assert.equal(assignmentChanged('sales-1','sales-2'),true);
+  const admins=adminRecipientEmails([{role:'admin',email:'ops@sas.test'},{role:'sales',email:'rep@sas.test'}]);
+  assert.deepEqual(admins,['ops@sas.test','sasalthra.sa@gmail.com']);
+  const grouped=groupClientsByAssignee([
+    {assignedTo:'a',client:{name:'علي',phone:'+966500000001'}},
+    {assignedTo:'',client:{name:'تجاهل',phone:'+966500000000'}},
+    {assignedTo:'a',client:{name:'سارة',phone:'+966500000002'}},
+    {assignedTo:'b',client:{name:'خالد',phone:'+966500000003'}},
+  ]);
+  assert.equal(grouped.get('a').length,2);
+  assert.equal(grouped.get('b').length,1);
+  const client={name:'علي <script>',phone:'+966501234567',stage:'contacted',source:'إكسل',notes:'يريد فيلا',propertyRequest:'فيلا دورين'};
+  const assigneeMail=assigneeAssignmentEmail({id:'a',name:'مندوب الاختبار',email:'rep@sas.test'},[client]);
+  assert.match(assigneeMail.subject,/علي/);
+  assert.match(assigneeMail.text,/الجوال: \+966501234567/);
+  assert.match(assigneeMail.text,/المرحلة: تم التواصل/);
+  assert.match(assigneeMail.html,/dir="rtl"/);
+  assert.match(assigneeMail.html,/lang="ar"/);
+  assert.match(assigneeMail.html,/علي &lt;script&gt;/);
+  assert.doesNotMatch(assigneeMail.html,/<script>/);
+  const bulkAssignee=assigneeAssignmentEmail({id:'a',name:'مندوب الاختبار',email:'rep@sas.test'},[client,{name:'سارة',phone:'+966509999999'}]);
+  assert.match(bulkAssignee.subject,/2 عملاء/);
+  assert.match(bulkAssignee.text,/عميل 2/);
+  const adminMail=adminAssignmentEmail([{employee:{id:'a',name:'مندوب الاختبار',email:'rep@sas.test'},clients:[client]}]);
+  assert.match(adminMail.subject,/مندوب الاختبار/);
+  assert.match(adminMail.text,/rep@sas.test/);
+  assert.match(adminMail.text,/المصدر: إكسل/);
+  assert.match(formatClientText(client),/طلب العقار: فيلا دورين/);
+  console.log('PASS assignment email copy, RTL HTML, admin recipients, grouping and change detection');
 } finally { rmSync(output,{recursive:true,force:true}); }
