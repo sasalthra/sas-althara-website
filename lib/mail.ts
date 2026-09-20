@@ -7,10 +7,12 @@ type MailMessage = {
   html?: string;
 };
 
+const DEFAULT_FROM = 'ساس الثراء <sasalthra.sa@gmail.com>';
+
 let transporter: nodemailer.Transporter | null | undefined;
 
 function fromAddress() {
-  return (process.env.SMTP_FROM || process.env.SMTP_USER || '').trim();
+  return (process.env.SMTP_FROM || '').trim() || DEFAULT_FROM;
 }
 
 function smtpReady() {

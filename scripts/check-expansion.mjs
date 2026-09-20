@@ -179,4 +179,39 @@ try {
   assert.match(adminMail.text,/المصدر: إكسل/);
   assert.match(formatClientText(client),/طلب العقار: فيلا دورين/);
   console.log('PASS assignment email copy, RTL HTML, admin recipients, grouping and change detection');
+  const previousSmtp={
+    SMTP_HOST:process.env.SMTP_HOST,
+    SMTP_PORT:process.env.SMTP_PORT,
+    SMTP_SECURE:process.env.SMTP_SECURE,
+    SMTP_USER:process.env.SMTP_USER,
+    SMTP_PASSWORD:process.env.SMTP_PASSWORD,
+    SMTP_PASS:process.env.SMTP_PASS,
+    SMTP_FROM:process.env.SMTP_FROM,
+  };
+  try{
+    for(const key of Object.keys(previousSmtp)) delete process.env[key];
+    process.env.SMTP_HOST='smtp.gmail.com';
+    process.env.SMTP_PORT='465';
+    process.env.SMTP_USER='sasalthra.sa@gmail.com';
+    process.env.SMTP_PASSWORD='test-app-password';
+    globalThis.smtpSent=[];
+    await build({entryPoints:['lib/mail.ts'],outfile:join(output,'smtp-mail.cjs'),bundle:true,platform:'node',format:'cjs',plugins:[{name:'nodemailer-mock',setup(b){
+      b.onResolve({filter:/^nodemailer$/},()=>({path:'nodemailer',namespace:'mail-test'}));
+      b.onLoad({filter:/.*/,namespace:'mail-test'},()=>({loader:'js',contents:'export default {createTransport(opts){globalThis.smtpOpts=opts;return {async sendMail(msg){globalThis.smtpSent.push(msg);}}}};'}));
+    }}]});
+    const {sendMail}=createRequire(import.meta.url)(join(output,'smtp-mail.cjs'));
+    assert.equal(await sendMail({to:'rep@sas.test',subject:'تعيين',text:'نص'}),true);
+    assert.equal(globalThis.smtpOpts.host,'smtp.gmail.com');
+    assert.equal(globalThis.smtpSent[0].from,'ساس الثراء <sasalthra.sa@gmail.com>');
+    assert.doesNotMatch(globalThis.smtpSent[0].from,/info@/);
+    process.env.SMTP_FROM='Custom <other@sas.test>';
+    assert.equal(await sendMail({to:'rep@sas.test',subject:'تعيين',text:'نص'}),true);
+    assert.equal(globalThis.smtpSent[1].from,'Custom <other@sas.test>');
+  } finally {
+    for(const [key,value] of Object.entries(previousSmtp)){
+      if(value===undefined) delete process.env[key];
+      else process.env[key]=value;
+    }
+  }
+  console.log('PASS assignment SMTP from defaults to Gmail, not info@');
 } finally { rmSync(output,{recursive:true,force:true}); }
