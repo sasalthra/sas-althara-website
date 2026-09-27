@@ -1688,3 +1688,34 @@ form.report-filters,
   gap: 8px;
   font-weight: 400;
 }
+.crm-shell .purge-panel {
+  scroll-margin-top: 24px;
+  border-color: #1a1a1a;
+  background: #f6f5f7;
+  color: #1a1a1a;
+}
+.crm-shell .purge-panel h2 {
+  color: #111;
+}
+.crm-shell .purge-count {
+  background: #fff;
+  border: 1px solid #d9d4dc;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.crm-shell .purge-count strong {
+  color: #3F1A44;
+}
+.crm-shell .danger {
+  background: #111;
+  color: #fff;
+  border-color: #111;
+}
+.crm-shell .danger:hover:not(:disabled) {
+  background: #3F1A44;
+  border-color: #3F1A44;
+}
+.crm-shell .danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

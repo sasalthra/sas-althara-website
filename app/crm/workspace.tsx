@@ -234,6 +234,14 @@ export default function CRM({
     return()=>controller.abort();
   }, []);
 
+  useEffect(() => {
+    function onLeadsChanged() {
+      void refresh();
+    }
+    window.addEventListener('crm:leads-changed', onLeadsChanged);
+    return () => window.removeEventListener('crm:leads-changed', onLeadsChanged);
+  }, [refresh]);
+
   const today =
     new Date().toLocaleDateString(
       'en-CA'
@@ -320,6 +328,13 @@ export default function CRM({
                       ? 'العملاء الذين موعد متابعتهم اليوم أو قبله، باستثناء المغلق.'
                       : 'اضغط على اسم العميل لعرض الملف الكامل.'}
                   </p>
+                  {role === 'admin' ? (
+                    <p className="mt-3">
+                      <CrmLink className="crm-button" href="/crm?tab=users#purge-employee-clients">
+                        حذف عملاء موظف
+                      </CrmLink>
+                    </p>
+                  ) : null}
                 </div>
 
                 <label className="search w-full lg:w-[420px]">

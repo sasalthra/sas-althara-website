@@ -2,6 +2,7 @@
 
 import {useCallback, useEffect, useState} from 'react';
 import {CrmLink} from './navigation';
+import PurgeEmployeeClients from './purge-employee-clients';
 
 type CrmUser = {
   id: string;
@@ -121,6 +122,7 @@ export default function UsersPanel() {
 
   return (
     <div className="space-y-6">
+      <PurgeEmployeeClients users={users} usersLoading={loading} />
       <div className="panel">
         <h2 className="mb-4 text-xl font-bold">
           إضافة مستخدم جديد
