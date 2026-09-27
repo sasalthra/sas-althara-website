@@ -29,7 +29,7 @@ export default function UsersPanel() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
-  const [draft, setDraft] = useState({email: '', phone: ''});
+  const [draft, setDraft] = useState({name: '', email: '', phone: ''});
   const [contactSaving, setContactSaving] = useState(false);
 
   const [form, setForm] = useState({
@@ -126,6 +126,7 @@ export default function UsersPanel() {
   function startEdit(user: CrmUser) {
     setEditing(user.id);
     setDraft({
+      name: user.name || '',
       email: user.email || '',
       phone: user.phone || '',
     });
@@ -147,29 +148,35 @@ export default function UsersPanel() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           id: editing,
+          name: draft.name,
           email: draft.email,
           phone: draft.phone,
         }),
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || 'تعذر حفظ بيانات التواصل');
+        throw new Error(data.error || 'تعذر حفظ الاسم أو بيانات التواصل');
       }
 
       setUsers(current =>
         current.map(user =>
           user.id === editing
-            ? {...user, email: data.email || '', phone: data.phone || ''}
+            ? {
+                ...user,
+                name: data.name || draft.name.trim(),
+                email: data.email || '',
+                phone: data.phone || '',
+              }
             : user
         )
       );
       setEditing(null);
-      setSuccess('تم تحديث البريد والجوال');
+      setSuccess('تم تحديث الاسم والبريد والجوال');
     } catch (saveError) {
       setError(
         saveError instanceof Error
           ? saveError.message
-          : 'تعذر حفظ بيانات التواصل'
+          : 'تعذر حفظ الاسم أو بيانات التواصل'
       );
     } finally {
       setContactSaving(false);
@@ -365,7 +372,18 @@ export default function UsersPanel() {
                     className="border-b"
                   >
                     <td className="p-3">
-                      {user.name}
+                      {editing === user.id ? (
+                        <input
+                          required
+                          maxLength={100}
+                          aria-label={`الاسم الظاهر لـ ${user.username}`}
+                          value={draft.name}
+                          onChange={event => setDraft({...draft, name: event.target.value})}
+                          className="w-full min-w-36 rounded-lg border border-[#d1d5db] bg-white px-2 py-1 text-black"
+                        />
+                      ) : (
+                        user.name
+                      )}
                     </td>
 
                     <td className="p-3" dir="ltr">
@@ -423,7 +441,7 @@ export default function UsersPanel() {
                           </>
                         ) : (
                           <button type="button" className="crm-button" onClick={() => startEdit(user)}>
-                            تعديل البريد والجوال
+                            تعديل الاسم والبريد والجوال
                           </button>
                         )}
                       </div>

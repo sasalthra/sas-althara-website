@@ -15,7 +15,7 @@ export async function GET(req:Request){
   // Validate scope before any SQL, including employee choices and overview.
   authorizeReport(user,id==='overview'?'leads':id,filters,exporting);
   const db=crmDb();
-  const employees=user.role==='admin'?(await db.prepare('SELECT id,name FROM crm_users ORDER BY name,id LIMIT 10001').all()).results:[{id:user.userId,name:user.name}];
+  const employees=user.role==='admin'?(await db.prepare('SELECT id,name FROM crm_users ORDER BY name,id LIMIT 10001').all()).results:await selfEmployee(db,user);
   if(employees.length>10000)throw new ReportError(422,'قائمة الموظفين أكبر من الحد المدعوم');
   if(filters.employee&&!employees.some(employee=>String(employee.id)===filters.employee))throw new ReportError(400,'الموظف المحدد غير موجود في النطاق المسموح');
   if(exporting){const report=await readReport(db,user,id,filters,{properties,exporting:true});return new Response(reportCsv(report),{headers:{...headers,'Content-Type':'text/csv; charset=utf-8','Content-Disposition':`attachment; filename="sas-report-${id}.csv"`}});}
@@ -34,6 +34,11 @@ export async function GET(req:Request){
 // A read failure must never look like a zero, and a schema gap must name itself
 // instead of hiding behind a generic message. Only the column name is surfaced —
 // never SQL text, credentials or connection details.
+async function selfEmployee(db: ReturnType<typeof crmDb>, user: {userId: string; name: string}) {
+  const row = await db.prepare('SELECT id, name FROM crm_users WHERE id = ? LIMIT 1').bind(user.userId).first<{id: string; name: string | null}>();
+  return [{id: user.userId, name: row?.name?.trim() || user.name}];
+}
+
 function sourceError(error:unknown){
  if(error instanceof ReportError)return error.message;
  const raw=error instanceof Error?error.message:'';
