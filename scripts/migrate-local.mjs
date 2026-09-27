@@ -1,6 +1,6 @@
 // Never loads .env. Default invocation only prints the migration plan.
 import {readFileSync} from 'node:fs';
-const columns={assigned_to:"VARCHAR(255) NOT NULL DEFAULT ''",field_assigned_to:"VARCHAR(255) NOT NULL DEFAULT ''",created_by:"VARCHAR(255) NOT NULL DEFAULT ''",source:"VARCHAR(80) NOT NULL DEFAULT 'manual'",property_other:"VARCHAR(500) NOT NULL DEFAULT ''"};
+const columns={assigned_to:"VARCHAR(255) NOT NULL DEFAULT ''",field_assigned_to:"VARCHAR(255) NOT NULL DEFAULT ''",created_by:"VARCHAR(255) NOT NULL DEFAULT ''",source:"VARCHAR(80) NOT NULL DEFAULT 'manual'",property_other:"VARCHAR(500) NOT NULL DEFAULT ''",is_featured:'TINYINT(1) NOT NULL DEFAULT 0'};
 const files=['db/mysql/001_leads.sql','db/mysql/002_expansion.sql'];
 if(!process.argv.includes('--apply-local')){
  console.log(JSON.stringify({mode:'PLAN ONLY: no connection',files,leadColumns:columns,stage:'VARCHAR(40), preserving legacy and new stages',apply:'--apply-local with MIGRATION_HOST=127.0.0.1, MIGRATION_DATABASE ending _test, MIGRATION_USER, MIGRATION_PASSWORD, optional MIGRATION_PORT'},null,2));

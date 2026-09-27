@@ -8,12 +8,15 @@ import {
 } from 'react';
 import {useParams} from 'next/navigation';
 import {getSession} from 'next-auth/react';
+import {Star} from 'lucide-react';
 
 import data from '@/data/properties.json';
 import LeadForm, {
   Lead,
-  stages,
 } from '@/app/lead-form';
+import {formatRiyadhDate} from '@/lib/lead-dates';
+import {canToggleFeatured, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
+import {editableStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 
 import {
   Dialog,
@@ -149,6 +152,8 @@ function actionLabel(
       return 'تمت إضافة متابعة';
     case 'stage_changed':
       return 'تم تغيير المرحلة';
+    case 'featured_changed':
+      return 'تم تحديث تمييز العميل';
     default:
       return action
         .replaceAll('_', ' ')
@@ -180,14 +185,14 @@ function getActivityNote(
       ) {
         parts.push(
           `${
-            stages[previousStage] || previousStage
+            stageLabel(previousStage)
           } ← ${
-            stages[stage] || stage
+            stageLabel(stage)
           }`
         );
       } else {
         parts.push(
-          `المرحلة: ${stages[stage] || stage}`
+          `المرحلة: ${stageLabel(stage)}`
         );
       }
     }
@@ -218,7 +223,7 @@ function getActivityNote(
       stage
     ) {
       parts.push(
-        `المرحلة: ${stages[stage] || stage}`
+        `المرحلة: ${stageLabel(stage)}`
       );
     }
 
@@ -268,6 +273,15 @@ export default function LeadDetailsPage() {
 
   const [role, setRole] =
     useState<CrmRole>('sales');
+
+  const [userId, setUserId] =
+    useState('');
+
+  const [featureBusy, setFeatureBusy] =
+    useState(false);
+
+  const [featureError, setFeatureError] =
+    useState('');
 
   const [dialogMode, setDialogMode] =
     useState<DialogMode>(null);
@@ -366,6 +380,7 @@ export default function LeadDetailsPage() {
           session as
             | (typeof session & {
                 crmRole?: CrmRole;
+                crmUserId?: string;
               })
             | null;
 
@@ -374,6 +389,14 @@ export default function LeadDetailsPage() {
         ) {
           setRole(
             crmSession.crmRole
+          );
+        }
+
+        if (
+          crmSession?.crmUserId
+        ) {
+          setUserId(
+            crmSession.crmUserId
           );
         }
       }
@@ -411,9 +434,30 @@ export default function LeadDetailsPage() {
     );
 
     setNextStage(
-      lead.stage
+      editableStage(lead.stage)
     );
   }, [lead]);
+
+  async function toggleFeatured() {
+    if (!lead || !canToggleFeatured({userId, role}, lead) || featureBusy) return;
+    const next = !isFeaturedValue(lead.is_featured);
+    setFeatureBusy(true);
+    setFeatureError('');
+    try {
+      const response = await fetch(`/api/leads/${lead.id}/featured`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({featured: next}),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'تعذر تحديث التمييز');
+      await refresh();
+    } catch (toggleError) {
+      setFeatureError(toggleError instanceof Error ? toggleError.message : 'تعذر تحديث التمييز');
+    } finally {
+      setFeatureBusy(false);
+    }
+  }
 
   async function saveFollowUp(
     event: FormEvent
@@ -597,14 +641,21 @@ export default function LeadDetailsPage() {
               </a>
 
               <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-bold text-[#3F1A44]">
+                <h1 className={`inline-flex items-center gap-2 text-3xl font-bold ${isFeaturedValue(lead.is_featured) ? 'text-[#3F1A44]' : 'text-slate-900'}`}>
+                  {isFeaturedValue(lead.is_featured) && (
+                    <Star className="size-6 fill-[#3F1A44] text-[#3F1A44]" aria-hidden />
+                  )}
                   {lead.name}
                 </h1>
 
-                <span className="inline-flex rounded-full border border-[#e8e3e9] bg-[#f3eaf4] text-[#3F1A44]">
-                  {stages[
-                    lead.stage
-                  ] || lead.stage}
+                {isFeaturedValue(lead.is_featured) && (
+                  <span className="inline-flex rounded-full bg-[#3F1A44] px-2.5 py-1 text-xs font-semibold text-white">
+                    عميل مميز
+                  </span>
+                )}
+
+                <span className="inline-flex rounded-full border border-[#e8e3e9] bg-[#f3eaf4] px-2.5 py-1 text-[#3F1A44]">
+                  {stageLabel(lead.stage)}
                 </span>
               </div>
 
@@ -614,10 +665,10 @@ export default function LeadDetailsPage() {
                 </span>
 
                 <span>
-                  العميل منذ{' '}
-                  {formatDate(
+                  تاريخ التسجيل{' '}
+                  {formatRiyadhDate(
                     lead.created_at
-                  )}
+                  ) || '-'}
                 </span>
 
                 <span>
@@ -648,12 +699,25 @@ export default function LeadDetailsPage() {
                 + إضافة متابعة
               </button>
 
+              {featuredControlsEnabled(lead) && canToggleFeatured({userId, role}, lead) && (
+                <button
+                  type="button"
+                  aria-pressed={isFeaturedValue(lead.is_featured)}
+                  disabled={featureBusy}
+                  onClick={() => void toggleFeatured()}
+                  className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition disabled:opacity-60 ${isFeaturedValue(lead.is_featured) ? 'border-[#3F1A44] bg-[#3F1A44] text-white' : 'border-[#3F1A44]/20 bg-[#3F1A44]/5 text-[#3F1A44] hover:bg-[#3F1A44]/10'}`}
+                >
+                  <Star className={`size-4 ${isFeaturedValue(lead.is_featured) ? 'fill-white' : 'fill-[#3F1A44]'}`} aria-hidden />
+                  {isFeaturedValue(lead.is_featured) ? 'إلغاء التمييز' : 'عميل مميز'}
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => {
                   setDialogError('');
                   setNextStage(
-                    lead.stage
+                    editableStage(lead.stage)
                   );
                   setStageNote('');
                   setDialogMode(
@@ -678,6 +742,11 @@ export default function LeadDetailsPage() {
                 تحديث بيانات العميل
               </button>
             </div>
+            {featureError && (
+              <p role="alert" className="mt-3 text-sm text-red-600">
+                {featureError}
+              </p>
+            )}
           </div>
         </section>
 
@@ -921,8 +990,20 @@ export default function LeadDetailsPage() {
                   <div className="text-sm text-muted-foreground">
                     اسم العميل
                   </div>
-                  <div className="mt-1 font-semibold">
+                  <div className={`mt-1 inline-flex items-center gap-1.5 font-semibold ${isFeaturedValue(lead.is_featured) ? 'text-[#3F1A44]' : ''}`}>
+                    {isFeaturedValue(lead.is_featured) && (
+                      <Star className="size-4 fill-[#3F1A44] text-[#3F1A44]" aria-hidden />
+                    )}
                     {lead.name}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-sm text-muted-foreground">
+                    تاريخ التسجيل
+                  </div>
+                  <div className="mt-1 font-semibold">
+                    {formatRiyadhDate(lead.created_at) || '-'}
                   </div>
                 </div>
 
@@ -943,9 +1024,7 @@ export default function LeadDetailsPage() {
                     المرحلة الحالية
                   </div>
                   <div className="mt-1 font-semibold">
-                    {stages[
-                      lead.stage
-                    ] || lead.stage}
+                    {stageLabel(lead.stage)}
                   </div>
                 </div>
 
@@ -1127,8 +1206,8 @@ export default function LeadDetailsPage() {
                 }
                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none focus:border-[#3F1A44]"
               >
-                {Object.entries(
-                  stages
+                {stageChoices(
+                  nextStage
                 ).map(
                   ([
                     value,

@@ -16,9 +16,24 @@ export const stageLabels: Record<string, string> = {
   not_interested: 'غير مهتم',
   viewing: 'معاينة',
   negotiation: 'تفاوض',
-  won: 'مكسب',
   closed: 'مغلق',
 };
+
+/** Stages staff can assign. `won` is never a choice. */
+export function stageChoices(_current?: string | null): Array<[string, string]> {
+  return Object.entries(stageLabels).filter(([key]) => key !== 'won');
+}
+
+/** A stored `won` value is edited and saved as وقع عقد. */
+export function editableStage(stage?: string | null): string {
+  if (stage === 'won') return 'contract_signed';
+  return stage || 'new';
+}
+
+/** `won` cannot be stored again. */
+export function stageWriteAllowed(next: string, _current?: string | null): boolean {
+  return next !== 'won';
+}
 
 /**
  * Extra Excel/CRM spellings mapped onto existing keys only.
@@ -35,17 +50,17 @@ export const stageAliasGroups: Record<string, string[]> = {
   property_visited: ['تم زيارة العقار', 'زيارة العقار', 'زار العقار', 'property visited'],
   bank_approval: ['مؤهل بانتظار موافقة البنك', 'موافقة البنك', 'انتظار البنك', 'بانتظار موافقة البنك', 'bank approval'],
   deposit_paid: ['دفع عربون', 'عربون', 'تم دفع العربون', 'deposit'],
-  contract_signed: ['وقع عقد', 'توقيع عقد', 'تم توقيع العقد', 'عقد موقع', 'signed'],
+  contract_signed: ['وقع عقد', 'توقيع عقد', 'تم توقيع العقد', 'عقد موقع', 'signed', 'مكسب', 'رابح', 'تم البيع', 'مباع', 'won', 'sold'],
   transferred: ['إفراغ', 'افراغ', 'تم الافراغ', 'transferred'],
   unqualified: ['غير مؤهل', 'غير مؤهلين', 'unqualified'],
   not_interested: ['غير مهتم', 'غير مهتمين', 'لا يرغب', 'not interested'],
   viewing: ['معاينة', 'تم المعاينة', 'viewing', 'view'],
   negotiation: ['تفاوض', 'قيد التفاوض', 'مفاوضات', 'negotiation'],
-  won: ['مكسب', 'رابح', 'تم البيع', 'مباع', 'won', 'sold'],
   closed: ['مغلق', 'اغلاق', 'إغلاق', 'منتهي', 'closed'],
 };
 
 export function stageLabel(stage: string): string {
+  if (stage === 'won') return stageLabels.contract_signed;
   return stageLabels[stage] || stage || 'غير محدد';
 }
 

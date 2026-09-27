@@ -5,6 +5,7 @@ import {
   useEffect,
   useState,
 } from 'react';
+import {Star} from 'lucide-react';
 
 import Link from 'next/link';
 import {CrmLink,useCrmQuery,workspaceItems} from './navigation';
@@ -21,8 +22,10 @@ import ReportsPanel from './reports-panel';
 import data from '@/data/properties.json';
 import LeadForm, {
   Lead,
-  stages,
 } from '@/app/lead-form';
+import {formatRiyadhDate, riyadhDayKey} from '@/lib/lead-dates';
+import {canToggleFeatured, compareClients, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
+import {stageLabel} from '@/lib/lead-stages';
 
 import {
   Tabs,
@@ -54,6 +57,7 @@ type CrmRole =
 
 type WorkspaceProps = {
   role: CrmRole;
+  userId?: string;
 };
 
 function formatUpdateDate(
@@ -114,6 +118,7 @@ function compactPropertyTitle(
 
 export default function CRM({
   role,
+  userId = '',
 }: WorkspaceProps) {
   const query=useCrmQuery();
   const items=workspaceItems.filter(item=>item.roles.includes(role));
@@ -156,6 +161,12 @@ export default function CRM({
   const [open, setOpen] =
     useState(false);
 
+  const [featureBusy, setFeatureBusy] =
+    useState('');
+
+  const [featureError, setFeatureError] =
+    useState('');
+
   const [edit, setEdit] =
     useState<Lead | undefined>();
 
@@ -192,6 +203,27 @@ export default function CRM({
         setLoading(false);
       }
     }, []);
+
+  async function toggleFeatured(lead: Lead) {
+    if (!canToggleFeatured({userId, role}, lead) || featureBusy) return;
+    const next = !isFeaturedValue(lead.is_featured);
+    setFeatureBusy(lead.id);
+    setFeatureError('');
+    try {
+      const response = await fetch(`/api/leads/${lead.id}/featured`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({featured: next}),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'تعذر تحديث التمييز');
+      setLeads(current => current.map(item => item.id === lead.id ? {...item, is_featured: next ? 1 : 0} : item));
+    } catch (toggleError) {
+      setFeatureError(toggleError instanceof Error ? toggleError.message : 'تعذر تحديث التمييز');
+    } finally {
+      setFeatureBusy('');
+    }
+  }
 
   useEffect(() => {
     const controller=new AbortController();
@@ -240,7 +272,7 @@ export default function CRM({
         .includes(
           q.trim().toLowerCase()
         );
-    });
+    }).sort(compareClients);
 
   const followUps =
     leads.filter(needsFollowUp).length;
@@ -285,7 +317,7 @@ export default function CRM({
 
                   <p className="subtle">
                     {leadView === 'followups'
-                      ? 'العملاء الذين موعد متابعتهم اليوم أو قبله، باستثناء المكسب والمغلق.'
+                      ? 'العملاء الذين موعد متابعتهم اليوم أو قبله، باستثناء المغلق.'
                       : 'اضغط على اسم العميل لعرض الملف الكامل.'}
                   </p>
                 </div>
@@ -305,6 +337,12 @@ export default function CRM({
                   />
                 </label>
               </div>
+
+              {featureError && (
+                <p role="alert" className="error">
+                  {featureError}
+                </p>
+              )}
 
               {error && (
                 <p
@@ -330,7 +368,7 @@ export default function CRM({
               ) : shown.length ? (
                 <>
                   <div className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                    <Table className="w-full min-w-[1200px] table-fixed">
+                    <Table className="w-full min-w-[1380px] table-fixed">
                       <TableHeader>
                         <TableRow className="bg-slate-50/80">
                           <TableHead className="w-[3%] px-2 text-center">
@@ -341,11 +379,15 @@ export default function CRM({
                             اسم العميل
                           </TableHead>
 
-                          <TableHead className="w-[11%] px-2">
+                          <TableHead className="w-[9%] px-2" title="بتوقيت الرياض">
+                            تاريخ التسجيل
+                          </TableHead>
+
+                          <TableHead className="w-[10%] px-2">
                             الجوال
                           </TableHead>
 
-                          <TableHead className="w-[14%] px-2">
+                          <TableHead className="w-[12%] px-2">
                             العقار
                           </TableHead>
 
@@ -353,19 +395,19 @@ export default function CRM({
                             المرحلة
                           </TableHead>
 
-                          <TableHead className="w-[10%] px-2">
+                          <TableHead className="w-[9%] px-2">
                             المبيعات
                           </TableHead>
 
-                          <TableHead className="w-[10%] px-2">
+                          <TableHead className="w-[9%] px-2">
                             الميداني
                           </TableHead>
 
-                          <TableHead className="w-[13%] px-2">
+                          <TableHead className="w-[11%] px-2">
                             آخر تحديث مبيعات
                           </TableHead>
 
-                          <TableHead className="w-[13%] px-2">
+                          <TableHead className="w-[11%] px-2">
                             آخر تحديث ميداني
                           </TableHead>
 
@@ -388,27 +430,54 @@ export default function CRM({
                                   lead.property_id
                               );
 
+                            const featured = isFeaturedValue(lead.is_featured);
+                            const allowFeature = featuredControlsEnabled(lead) && canToggleFeatured({userId, role}, lead);
+
                             return (
                               <TableRow
                                 key={
                                   lead.id
                                 }
-                                className="align-middle"
+                                className={`align-middle ${featured ? 'bg-[#f3eaf4]/60' : ''}`}
                               >
                                 <TableCell className="px-2 text-center text-sm text-muted-foreground">
                                   {index + 1}
                                 </TableCell>
 
                                 <TableCell className="px-2">
-                                  <a
-                                    href={`/crm/leads/${lead.id}`}
-                                    className="block truncate font-semibold text-[#5b2a72] underline decoration-[#5b2a72]/40 underline-offset-4 hover:decoration-[#5b2a72]"
-                                    title={
-                                      lead.name
-                                    }
-                                  >
-                                    {lead.name}
-                                  </a>
+                                  <div className="flex min-w-0 items-center gap-1.5">
+                                    {allowFeature ? (
+                                      <button
+                                        type="button"
+                                        aria-pressed={featured}
+                                        aria-label={featured ? `إلغاء تمييز ${lead.name}` : `تعليم ${lead.name} كعميل مميز`}
+                                        title={featured ? 'عميل مميز' : 'تعليم كعميل مميز'}
+                                        disabled={featureBusy === lead.id}
+                                        onClick={() => void toggleFeatured(lead)}
+                                        className={`inline-flex shrink-0 items-center justify-center rounded-full border p-1 disabled:opacity-60 ${featured ? 'border-[#3F1A44] bg-white text-[#3F1A44]' : 'border-slate-200 text-slate-400 hover:border-[#3F1A44] hover:text-[#3F1A44]'}`}
+                                      >
+                                        <Star className={`size-3.5 ${featured ? 'fill-[#3F1A44]' : ''}`} aria-hidden />
+                                      </button>
+                                    ) : featured ? (
+                                      <Star className="size-3.5 shrink-0 fill-[#3F1A44] text-[#3F1A44]" aria-hidden />
+                                    ) : null}
+                                    <a
+                                      href={`/crm/leads/${lead.id}`}
+                                      className={`block min-w-0 truncate font-semibold underline underline-offset-4 ${featured ? 'font-bold text-[#3F1A44] decoration-[#3F1A44]/50' : 'text-[#5b2a72] decoration-[#5b2a72]/40 hover:decoration-[#5b2a72]'}`}
+                                      title={lead.name}
+                                    >
+                                      {lead.name}
+                                    </a>
+                                  </div>
+                                  {featured && (
+                                    <span className="mt-1 inline-flex rounded-full bg-[#3F1A44] px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                                      عميل مميز
+                                    </span>
+                                  )}
+                                </TableCell>
+
+                                <TableCell className="px-2 text-sm whitespace-nowrap" title={riyadhDayKey(lead.created_at) || undefined}>
+                                  {formatRiyadhDate(lead.created_at) || '—'}
                                 </TableCell>
 
                                 <TableCell
@@ -441,11 +510,9 @@ export default function CRM({
 
                                 <TableCell className="px-2">
                                   <span className="inline-flex max-w-full truncate rounded-full border border-[#e8e3e9] bg-[#f3eaf4] px-2.5 py-1 text-xs font-medium text-[#3F1A44]">
-                                    {stages[
-                                      lead
-                                        .stage
-                                    ] ||
-                                      lead.stage}
+                                    {stageLabel(
+                                      lead.stage
+                                    )}
                                   </span>
                                 </TableCell>
 

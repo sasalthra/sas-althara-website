@@ -3,6 +3,8 @@ import {propertyRequestText} from '@/lib/assignment-email';
 import {notifyLeadAssignment} from '@/lib/assignment-notify';
 import {crmDb} from '@/lib/crm-db';
 import {leadSchema as schema} from '@/lib/lead-input';
+import {ensureLeadSchema, isMissingFeaturedColumn} from '@/lib/lead-schema';
+import {stageWriteAllowed} from '@/lib/lead-stages';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -31,6 +33,20 @@ function canAssign(role: string) {
   return (
     role === 'admin' ||
     role === 'supervisor'
+  );
+}
+
+function retiredStageReply(
+  nextStage: string,
+  currentStage?: string | null
+) {
+  if (stageWriteAllowed(nextStage, currentStage)) {
+    return null;
+  }
+
+  return reply(
+    {error: 'هذه المرحلة لم تعد متاحة'},
+    400
   );
 }
 
@@ -179,6 +195,77 @@ function leadSelect() {
   `;
 }
 
+function presentLeads(
+  rows: unknown[],
+  featured: boolean
+) {
+  return (rows as Record<string, unknown>[]).map(row =>
+    featured
+      ? {...row, featured_available: 1}
+      : {...row, is_featured: 0, featured_available: 0}
+  );
+}
+
+async function readLeads(
+  user: {userId: string; role: string},
+  featured: boolean
+) {
+  const order = featured
+    ? 'ORDER BY leads.is_featured DESC, leads.created_at DESC'
+    : 'ORDER BY leads.created_at DESC';
+  const db = crmDb();
+
+  if (canSeeAll(user.role)) {
+    const result = await db
+      .prepare(`
+        ${leadSelect()}
+        ${order}
+      `)
+      .all();
+    return result.results;
+  }
+
+  if (user.role === 'sales') {
+    const result = await db
+      .prepare(`
+        ${leadSelect()}
+        WHERE
+          leads.assigned_to = ?
+          OR leads.created_by = ?
+          OR leads.owner = ?
+        ${order}
+      `)
+      .bind(
+        user.userId,
+        user.userId,
+        user.userId
+      )
+      .all();
+    return result.results;
+  }
+
+  if (user.role === 'field') {
+    const result = await db
+      .prepare(`
+        ${leadSelect()}
+        WHERE
+          leads.field_assigned_to = ?
+          OR leads.created_by = ?
+          OR leads.owner = ?
+        ${order}
+      `)
+      .bind(
+        user.userId,
+        user.userId,
+        user.userId
+      )
+      .all();
+    return result.results;
+  }
+
+  return [];
+}
+
 export async function GET() {
   const user = await getCrmUser();
 
@@ -190,60 +277,14 @@ export async function GET() {
   }
 
   try {
-    const db = crmDb();
-
-    if (canSeeAll(user.role)) {
-      const result = await db
-        .prepare(`
-          ${leadSelect()}
-          ORDER BY leads.created_at DESC
-        `)
-        .all();
-
-      return reply(result.results);
+    let featured = (await ensureLeadSchema()).featured;
+    try {
+      return reply(presentLeads(await readLeads(user, featured), featured));
+    } catch (error) {
+      if (!featured || !isMissingFeaturedColumn(error)) throw error;
+      featured = false;
+      return reply(presentLeads(await readLeads(user, false), false));
     }
-
-    if (user.role === 'sales') {
-      const result = await db
-        .prepare(`
-          ${leadSelect()}
-          WHERE
-            leads.assigned_to = ?
-            OR leads.created_by = ?
-            OR leads.owner = ?
-          ORDER BY leads.created_at DESC
-        `)
-        .bind(
-          user.userId,
-          user.userId,
-          user.userId
-        )
-        .all();
-
-      return reply(result.results);
-    }
-
-    if (user.role === 'field') {
-      const result = await db
-        .prepare(`
-          ${leadSelect()}
-          WHERE
-            leads.field_assigned_to = ?
-            OR leads.created_by = ?
-            OR leads.owner = ?
-          ORDER BY leads.created_at DESC
-        `)
-        .bind(
-          user.userId,
-          user.userId,
-          user.userId
-        )
-        .all();
-
-      return reply(result.results);
-    }
-
-    return reply([]);
   } catch (error) {
     console.error(
       'Failed to load leads:',
@@ -417,7 +458,8 @@ async function write(
             SELECT
               id,
               assigned_to,
-              field_assigned_to
+              field_assigned_to,
+              stage
             FROM leads
             WHERE id = ?
             LIMIT 1
@@ -431,6 +473,7 @@ async function write(
             field_assigned_to:
               | string
               | null;
+            stage: string;
           }>();
 
         if (!existing) {
@@ -441,6 +484,16 @@ async function write(
             },
             404
           );
+        }
+
+        const retired =
+          retiredStageReply(
+            value.stage,
+            existing.stage
+          );
+
+        if (retired) {
+          return retired;
         }
 
         const finalAssignedTo =
@@ -526,13 +579,13 @@ async function write(
       }
 
       let existing:
-        | {id: string}
+        | {id: string; stage: string}
         | null = null;
 
       if (user.role === 'sales') {
         existing = await db
           .prepare(`
-            SELECT id
+            SELECT id, stage
             FROM leads
             WHERE id = ?
               AND (
@@ -548,13 +601,13 @@ async function write(
             user.userId,
             user.userId
           )
-          .first<{id: string}>();
+          .first<{id: string; stage: string}>();
       }
 
       if (user.role === 'field') {
         existing = await db
           .prepare(`
-            SELECT id
+            SELECT id, stage
             FROM leads
             WHERE id = ?
               AND (
@@ -570,7 +623,7 @@ async function write(
             user.userId,
             user.userId
           )
-          .first<{id: string}>();
+          .first<{id: string; stage: string}>();
       }
 
       if (!existing) {
@@ -581,6 +634,16 @@ async function write(
           },
           404
         );
+      }
+
+      const retired =
+        retiredStageReply(
+          value.stage,
+          existing.stage
+        );
+
+      if (retired) {
+        return retired;
       }
 
       await db
@@ -663,6 +726,13 @@ async function write(
       ) {
         newFieldAssignedTo =
           user.userId;
+      }
+
+      const retired =
+        retiredStageReply(value.stage);
+
+      if (retired) {
+        return retired;
       }
 
       await db

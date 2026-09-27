@@ -67,8 +67,10 @@ try {
   for (const [c] of COLUMNS) console.log(`  ${have.has(c) ? '✓ موجودة' : '✗ ناقصة '}  ${c}`);
   console.log(`\nقائمة المراحل: ${stageNeedsWidening ? '✗ تحتاج توسيع' : '✓ مكتملة'}`);
   console.log(`الفهارس الناقصة: ${missingIdx.length}`);
+  const [[{wonCount}]] = await conn.query("SELECT COUNT(*) AS wonCount FROM leads WHERE stage = 'won'");
+  console.log(`صفوف المرحلة won المتبقية: ${wonCount}`);
 
-  if (!missingCols.length && !missingIdx.length && !stageNeedsWidening) {
+  if (!missingCols.length && !missingIdx.length && !stageNeedsWidening && !Number(wonCount)) {
     console.log('\n✓ القاعدة محدّثة بالكامل. لا حاجة لأي تعديل.\n');
     process.exit(0);
   }
@@ -99,6 +101,19 @@ try {
     try { await conn.query(`ALTER TABLE leads ADD INDEX \`${name}\` ${def}`); console.log(`  + أُضيف الفهرس ${name}`); }
     catch (e) { console.log(`  · تُخطّي الفهرس ${name} (${e.code})`); }
   }
+  if (Number(wonCount)) {
+    const [wonRows] = await conn.query("SELECT id FROM leads WHERE stage = 'won'");
+    await conn.query("UPDATE leads SET stage = 'contract_signed' WHERE stage = 'won'");
+    for (const row of wonRows) {
+      try {
+        await conn.query(
+          'INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES (?,?,?,?,?)',
+          [crypto.randomUUID(), row.id, 'system', 'stage_changed', JSON.stringify({previousStage:'won', stage:'contract_signed', note:'تم اعتماد مرحلة وقع عقد'})],
+        );
+      } catch (e) { console.log(`  · تعذر تسجيل تاريخ المرحلة (${e.code || e.message})`); }
+    }
+    console.log(`  ↻ نُقلت ${wonRows.length} صفوف من won إلى contract_signed`);
+  }
 
   // ── التحقق بعد التنفيذ ──
   const [after] = await conn.query('SHOW COLUMNS FROM leads');
@@ -115,7 +130,7 @@ try {
     console.log(`✗ تغيّر عدد السجلات: ${rowCount} → ${afterCount}`);
     process.exit(1);
   }
-  console.log(`✓ الخانات الخمس موجودة`);
+  console.log(`✓ الخانات المطلوبة موجودة (${COLUMNS.length})`);
   console.log(`✓ عدد السجلات كما هو: ${afterCount} (لم تُفقد أي بيانات)`);
 
   // إثبات أن استعلام التقارير الحقيقي يعمل الآن

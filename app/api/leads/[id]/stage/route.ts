@@ -71,6 +71,7 @@ export async function PATCH(
   if (!canAccess(user, lead)) return NextResponse.json({error: 'Forbidden'}, {status: 403});
 
   const previousStage = lead.stage;
+  if (stage === previousStage) return NextResponse.json({ok: true});
 
   await crmDb()
     .prepare(`UPDATE leads SET stage = ?, updated_at = ? WHERE id = ?`)

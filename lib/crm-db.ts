@@ -1,4 +1,5 @@
 import mysql, {type Pool, type RowDataPacket, type ResultSetHeader} from 'mysql2/promise';
+import {ensureLeadSchema} from './lead-schema';
 let pool: Pool | undefined;
 function database() {
   if (!pool) {
@@ -12,18 +13,22 @@ function database() {
   }
   return pool;
 }
-export function crmDb(executor: Pick<Pool, 'execute'> = {execute: (...args: Parameters<Pool['execute']>) => database().execute(...args)} as Pick<Pool, 'execute'>) {
+export function crmPool() {
+  return database();
+}
+export function crmDb(executor: Pick<Pool, 'execute'> = database()) {
   return {prepare(sql: string) {
     let values: (string | number | null)[] = [];
     return {
       bind(...args: (string | number | null)[]) { values = args; return this; },
-      async all() {const [rows] = await executor.execute<RowDataPacket[]>(sql, values); return {results: rows};},
-      async first<T>() {const [rows] = await executor.execute<RowDataPacket[]>(sql, values); return (rows[0] as T) || null;},
-      async run() {const [result] = await executor.execute<ResultSetHeader>(sql, values); return {meta: {changes: result.affectedRows}};},
+      async all() {await ensureLeadSchema(); const [rows] = await executor.execute<RowDataPacket[]>(sql, values); return {results: rows};},
+      async first<T>() {await ensureLeadSchema(); const [rows] = await executor.execute<RowDataPacket[]>(sql, values); return (rows[0] as T) || null;},
+      async run() {await ensureLeadSchema(); const [result] = await executor.execute<ResultSetHeader>(sql, values); return {meta: {changes: result.affectedRows}};},
     };
   }};
 }
 export async function crmTransaction<T>(fn:(db:ReturnType<typeof crmDb>)=>Promise<T>):Promise<T>{
+ await ensureLeadSchema();
  const connection=await database().getConnection();
  try{await connection.beginTransaction();const result=await fn(crmDb(connection));await connection.commit();return result;}
  catch(error){await connection.rollback();throw error;}finally{connection.release();}
