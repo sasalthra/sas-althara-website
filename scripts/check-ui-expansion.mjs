@@ -1,11 +1,18 @@
 import {build} from 'esbuild';
 import {createRequire} from 'node:module';
-import {mkdtempSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
 const out=mkdtempSync(join(tmpdir(),'sas-ui-'));
 try {
+ const leadPage=readFileSync('app/crm/leads/[id]/page.tsx','utf8');
+ assert.match(leadPage,/تفويج للميداني/);
+ assert.match(leadPage,/تحديث ميداني/);
+ assert.match(leadPage,/متابعة الميداني/);
+ assert.match(leadPage,/تاريخ التفويج/);
+ assert.match(leadPage,/#3F1A44/);
+ console.log('PASS client page exposes field dispatch, field notes and the field timeline');
  await build({stdin:{contents:`import React from 'react';import {renderToStaticMarkup} from 'react-dom/server';import CRM from './app/crm/workspace';export const admin=renderToStaticMarkup(<CRM role="admin"/>);export const sales=renderToStaticMarkup(<CRM role="sales"/>);export const supervisor=renderToStaticMarkup(<CRM role="supervisor"/>);`,resolveDir:process.cwd(),loader:'tsx'},outfile:join(out,'ui.cjs'),bundle:true,platform:'node',format:'cjs'});
  const {admin,sales,supervisor}=createRequire(import.meta.url)(join(out,'ui.cjs'));
  assert.match(admin,/إعدادات Google Sheets/,'admin can reach Sheets configuration');

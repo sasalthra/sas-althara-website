@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
+import {stageWriteAllowed} from '@/lib/lead-stages';
 
 type LeadRow = {
   id: string;
@@ -11,23 +12,6 @@ type LeadRow = {
   created_by: string | null;
   stage: string;
 };
-
-const allowedStages = new Set([
-  'new',
-  'received',
-  'no_answer',
-  'contacted',
-  'data_received',
-  'calculation_done',
-  'visit_qualified',
-  'property_visited',
-  'bank_approval',
-  'deposit_paid',
-  'contract_signed',
-  'transferred',
-  'unqualified',
-  'not_interested',
-]);
 
 function canAccess(user: {userId: string; role: string}, lead: LeadRow) {
   if (user.role === 'admin' || user.role === 'supervisor') return true;
@@ -53,8 +37,8 @@ export async function PATCH(
   const stage = typeof body.stage === 'string' ? body.stage.trim() : '';
   const note = typeof body.note === 'string' ? body.note.trim() : '';
 
-  if (!allowedStages.has(stage)) {
-    return NextResponse.json({error: 'Invalid stage'}, {status: 400});
+  if (!stageWriteAllowed(stage)) {
+    return NextResponse.json({error: 'هذه المرحلة لم تعد متاحة'}, {status: 400});
   }
 
   const lead = await crmDb()

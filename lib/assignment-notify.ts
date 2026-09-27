@@ -1,9 +1,11 @@
 import {crmDb} from './crm-db';
 import {
   adminAssignmentEmail,
+  adminFieldDispatchEmail,
   adminRecipientEmails,
   assigneeAssignmentEmail,
   assignmentChanged,
+  fieldDispatchEmail,
   groupClientsByAssignee,
   normalizeEmail,
   type AssignmentClient,
@@ -93,5 +95,48 @@ export async function notifyImportAssignments(
     await sendAssignmentMails(groups, people);
   } catch (error) {
     console.error('Import assignment email failed:', error);
+  }
+}
+
+export async function notifyFieldDispatch(input: {
+  fieldUserId: string;
+  dispatcherName: string;
+  client: AssignmentClient & {id: string};
+  dispatchNote?: string | null;
+}) {
+  try {
+    const people = await loadPeople([input.fieldUserId]);
+    const match = people.find((person) => person.id === input.fieldUserId);
+    const employeeName = match?.name || 'الموظف الميداني';
+    const base = (process.env.NEXTAUTH_URL || '').replace(/\/$/, '');
+    const mailInput = {
+      dispatcherName: input.dispatcherName,
+      employeeName,
+      client: input.client,
+      url: `${base}/crm/leads/${input.client.id}`,
+      dispatchNote: input.dispatchNote,
+    };
+    const assigneeEmail = normalizeEmail(match?.email);
+    if (!assigneeEmail) {
+      console.warn(
+        `Field dispatch email skipped; employee ${employeeName} has no email`
+      );
+    } else {
+      await sendMail({
+        to: assigneeEmail,
+        ...fieldDispatchEmail(mailInput),
+      });
+    }
+    const adminTo = adminRecipientEmails(people);
+    if (!adminTo.length) {
+      console.warn('Field dispatch admin email skipped; no admin recipients');
+      return;
+    }
+    await sendMail({
+      to: adminTo,
+      ...adminFieldDispatchEmail(mailInput),
+    });
+  } catch (error) {
+    console.error('Field dispatch email failed:', error);
   }
 }

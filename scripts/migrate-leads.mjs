@@ -13,7 +13,7 @@ import {readFileSync, existsSync} from 'node:fs';
 import mysql from 'mysql2/promise';
 // Decision logic lives in a pure module so it can be tested without a live
 // server — see scripts/check-migration-plan.mjs.
-import {planMigration, COLUMNS, STAGES} from './lib/migration-plan.mjs';
+import {planMigration, COLUMNS, STAGES, STAGE_MOVES} from './lib/migration-plan.mjs';
 import {parseEnv} from './lib/parse-env.mjs';
 
 const CHECK_ONLY = process.argv.includes('--check');
@@ -67,10 +67,16 @@ try {
   for (const [c] of COLUMNS) console.log(`  ${have.has(c) ? '✓ موجودة' : '✗ ناقصة '}  ${c}`);
   console.log(`\nقائمة المراحل: ${stageNeedsWidening ? '✗ تحتاج توسيع' : '✓ مكتملة'}`);
   console.log(`الفهارس الناقصة: ${missingIdx.length}`);
-  const [[{wonCount}]] = await conn.query("SELECT COUNT(*) AS wonCount FROM leads WHERE stage = 'won'");
-  console.log(`صفوف المرحلة won المتبقية: ${wonCount}`);
+  let pendingMoves = 0;
+  for (const [from] of STAGE_MOVES) {
+    const [[{n}]] = await conn.query('SELECT COUNT(*) AS n FROM leads WHERE stage = ?', [from]);
+    const count = Number(n);
+    pendingMoves += count;
+    if (count) console.log(`صفوف المرحلة ${from} المتبقية: ${count}`);
+  }
+  if (!pendingMoves) console.log('صفوف المراحل المستبدلة المتبقية: 0');
 
-  if (!missingCols.length && !missingIdx.length && !stageNeedsWidening && !Number(wonCount)) {
+  if (!missingCols.length && !missingIdx.length && !stageNeedsWidening && !pendingMoves) {
     console.log('\n✓ القاعدة محدّثة بالكامل. لا حاجة لأي تعديل.\n');
     process.exit(0);
   }
@@ -101,18 +107,19 @@ try {
     try { await conn.query(`ALTER TABLE leads ADD INDEX \`${name}\` ${def}`); console.log(`  + أُضيف الفهرس ${name}`); }
     catch (e) { console.log(`  · تُخطّي الفهرس ${name} (${e.code})`); }
   }
-  if (Number(wonCount)) {
-    const [wonRows] = await conn.query("SELECT id FROM leads WHERE stage = 'won'");
-    await conn.query("UPDATE leads SET stage = 'contract_signed' WHERE stage = 'won'");
-    for (const row of wonRows) {
+  for (const [from, to, note] of STAGE_MOVES) {
+    const [rows] = await conn.query('SELECT id FROM leads WHERE stage = ?', [from]);
+    if (!rows.length) continue;
+    await conn.query('UPDATE leads SET stage = ? WHERE stage = ?', [to, from]);
+    for (const row of rows) {
       try {
         await conn.query(
           'INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES (?,?,?,?,?)',
-          [crypto.randomUUID(), row.id, 'system', 'stage_changed', JSON.stringify({previousStage:'won', stage:'contract_signed', note:'تم اعتماد مرحلة وقع عقد'})],
+          [crypto.randomUUID(), row.id, 'system', 'stage_changed', JSON.stringify({previousStage: from, stage: to, note})],
         );
       } catch (e) { console.log(`  · تعذر تسجيل تاريخ المرحلة (${e.code || e.message})`); }
     }
-    console.log(`  ↻ نُقلت ${wonRows.length} صفوف من won إلى contract_signed`);
+    console.log(`  ↻ نُقلت ${rows.length} صفوف من ${from} إلى ${to}`);
   }
 
   // ── التحقق بعد التنفيذ ──

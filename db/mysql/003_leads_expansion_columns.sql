@@ -12,8 +12,9 @@
 -- Because the properties report reuses the same leads FROM clause, properties
 -- appear empty too even when data/properties.json holds every catalog entry.
 --
--- It also widens `stage`: lib/lead-input.ts defines 18 stage keys, while the
--- 001 ENUM accepts only 6, so saving any newer stage fails or truncates.
+-- It also widens `stage`: lib/lead-stages.ts `stageEnumValues` lists every key
+-- the CRM accepts, while the 001 ENUM accepts only 6, so saving any newer
+-- stage fails or truncates. Retired keys stay in the list.
 --
 -- SAFETY
 -- Idempotent: re-running changes nothing. Additive only: no column is dropped or
@@ -68,13 +69,15 @@ DROP PROCEDURE IF EXISTS sas_add_lead_column;
 UPDATE leads SET created_by = owner WHERE created_by = '';
 UPDATE leads SET source = 'manual' WHERE source = '';
 
--- Widen `stage` to the 18 keys in lib/lead-input.ts (001 allowed only 6).
--- Existing values are a strict subset, so no row can be invalidated.
+-- Widen `stage` to every key in lib/lead-stages.ts (001 allowed only 6).
+-- Existing values stay in the ENUM, in their original order, and new keys are
+-- appended so MySQL does not remap stored ENUM indexes.
 ALTER TABLE leads MODIFY COLUMN stage ENUM(
   'new','received','no_answer','contacted','data_received','calculation_done',
   'visit_qualified','property_visited','bank_approval','deposit_paid',
   'contract_signed','transferred','unqualified','not_interested',
-  'viewing','negotiation','won','closed'
+  'viewing','negotiation','won','closed',
+  'awaiting_offers','field_dispatch','bank_referred','postponed','properties_shown'
 ) NOT NULL DEFAULT 'new';
 
 -- Indexes that the report scope filters actually use.

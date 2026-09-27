@@ -1,7 +1,7 @@
 import {z} from 'zod';
 import properties from '../data/properties.json';
 import {leadSchema,stageKeys} from './lead-input';
-import {canonicalStage, stageLabel} from './lead-stages';
+import {canonicalStage, displayStage, stageLabel, stageWriteAllowed} from './lead-stages';
 
 export const importFields={
   name:'اسم العميل',
@@ -197,7 +197,8 @@ export function previewImport(rows:string[][],mapping:Mapping,existingPhones:str
   const stageCell=(mapped.stage||'').trim();
   if(stageCell){
    const resolved=canonicalStage(stageCell);
-   if(resolved&&(stageKeys as readonly string[]).includes(resolved))stage=resolved as (typeof stageKeys)[number];
+   const active=resolved&&stageWriteAllowed(resolved)?resolved:resolved?displayStage(resolved):'';
+   if(active&&stageWriteAllowed(active)&&(stageKeys as readonly string[]).includes(active))stage=active as (typeof stageKeys)[number];
    else warnings.push(`مرحلة غير معروفة «${stageCell}»؛ استُخدمت «${stageLabel('new')}» دون إنشاء مرحلة جديدة`);
   }
   const sourceRaw=(mapped.source||'').trim();

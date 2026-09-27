@@ -57,7 +57,15 @@ type DialogMode =
   | 'edit'
   | 'followup'
   | 'stage'
+  | 'dispatch'
+  | 'field-update'
   | null;
+
+type FieldEmployee = {
+  id: string;
+  name: string;
+  username?: string;
+};
 
 function valueOrDash(
   value?: string | null
@@ -154,6 +162,10 @@ function actionLabel(
       return 'تم تغيير المرحلة';
     case 'featured_changed':
       return 'تم تحديث تمييز العميل';
+    case 'field_dispatched':
+      return 'تفويج للميداني';
+    case 'field_update':
+      return 'تحديث ميداني';
     default:
       return action
         .replaceAll('_', ' ')
@@ -173,7 +185,26 @@ function getActivityNote(
     const followUp = activity.details.followUp;
     const stage = activity.details.stage;
     const previousStage = activity.details.previousStage;
+    const fieldAssignedName = activity.details.fieldAssignedName;
+    const dispatchedByName = activity.details.dispatchedByName;
     const parts: string[] = [];
+
+    if (activity.action === 'field_dispatched') {
+      const target =
+        typeof fieldAssignedName === 'string'
+          ? fieldAssignedName.trim()
+          : '';
+      const by =
+        typeof dispatchedByName === 'string'
+          ? dispatchedByName.trim()
+          : '';
+      if (target) {
+        parts.push(`تم التفويج إلى ${target}`);
+      }
+      if (by) {
+        parts.push(`بواسطة ${by}`);
+      }
+    }
 
     if (
       activity.action === 'stage_changed' &&
@@ -296,6 +327,18 @@ export default function LeadDetailsPage() {
     useState('new');
 
   const [stageNote, setStageNote] =
+    useState('');
+
+  const [fieldStaff, setFieldStaff] =
+    useState<FieldEmployee[]>([]);
+
+  const [fieldUserId, setFieldUserId] =
+    useState('');
+
+  const [dispatchNote, setDispatchNote] =
+    useState('');
+
+  const [fieldUpdateNote, setFieldUpdateNote] =
     useState('');
 
   const [saving, setSaving] =
@@ -573,6 +616,76 @@ export default function LeadDetailsPage() {
     }
   }
 
+  async function openDispatch() {
+    setDialogError('');
+    setDispatchNote('');
+    setFieldUserId(lead?.field_assigned_to || '');
+    setDialogMode('dispatch');
+    try {
+      const response = await fetch('/api/crm-users?field=1', {cache: 'no-store'});
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'تعذر تحميل الموظفين الميدانيين');
+      }
+      setFieldStaff(Array.isArray(result) ? result : []);
+    } catch (loadError) {
+      setFieldStaff([]);
+      setDialogError(loadError instanceof Error ? loadError.message : 'تعذر تحميل الموظفين الميدانيين');
+    }
+  }
+
+  async function saveDispatch(event: FormEvent) {
+    event.preventDefault();
+    if (!fieldUserId) {
+      setDialogError('حدد الموظف الميداني.');
+      return;
+    }
+    setSaving(true);
+    setDialogError('');
+    try {
+      const response = await fetch(`/api/leads/${params.id}/dispatch`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({fieldUserId, note: dispatchNote}),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'تعذر تفويج العميل');
+      setDialogMode(null);
+      setDispatchNote('');
+      await Promise.all([refresh(), refreshActivity()]);
+    } catch (saveError) {
+      setDialogError(saveError instanceof Error ? saveError.message : 'تعذر تفويج العميل');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveFieldUpdate(event: FormEvent) {
+    event.preventDefault();
+    if (fieldUpdateNote.trim().length < 2) {
+      setDialogError('اكتب ملاحظة الزيارة (حرفان على الأقل).');
+      return;
+    }
+    setSaving(true);
+    setDialogError('');
+    try {
+      const response = await fetch(`/api/leads/${params.id}/field-update`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({note: fieldUpdateNote}),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'تعذر حفظ التحديث الميداني');
+      setDialogMode(null);
+      setFieldUpdateNote('');
+      await Promise.all([refresh(), refreshActivity()]);
+    } catch (saveError) {
+      setDialogError(saveError instanceof Error ? saveError.message : 'تعذر حفظ التحديث الميداني');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (loading) {
     return (
       <main
@@ -623,6 +736,26 @@ export default function LeadDetailsPage() {
       </main>
     );
   }
+
+  const latestDispatch = activities.find(
+    item => item.action === 'field_dispatched'
+  );
+  const dispatchDetails =
+    latestDispatch?.details &&
+    typeof latestDispatch.details === 'object' &&
+    !Array.isArray(latestDispatch.details)
+      ? latestDispatch.details
+      : null;
+  const dispatchedByName =
+    typeof dispatchDetails?.dispatchedByName === 'string'
+      ? dispatchDetails.dispatchedByName
+      : '';
+  const fieldTimeline = activities.filter(
+    item =>
+      item.action === 'field_dispatched' ||
+      item.action === 'field_update' ||
+      item.role === 'field'
+  );
 
   return (
     <>
@@ -712,6 +845,30 @@ export default function LeadDetailsPage() {
                 </button>
               )}
 
+              {(role === 'admin' || role === 'supervisor' || role === 'sales') && (
+                <button
+                  type="button"
+                  onClick={() => {void openDispatch();}}
+                  className="rounded-xl border border-[#3F1A44]/20 bg-[#3F1A44]/5 px-4 py-2.5 text-sm font-semibold text-[#3F1A44] transition hover:bg-[#3F1A44]/10"
+                >
+                  تفويج للميداني
+                </button>
+              )}
+
+              {role === 'field' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDialogError('');
+                    setFieldUpdateNote('');
+                    setDialogMode('field-update');
+                  }}
+                  className="rounded-xl border border-[#3F1A44]/20 bg-[#3F1A44]/5 px-4 py-2.5 text-sm font-semibold text-[#3F1A44] transition hover:bg-[#3F1A44]/10"
+                >
+                  تحديث ميداني
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => {
@@ -771,6 +928,15 @@ export default function LeadDetailsPage() {
                 lead.field_assigned_name
               )}
             </div>
+            <div className="mt-2 text-sm text-slate-600">
+              تاريخ التفويج{' '}
+              {formatDateTime(latestDispatch?.created_at)}
+            </div>
+            {dispatchedByName && (
+              <div className="mt-1 text-sm text-slate-600">
+                بواسطة {dispatchedByName}
+              </div>
+            )}
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -902,6 +1068,57 @@ export default function LeadDetailsPage() {
                   )}
                 </p>
               </div>
+            </div>
+
+            <div className="rounded-3xl border border-[#3F1A44]/15 bg-white p-6 shadow-sm">
+              <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+                <h2 className="text-xl font-bold text-[#3F1A44]">
+                  متابعة الميداني
+                </h2>
+                <div className="text-sm text-slate-600">
+                  {lead.field_assigned_name
+                    ? lead.field_assigned_name
+                    : 'لم يُعيَّن موظف ميداني'}
+                  {' • '}
+                  {formatDateTime(latestDispatch?.created_at)}
+                </div>
+              </div>
+              {fieldTimeline.length ? (
+                <div className="space-y-0">
+                  {fieldTimeline.map((activity, index) => (
+                    <div key={activity.id} className="relative flex gap-4 pb-6 last:pb-0">
+                      {index < fieldTimeline.length - 1 && (
+                        <div className="absolute right-[7px] top-5 h-[calc(100%-8px)] w-px bg-slate-200" />
+                      )}
+                      <div className="relative z-10 mt-1.5 h-4 w-4 shrink-0 rounded-full border-4 border-white bg-[#3F1A44] shadow-sm" />
+                      <div className="min-w-0 flex-1 rounded-2xl bg-slate-50 p-4">
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <div className="font-semibold text-slate-900">
+                              {actionLabel(activity.action)}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {activity.user_name || activity.username || 'النظام'}
+                              {' • '}
+                              {roleLabel(activity.role)}
+                            </div>
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {formatDateTime(activity.created_at)}
+                          </div>
+                        </div>
+                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                          {getActivityNote(activity)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">
+                  لا توجد تحديثات ميدانية بعد.
+                </p>
+              )}
             </div>
 
             <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -1268,6 +1485,97 @@ export default function LeadDetailsPage() {
                 {saving
                   ? 'جارٍ الحفظ...'
                   : 'حفظ المرحلة'}
+              </button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={dialogMode === 'dispatch'}
+        onOpenChange={open => {
+          if (!open) {
+            setDialogMode(null);
+            setDialogError('');
+          }
+        }}
+      >
+        <DialogContent dir="rtl" className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>تفويج للميداني</DialogTitle>
+            <DialogDescription>
+              اختر الموظف الميداني. تُحدَّث المرحلة إلى تفويج للميداني ويصله إشعار بالعميل.
+            </DialogDescription>
+          </DialogHeader>
+          <form className="space-y-5" onSubmit={saveDispatch}>
+            <div>
+              <label className="mb-2 block text-sm font-medium">الموظف الميداني</label>
+              <select
+                value={fieldUserId}
+                onChange={event => setFieldUserId(event.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none focus:border-[#3F1A44]"
+              >
+                <option value="">اختر الموظف</option>
+                {fieldStaff.map(employee => (
+                  <option key={employee.id} value={employee.id}>
+                    {employee.name || employee.username}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-2 block text-sm font-medium">ملاحظة للميداني</label>
+              <textarea
+                rows={4}
+                value={dispatchNote}
+                onChange={event => setDispatchNote(event.target.value)}
+                placeholder="مثال: العميل يفضل المعاينة مساءً..."
+                className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#3F1A44]"
+              />
+            </div>
+            {dialogError && <p className="text-sm text-red-600">{dialogError}</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setDialogMode(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold">إلغاء</button>
+              <button type="submit" disabled={saving || !fieldStaff.length} className="rounded-xl bg-[#3F1A44] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60">
+                {saving ? 'جارٍ التفويج...' : 'تفويج للميداني'}
+              </button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={dialogMode === 'field-update'}
+        onOpenChange={open => {
+          if (!open) {
+            setDialogMode(null);
+            setDialogError('');
+          }
+        }}
+      >
+        <DialogContent dir="rtl" className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>تحديث ميداني</DialogTitle>
+            <DialogDescription>
+              سجّل ملاحظة الزيارة أو مستجدات الميدان. تظهر للمبيعات في متابعة العميل.
+            </DialogDescription>
+          </DialogHeader>
+          <form className="space-y-5" onSubmit={saveFieldUpdate}>
+            <div>
+              <label className="mb-2 block text-sm font-medium">ملاحظة الزيارة</label>
+              <textarea
+                rows={5}
+                value={fieldUpdateNote}
+                onChange={event => setFieldUpdateNote(event.target.value)}
+                placeholder="مثال: تمت معاينة العقار مع العميل وطلب صور إضافية..."
+                className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#3F1A44]"
+              />
+            </div>
+            {dialogError && <p className="text-sm text-red-600">{dialogError}</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setDialogMode(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold">إلغاء</button>
+              <button type="submit" disabled={saving} className="rounded-xl bg-[#3F1A44] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60">
+                {saving ? 'جارٍ الحفظ...' : 'حفظ التحديث'}
               </button>
             </div>
           </form>
