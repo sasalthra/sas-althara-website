@@ -25,7 +25,7 @@ import LeadForm, {
 } from '@/app/lead-form';
 import {formatRiyadhDate, riyadhDayKey} from '@/lib/lead-dates';
 import {canToggleFeatured, compareClients, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
-import {stageLabel} from '@/lib/lead-stages';
+import {displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 
 import {
   Tabs,
@@ -155,6 +155,9 @@ export default function CRM({
   const [q, setQ] =
     useState('');
 
+  const [stageFilter, setStageFilter] =
+    useState('');
+
   const [leadView, setLeadView] =
     useState<'all' | 'followups'>('all');
 
@@ -260,6 +263,10 @@ export default function CRM({
         return false;
       }
 
+      if (stageFilter && displayStage(lead.stage) !== stageFilter) {
+        return false;
+      }
+
       const property =
         data.find(
           property =>
@@ -336,6 +343,21 @@ export default function CRM({
                     </p>
                   ) : null}
                 </div>
+
+                <label className="w-full lg:w-56">
+                  <span className="mb-1 block text-sm text-black">المرحلة</span>
+                  <select
+                    aria-label="تصفية المرحلة"
+                    value={stageFilter}
+                    onChange={event => setStageFilter(event.target.value)}
+                    className="w-full rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-black"
+                  >
+                    <option value="">كل المراحل</option>
+                    {stageChoices().map(([key, label]) => (
+                      <option key={key} value={key}>{label}</option>
+                    ))}
+                  </select>
+                </label>
 
                 <label className="search w-full lg:w-[420px]">
                   <input

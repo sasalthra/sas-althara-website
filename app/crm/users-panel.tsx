@@ -28,6 +28,9 @@ export default function UsersPanel() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState({email: '', phone: ''});
+  const [contactSaving, setContactSaving] = useState(false);
 
   const [form, setForm] = useState({
     username: '',
@@ -117,6 +120,59 @@ export default function UsersPanel() {
       );
     } finally {
       setSaving(false);
+    }
+  }
+
+  function startEdit(user: CrmUser) {
+    setEditing(user.id);
+    setDraft({
+      email: user.email || '',
+      phone: user.phone || '',
+    });
+    setError('');
+    setSuccess('');
+  }
+
+  async function saveContact(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editing) return;
+
+    setContactSaving(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const response = await fetch('/api/crm-users', {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          id: editing,
+          email: draft.email,
+          phone: draft.phone,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'تعذر حفظ بيانات التواصل');
+      }
+
+      setUsers(current =>
+        current.map(user =>
+          user.id === editing
+            ? {...user, email: data.email || '', phone: data.phone || ''}
+            : user
+        )
+      );
+      setEditing(null);
+      setSuccess('تم تحديث البريد والجوال');
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : 'تعذر حفظ بيانات التواصل'
+      );
+    } finally {
+      setContactSaving(false);
     }
   }
 
@@ -274,17 +330,29 @@ export default function UsersPanel() {
           المستخدمون
         </h2>
 
+        {error ? (
+          <p className="mb-3 text-sm text-red-600" role="alert">
+            {error}
+          </p>
+        ) : null}
+        {success ? (
+          <p className="mb-3 text-sm text-[#3F1A44]" role="status">
+            {success}
+          </p>
+        ) : null}
+
         {loading ? (
           <p>جاري تحميل المستخدمين...</p>
         ) : users.length ? (
-          <div className="overflow-x-auto">
+          <form onSubmit={saveContact} className="overflow-x-auto">
             <table className="w-full text-right">
               <thead>
                 <tr className="border-b">
                   <th className="p-3">الاسم</th>
                   <th className="p-3">اسم المستخدم</th>
-                  <th className="p-3">الدور</th>
+                  <th className="p-3">البريد الإلكتروني</th>
                   <th className="p-3">الجوال</th>
+                  <th className="p-3">الدور</th>
                   <th className="p-3">الحالة</th>
                   <th className="p-3">الموظف</th>
                 </tr>
@@ -304,12 +372,36 @@ export default function UsersPanel() {
                       {user.username}
                     </td>
 
-                    <td className="p-3">
-                      {roleLabels[user.role]}
+                    <td className="p-3" dir="ltr">
+                      {editing === user.id ? (
+                        <input
+                          type="email"
+                          aria-label={`بريد ${user.name}`}
+                          value={draft.email}
+                          onChange={event => setDraft({...draft, email: event.target.value})}
+                          className="w-full min-w-48 rounded-lg border border-[#d1d5db] bg-white px-2 py-1 text-black"
+                        />
+                      ) : (
+                        user.email || '—'
+                      )}
                     </td>
 
                     <td className="p-3" dir="ltr">
-                      {user.phone || '-'}
+                      {editing === user.id ? (
+                        <input
+                          aria-label={`جوال ${user.name}`}
+                          value={draft.phone}
+                          onChange={event => setDraft({...draft, phone: event.target.value})}
+                          placeholder="05xxxxxxxx"
+                          className="w-full min-w-36 rounded-lg border border-[#d1d5db] bg-white px-2 py-1 text-black"
+                        />
+                      ) : (
+                        user.phone || '—'
+                      )}
+                    </td>
+
+                    <td className="p-3">
+                      {roleLabels[user.role]}
                     </td>
 
                     <td className="p-3">
@@ -317,12 +409,30 @@ export default function UsersPanel() {
                         ? 'نشط'
                         : 'موقوف'}
                     </td>
-                    <td className="p-3"><CrmLink className="crm-button" href={`/crm?tab=hr&hr=employees&employee=${encodeURIComponent(user.id)}`}>الملف الوظيفي</CrmLink></td>
+                    <td className="p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <CrmLink className="crm-button" href={`/crm?tab=hr&hr=employees&employee=${encodeURIComponent(user.id)}`}>الملف الوظيفي</CrmLink>
+                        {editing === user.id ? (
+                          <>
+                            <button type="submit" className="primary" disabled={contactSaving}>
+                              {contactSaving ? 'جارٍ الحفظ...' : 'حفظ'}
+                            </button>
+                            <button type="button" className="crm-button" onClick={() => setEditing(null)} disabled={contactSaving}>
+                              إلغاء
+                            </button>
+                          </>
+                        ) : (
+                          <button type="button" className="crm-button" onClick={() => startEdit(user)}>
+                            تعديل البريد والجوال
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </form>
         ) : (
           <p>لا يوجد مستخدمون.</p>
         )}

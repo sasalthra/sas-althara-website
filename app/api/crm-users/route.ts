@@ -3,6 +3,7 @@ import {z} from 'zod';
 
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
+import {parseUserEmail, parseUserPhone} from '@/lib/user-contact';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -30,7 +31,6 @@ const createUserSchema = z.object({
   email: z
     .string()
     .trim()
-    .email()
     .max(190)
     .optional()
     .or(z.literal('')),
@@ -38,7 +38,7 @@ const createUserSchema = z.object({
   phone: z
     .string()
     .trim()
-    .max(30)
+    .max(40)
     .optional()
     .or(z.literal('')),
 
@@ -49,6 +49,34 @@ const createUserSchema = z.object({
     'field',
   ]),
 });
+
+const updateContactSchema = z.object({
+  id: z.string().trim().min(1).max(255),
+  email: z.string().max(190),
+  phone: z.string().max(40),
+});
+
+function sameOrigin(req: Request) {
+  return Boolean(
+    process.env.NEXTAUTH_URL &&
+      req.headers.get('origin') === new URL(process.env.NEXTAUTH_URL).origin
+  );
+}
+
+async function emailTaken(email: string, exceptId?: string) {
+  if (!email) return false;
+  const row = await crmDb()
+    .prepare(`
+      SELECT id
+      FROM crm_users
+      WHERE LOWER(email) = ?
+        AND id <> ?
+      LIMIT 1
+    `)
+    .bind(email, exceptId || '')
+    .first<{id: string}>();
+  return Boolean(row);
+}
 
 function reply(
   body: unknown,
@@ -228,13 +256,7 @@ export async function POST(
     );
   }
 
-  if (
-    !process.env.NEXTAUTH_URL ||
-    req.headers.get('origin') !==
-      new URL(
-        process.env.NEXTAUTH_URL
-      ).origin
-  ) {
+  if (!sameOrigin(req)) {
     return reply(
       {error: 'طلب غير مسموح'},
       403
@@ -266,9 +288,17 @@ export async function POST(
   }
 
   const input = parsed.data;
+  const email = parseUserEmail(input.email || '');
+  const phone = parseUserPhone(input.phone || '');
+  if (!email.ok) return reply({error: email.error}, 400);
+  if (!phone.ok) return reply({error: phone.error}, 400);
 
   try {
     const db = crmDb();
+
+    if (await emailTaken(email.value)) {
+      return reply({error: 'هذا البريد مستخدم لحساب آخر'}, 409);
+    }
 
     const existing = await db
       .prepare(`
@@ -318,8 +348,8 @@ export async function POST(
         input.username,
         passwordHash,
         input.name,
-        input.email || '',
-        input.phone || '',
+        email.value,
+        phone.value,
         input.role
       )
       .run();
@@ -344,5 +374,69 @@ export async function POST(
       },
       503
     );
+  }
+}
+
+export async function PATCH(req: Request) {
+  const user = await getCrmUser();
+
+  if (!user) {
+    return reply({error: 'يجب تسجيل الدخول'}, 401);
+  }
+
+  if (user.role !== 'admin') {
+    return reply({error: 'غير مسموح لك بإدارة المستخدمين'}, 403);
+  }
+
+  if (!sameOrigin(req)) {
+    return reply({error: 'طلب غير مسموح'}, 403);
+  }
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return reply({error: 'بيانات غير صالحة'}, 400);
+  }
+
+  const parsed = updateContactSchema.safeParse(body);
+  if (!parsed.success) {
+    return reply({error: 'راجع البريد الإلكتروني ورقم الجوال'}, 400);
+  }
+
+  const email = parseUserEmail(parsed.data.email);
+  const phone = parseUserPhone(parsed.data.phone);
+  if (!email.ok) return reply({error: email.error}, 400);
+  if (!phone.ok) return reply({error: phone.error}, 400);
+
+  try {
+    const db = crmDb();
+    const current = await db
+      .prepare(`SELECT id FROM crm_users WHERE id = ? LIMIT 1`)
+      .bind(parsed.data.id)
+      .first<{id: string}>();
+
+    if (!current) {
+      return reply({error: 'المستخدم غير موجود'}, 404);
+    }
+
+    if (await emailTaken(email.value, parsed.data.id)) {
+      return reply({error: 'هذا البريد مستخدم لحساب آخر'}, 409);
+    }
+
+    await db
+      .prepare(`UPDATE crm_users SET email = ?, phone = ? WHERE id = ?`)
+      .bind(email.value, phone.value, parsed.data.id)
+      .run();
+
+    return reply({
+      ok: true,
+      id: parsed.data.id,
+      email: email.value,
+      phone: phone.value,
+    });
+  } catch (error) {
+    console.error('Failed to update CRM user contact:', error);
+    return reply({error: 'تعذر حفظ البريد أو الجوال'}, 503);
   }
 }

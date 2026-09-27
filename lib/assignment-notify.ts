@@ -15,6 +15,7 @@ import {sendMail} from './mail';
 
 type CrmPerson = AssignmentEmployee & {role: string};
 
+/** Recipient addresses are read from crm_users here, at send time, never from the session. */
 async function loadPeople(assigneeIds: string[]): Promise<CrmPerson[]> {
   const uniqueIds = [...new Set(assigneeIds.filter(Boolean))];
   const placeholders = uniqueIds.map(() => '?').join(',');

@@ -190,6 +190,26 @@ export const authOptions: NextAuthOptions = {
         token.crmName = allowed ? 'Administrator' : null;
       }
 
+      // Credentials login is by username. The address on the token is only a
+      // copy from sign-in, so refresh it from crm_users before the session is read.
+      // Mail is not sent from this copy; assignment mail reads crm_users at send time.
+      if (!account && typeof token.crmUserId === 'string' && !token.crmUserId.startsWith('google:')) {
+        try {
+          const row = await crmDb()
+            .prepare(`
+              SELECT email
+              FROM crm_users
+              WHERE id = ?
+              LIMIT 1
+            `)
+            .bind(token.crmUserId)
+            .first<{email: string | null}>();
+          if (row) token.email = row.email?.trim() || null;
+        } catch (error) {
+          console.error('session email refresh failed', error);
+        }
+      }
+
       return token;
     },
 
@@ -204,7 +224,12 @@ export const authOptions: NextAuthOptions = {
             typeof token.crmName === 'string'
               ? token.crmName
               : session.user?.name,
-          email: session.user?.email,
+          email:
+            token.email === undefined
+              ? session.user?.email
+              : typeof token.email === 'string'
+                ? token.email
+                : null,
         };
 
         const crmSession = session as typeof session & {

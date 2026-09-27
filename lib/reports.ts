@@ -1,5 +1,5 @@
 import {reportCatalog,type ReportColumn,type ReportResult,type ReportRow,type ReportId} from './report-catalog';
-import {retiredStageMap, stageLabel, stageMatchKeys} from './lead-stages';
+import {retiredStageMap, stageLabel, stageMatchKeys, stagePipelineIndex} from './lead-stages';
 export class ReportError extends Error {constructor(public status:number,message:string){super(message);}}
 type Actor={userId:string;role:string};
 type Database={prepare(sql:string):{bind(...args:(string|number|null)[]):{all():Promise<{results:Record<string,unknown>[]}>}}};
@@ -85,7 +85,7 @@ export async function readReport(db:Database,user:Actor,id:string,f:ReportFilter
  const metrics:ReportResult['metrics']=[];
  const rows:ReportRow[]=raw.results.map(record=>{
   const r={...record};
-  if(typeof r.stage==='string'&&retiredStageMap[r.stage])r.stage=stageLabel(r.stage);
+  if(typeof r.stage==='string'&&r.stage)r.stage=stageLabel(r.stage);
   if(id==='transactions'){const data=object(r.data);for(const [key] of specs.transactions.columns)if(key in data)r[key]=data[key];r.companyDebt=data.debtPayer==='company'?data.debtSettlement:null;r.clientDebt=data.debtPayer==='client'?data.debtSettlement:null;}
   if(id==='followups'){const today=riyadhDay(now),days=Math.round((Date.parse(today+'T00:00:00Z')-Date.parse(String(r.follow_up)+'T00:00:00Z'))/86400000);r.follow_up_age=days<0?'قادمة':days===0?'اليوم':days<=7?'متأخرة 1–7 أيام':days<=30?'متأخرة 8–30 يوماً':'متأخرة أكثر من 30 يوماً';}
   if(id==='attendance'){const ms=r.check_out?Date.parse(String(r.check_out))-Date.parse(String(r.check_in)):NaN;r.hours=Number.isFinite(ms)&&ms>=0?(ms/3600000).toFixed(2):null;}
@@ -102,7 +102,7 @@ export async function readReport(db:Database,user:Actor,id:string,f:ReportFilter
  if(id==='requests')metrics.push({label:'الطلبات المفتوحة حالياً',value:rows.filter(r=>r.status==='pending').length},{label:'طلبات الإجازة ضمن الفترة',value:rows.filter(r=>r.type==='leave').length});
  if(id==='ai'){if(rows.length===0)throw new ReportError(404,'لا توجد بيانات استخدام AI محفوظة ضمن الفترة؛ الاستخدام والتكلفة غير متاحين.');metrics.push({label:'محاولات الطلبات المسجلة',value:rows.reduce((n,r)=>n+Number(r.requests||0),0)});}
  if(id==='imports')metrics.push({label:'الصفوف المقبولة المسجلة في التشغيلات',value:rows.reduce((n,r)=>n+Number(r.inserted||0),0)});
- const groups:ReportResult['groups']={};for(const key of spec.groups||[]){const counts=new Map<string,number>();for(const r of rows){const label=String(r[key]??'غير محدد');counts.set(label,(counts.get(label)||0)+1);}groups[key]=Array.from(counts,([label,count])=>({label,count})).sort((a,b)=>b.count-a.count||a.label.localeCompare(b.label));}
+ const groups:ReportResult['groups']={};for(const key of spec.groups||[]){const counts=new Map<string,number>();for(const r of rows){const label=String(r[key]??'غير محدد');counts.set(label,(counts.get(label)||0)+1);}groups[key]=Array.from(counts,([label,count])=>({label,count})).sort((a,b)=>{if(key==='stage'){const order=stagePipelineIndex(a.label)-stagePipelineIndex(b.label);if(order)return order;}return b.count-a.count||a.label.localeCompare(b.label,'ar');});}
  // Trend is derived from the same authorized rows, bucketed by the module's own Riyadh-local date basis. No extra query, no extra scope.
  const trend=buildTrend(spec,id,raw.results,f);
  return {...meta,columns:spec.columns.map(([key,label])=>({key,label})),rows:options.exporting?rows:rows.slice((f.page-1)*f.pageSize,f.page*f.pageSize),total:rows.length,page:f.page,pageSize:f.pageSize,groups,metrics,...(trend?{trend}:{}),generatedAt:now.toISOString()};
@@ -185,7 +185,7 @@ export async function readClientsSnapshot(db:Database,user:Actor,f:Pick<ReportFi
  const counts=new Map<string,number>();
  for(const row of result.results){const raw=String(row.stage??'');const stage=retiredStageMap[raw]||raw;counts.set(stage,(counts.get(stage)||0)+1);}
  const total=result.results.length,notInterested=counts.get('not_interested')||0;
- const byStage=Array.from(counts,([stage,count])=>({stage,label:stageLabel(stage),count})).sort((a,b)=>b.count-a.count||a.label.localeCompare(b.label,'ar'));
+ const byStage=Array.from(counts,([stage,count])=>({stage,label:stageLabel(stage),count})).sort((a,b)=>stagePipelineIndex(a.stage)-stagePipelineIndex(b.stage)||b.count-a.count||a.label.localeCompare(b.label,'ar'));
  return {total,interested:total-notInterested,notInterested,byStage};
 }
 export async function readReportSnapshots(db:Database,user:Actor,f:Pick<ReportFilters,'employee'>,properties:Record<string,unknown>[],mapError:(error:unknown)=>string):Promise<ReportSnapshots>{

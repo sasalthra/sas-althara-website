@@ -9,19 +9,17 @@ const activeStageEntries = [
   ['new', 'عميل جديد'],
   ['no_answer', 'لم يتم الرد'],
   ['contacted', 'تم التواصل'],
-  ['calculation_done', 'تم عمل حسبة للعميل'],
   ['awaiting_offers', 'بانتظار العروض'],
   ['field_dispatch', 'تفويج للميداني'],
   ['property_visited', 'تم زيارة العقار'],
+  ['negotiation', 'تفاوض'],
   ['bank_referred', 'تمت إحالة معاملة العميل للبنك'],
-  ['bank_approval', 'مؤهل بانتظار موافقة البنك'],
   ['deposit_paid', 'دفع عربون'],
   ['contract_signed', 'وقع عقد'],
   ['transferred', 'إفراغ'],
   ['postponed', 'تم تأجيل الطلب - للمتابعة'],
   ['unqualified', 'غير مؤهل'],
   ['not_interested', 'غير مهتم'],
-  ['negotiation', 'تفاوض'],
   ['closed', 'مغلق'],
 ] as const;
 
@@ -69,6 +67,10 @@ export const retiredStageMap: Record<string, string> = {
   'تم عرض العقارات': 'awaiting_offers',
   viewing: 'field_dispatch',
   visit_qualified: 'field_dispatch',
+  calculation_done: 'contacted',
+  'تم عمل حسبة للعميل': 'contacted',
+  bank_approval: 'bank_referred',
+  'مؤهل بانتظار موافقة البنك': 'bank_referred',
 };
 
 export const retiredStageMoves: ReadonlyArray<{from: string; to: string; note: string}> = [
@@ -79,6 +81,10 @@ export const retiredStageMoves: ReadonlyArray<{from: string; to: string; note: s
   {from: 'تم عرض العقارات', to: 'awaiting_offers', note: 'تم اعتماد مرحلة بانتظار العروض'},
   {from: 'viewing', to: 'field_dispatch', note: 'تم اعتماد مرحلة تفويج للميداني'},
   {from: 'visit_qualified', to: 'field_dispatch', note: 'تم اعتماد مرحلة تفويج للميداني'},
+  {from: 'calculation_done', to: 'contacted', note: 'تم اعتماد مرحلة تم التواصل'},
+  {from: 'تم عمل حسبة للعميل', to: 'contacted', note: 'تم اعتماد مرحلة تم التواصل'},
+  {from: 'bank_approval', to: 'bank_referred', note: 'تم اعتماد مرحلة تمت إحالة معاملة العميل للبنك'},
+  {from: 'مؤهل بانتظار موافقة البنك', to: 'bank_referred', note: 'تم اعتماد مرحلة تمت إحالة معاملة العميل للبنك'},
 ];
 
 /** Stages staff can assign. Retired values, including `won`, are never choices. */
@@ -113,8 +119,8 @@ export const stageAliasGroups: Record<string, string[]> = {
     'تم التواصل', 'تواصل', 'تم الاتصال', 'اتصال', 'contacted', 'contact',
     'تم استلام العميل', 'استلام العميل', 'مستلم', 'استلام', 'received',
     'تم استلام بيانات العميل', 'استلام بيانات', 'بيانات مستلمة', 'data received', 'data_received',
+    'تم عمل حسبة للعميل', 'تم عمل حسبة', 'حسبة', 'حسبه', 'حسابه', 'calculation', 'calculation_done',
   ],
-  calculation_done: ['تم عمل حسبة للعميل', 'تم عمل حسبة', 'حسبة', 'حسبه', 'حسابه', 'calculation'],
   awaiting_offers: [
     'بانتظار العروض', 'بنتظار العروض', 'في انتظار العروض', 'انتظار العروض', 'انتظار العرض',
     'تم عرض العقارات', 'عرض العقارات', 'تم عرض العقار', 'عرض العقار',
@@ -131,8 +137,8 @@ export const stageAliasGroups: Record<string, string[]> = {
     'تمت إحالة معاملة العميل للبنك', 'إحالة معاملة العميل للبنك', 'احالة معاملة العميل للبنك',
     'إحالة للبنك', 'احالة للبنك', 'تمت الاحالة للبنك', 'تحويل للبنك',
     'bank referral', 'bank_referred', 'referred to bank',
+    'مؤهل بانتظار موافقة البنك', 'موافقة البنك', 'انتظار البنك', 'بانتظار موافقة البنك', 'bank approval', 'bank_approval',
   ],
-  bank_approval: ['مؤهل بانتظار موافقة البنك', 'موافقة البنك', 'انتظار البنك', 'بانتظار موافقة البنك', 'bank approval'],
   deposit_paid: ['دفع عربون', 'عربون', 'تم دفع العربون', 'deposit'],
   contract_signed: ['وقع عقد', 'توقيع عقد', 'تم توقيع العقد', 'عقد موقع', 'signed', 'مكسب', 'رابح', 'تم البيع', 'مباع', 'won', 'sold'],
   transferred: ['إفراغ', 'افراغ', 'تم الافراغ', 'transferred'],
@@ -192,6 +198,17 @@ for (const key of Object.keys(stageAliasGroups)) {
   const label = stageLabels[key];
   if (label) stageLookup[foldStageText(label)] = key;
   for (const alias of stageAliasGroups[key] || []) stageLookup[foldStageText(alias)] = key;
+}
+
+/** Pipeline position for dropdowns, filters, and reports. Unknown values sort last. */
+export function stagePipelineIndex(value: string): number {
+  const text = value.trim();
+  if (!text) return activeStageEntries.length + 1;
+  const direct = activeStageEntries.findIndex(([key, label]) => key === text || label === text);
+  if (direct >= 0) return direct;
+  const key = displayStage(canonicalStage(text) || text);
+  const mapped = activeStageEntries.findIndex(([stageKey]) => stageKey === key);
+  return mapped >= 0 ? mapped : activeStageEntries.length + 1;
 }
 
 /** Map a spreadsheet cell onto a current stage key, or null if unknown. Never invents keys. */

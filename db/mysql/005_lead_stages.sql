@@ -62,3 +62,31 @@ SELECT UUID(), id, 'system', 'stage_changed',
 FROM leads
 WHERE stage = 'visit_qualified';
 UPDATE leads SET stage = 'field_dispatch' WHERE stage = 'visit_qualified';
+
+INSERT INTO lead_activity (id, lead_id, user_id, action, details)
+SELECT UUID(), id, 'system', 'stage_changed',
+  JSON_OBJECT('previousStage', 'calculation_done', 'stage', 'contacted', 'note', 'تم اعتماد مرحلة تم التواصل')
+FROM leads
+WHERE stage = 'calculation_done';
+UPDATE leads SET stage = 'contacted' WHERE stage = 'calculation_done';
+
+INSERT INTO lead_activity (id, lead_id, user_id, action, details)
+SELECT UUID(), id, 'system', 'stage_changed',
+  JSON_OBJECT('previousStage', 'تم عمل حسبة للعميل', 'stage', 'contacted', 'note', 'تم اعتماد مرحلة تم التواصل')
+FROM leads
+WHERE stage = 'تم عمل حسبة للعميل';
+UPDATE leads SET stage = 'contacted' WHERE stage = 'تم عمل حسبة للعميل';
+
+INSERT INTO lead_activity (id, lead_id, user_id, action, details)
+SELECT UUID(), id, 'system', 'stage_changed',
+  JSON_OBJECT('previousStage', 'bank_approval', 'stage', 'bank_referred', 'note', 'تم اعتماد مرحلة تمت إحالة معاملة العميل للبنك')
+FROM leads
+WHERE stage = 'bank_approval';
+UPDATE leads SET stage = 'bank_referred' WHERE stage = 'bank_approval';
+
+INSERT INTO lead_activity (id, lead_id, user_id, action, details)
+SELECT UUID(), id, 'system', 'stage_changed',
+  JSON_OBJECT('previousStage', 'مؤهل بانتظار موافقة البنك', 'stage', 'bank_referred', 'note', 'تم اعتماد مرحلة تمت إحالة معاملة العميل للبنك')
+FROM leads
+WHERE stage = 'مؤهل بانتظار موافقة البنك';
+UPDATE leads SET stage = 'bank_referred' WHERE stage = 'مؤهل بانتظار موافقة البنك';

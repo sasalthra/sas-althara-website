@@ -98,7 +98,7 @@ try {
   assert.equal(althara[2].lead.propertyOther,'غير محدد');
   assert.equal(althara[3].lead.phone,'+966568399159');
   assert.equal(althara[4].lead.phone,'+966561619056');
-  assert.equal(althara[4].lead.stage,'calculation_done');
+  assert.equal(althara[4].lead.stage,'contacted');
   assert.equal(althara[5].lead.stage,'new');
   assert.match(althara[5].warnings[0],/مرحلة غير معروفة/);
   assert.equal(althara[5].lead.propertyOther,'غير محدد');
@@ -148,10 +148,23 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
   assert.equal(rules.stageWriteAllowed('contract_signed','won'),true);
   const choiceLabels=rules.stageChoices().map(([,label])=>label);
   assert.deepEqual(choiceLabels,[
-    'عميل جديد','لم يتم الرد','تم التواصل','تم عمل حسبة للعميل','بانتظار العروض','تفويج للميداني',
-    'تم زيارة العقار','تمت إحالة معاملة العميل للبنك','مؤهل بانتظار موافقة البنك','دفع عربون','وقع عقد','إفراغ',
-    'تم تأجيل الطلب - للمتابعة','غير مؤهل','غير مهتم','تفاوض','مغلق',
+    'عميل جديد','لم يتم الرد','تم التواصل','بانتظار العروض','تفويج للميداني','تم زيارة العقار','تفاوض',
+    'تمت إحالة معاملة العميل للبنك','دفع عربون','وقع عقد','إفراغ','تم تأجيل الطلب - للمتابعة','غير مؤهل','غير مهتم','مغلق',
   ]);
+  assert.equal(choiceLabels.includes('تم عمل حسبة للعميل'),false);
+  assert.equal(choiceLabels.includes('مؤهل بانتظار موافقة البنك'),false);
+  assert.equal(rules.canonicalStage('حسبه'),'contacted');
+  assert.equal(rules.canonicalStage('تم عمل حسبة للعميل'),'contacted');
+  assert.equal(rules.canonicalStage('calculation_done'),'contacted');
+  assert.equal(rules.canonicalStage('مؤهل بانتظار موافقة البنك'),'bank_referred');
+  assert.equal(rules.canonicalStage('bank_approval'),'bank_referred');
+  assert.equal(rules.stageLabel('calculation_done'),'تم التواصل');
+  assert.equal(rules.stageLabel('bank_approval'),'تمت إحالة معاملة العميل للبنك');
+  assert.equal(rules.editableStage('calculation_done'),'contacted');
+  assert.equal(rules.editableStage('bank_approval'),'bank_referred');
+  assert.equal(rules.stageWriteAllowed('calculation_done'),false);
+  assert.equal(rules.stageWriteAllowed('bank_approval'),false);
+  assert.equal(rules.stageChoices().some(([key])=>key==='calculation_done'||key==='bank_approval'),false);
   for(const label of ['تم استلام العميل','تم استلام بيانات العميل','تم عرض العقارات','معاينة','مؤهل زيارة','مؤهل زيارة العقار']){
     assert.equal(choiceLabels.includes(label),false,label);
   }
@@ -235,7 +248,7 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
   const {ensureLeadSchema,resetLeadSchemaCache}=createRequire(import.meta.url)(join(output,'lead-schema.cjs'));
   function sqliteExecutor(db){return {async execute(sql,values=[]){const text=String(sql).trim();if(text.startsWith('SHOW'))throw Error('near SHOW: syntax error');if(text.startsWith('SELECT'))return [db.prepare(text).all(...values)];return [{affectedRows:Number(db.prepare(text).run(...values).changes)}];}};}
   const mem=new DatabaseSync(':memory:');
-  mem.exec("CREATE TABLE leads(id TEXT PRIMARY KEY, stage TEXT, created_at TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP); INSERT INTO leads VALUES ('w1','won','2020-01-01'),('n1','new','2026-01-01'),('r1','received','2020-01-01'),('d1','data_received','2020-01-01'),('p1','properties_shown','2020-01-01'),('a1','تم عرض العقارات','2020-01-01'),('v1','viewing','2020-01-01'),('q1','visit_qualified','2020-01-01');");
+  mem.exec("CREATE TABLE leads(id TEXT PRIMARY KEY, stage TEXT, created_at TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP); INSERT INTO leads VALUES ('w1','won','2020-01-01'),('n1','new','2026-01-01'),('r1','received','2020-01-01'),('d1','data_received','2020-01-01'),('p1','properties_shown','2020-01-01'),('a1','تم عرض العقارات','2020-01-01'),('v1','viewing','2020-01-01'),('q1','visit_qualified','2020-01-01'),('c1','calculation_done','2020-01-01'),('b1','bank_approval','2020-01-01'),('h1','تم عمل حسبة للعميل','2020-01-01'),('k1','مؤهل بانتظار موافقة البنك','2020-01-01');");
   resetLeadSchemaCache();
   const repaired=await ensureLeadSchema(sqliteExecutor(mem));
   assert.equal(repaired.featured,true);
@@ -248,6 +261,16 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
   assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='v1'").get().stage,'field_dispatch');
   assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='q1'").get().stage,'field_dispatch');
   assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='n1'").get().stage,'new');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='c1'").get().stage,'contacted');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='h1'").get().stage,'contacted');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='b1'").get().stage,'bank_referred');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='k1'").get().stage,'bank_referred');
+  const calcHistory=mem.prepare("SELECT details FROM lead_activity WHERE lead_id='c1'").get();
+  assert.match(calcHistory.details,/contacted/);
+  assert.match(calcHistory.details,/تم اعتماد مرحلة تم التواصل/);
+  const bankHistory=mem.prepare("SELECT details FROM lead_activity WHERE lead_id='b1'").get();
+  assert.match(bankHistory.details,/bank_referred/);
+  assert.match(bankHistory.details,/تمت إحالة معاملة العميل للبنك/);
   const history=mem.prepare("SELECT user_id, action, details FROM lead_activity WHERE lead_id='w1'").all();
   assert.equal(history.length,1);
   assert.equal(history[0].user_id,'system');
@@ -257,11 +280,11 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
   const viewingHistory=mem.prepare("SELECT details FROM lead_activity WHERE lead_id='v1'").get();
   assert.match(viewingHistory.details,/field_dispatch/);
   assert.match(viewingHistory.details,/تم اعتماد مرحلة تفويج للميداني/);
-  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM lead_activity').get().n,7,'one history row per converted lead');
+  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM lead_activity').get().n,11,'one history row per converted lead');
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='leads_featured_idx'").all().length,1);
   resetLeadSchemaCache();
   await ensureLeadSchema(sqliteExecutor(mem));
-  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM lead_activity').get().n,7,'a second repair does not write another history row');
+  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM lead_activity').get().n,11,'a second repair does not write another history row');
   const locked=new DatabaseSync(':memory:');
   locked.exec("CREATE TABLE leads(id TEXT PRIMARY KEY, stage TEXT, created_at TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT); INSERT INTO leads VALUES ('w2','won','2020-01-01'),('v2','viewing','2020-01-01');");
   resetLeadSchemaCache();
@@ -296,6 +319,15 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
   resetLeadSchemaCache();
   await ensureLeadSchema({async execute(sql,values=[]){const text=String(sql).trim();calls.push(text);if(text.includes('MODIFY COLUMN stage'))throw Error('enum locked');if(text.startsWith('SHOW COLUMNS'))return [[{Field:'stage',Type:"enum('new','won')"},{Field:'is_featured',Type:'tinyint(1)'}]];if(text.startsWith('SHOW')||text.startsWith('ALTER')||text.startsWith('CREATE'))return [[]];if(text.startsWith('SELECT'))return [enumDb.prepare(text).all(...values)];return [{affectedRows:Number(enumDb.prepare(text).run(...values).changes)}];}});
   assert.equal(enumDb.prepare('SELECT COUNT(*) AS n FROM lead_activity').get().n,2,'a failed ENUM change does not duplicate history');
+  const usersDb=new DatabaseSync(':memory:');
+  usersDb.exec("CREATE TABLE leads(id TEXT PRIMARY KEY, stage TEXT, created_at TEXT, is_featured INTEGER NOT NULL DEFAULT 0); CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE crm_users(id TEXT PRIMARY KEY, email TEXT); INSERT INTO crm_users (id, email) VALUES ('u1','old@sas.test');");
+  resetLeadSchemaCache();
+  await ensureLeadSchema(sqliteExecutor(usersDb));
+  assert.equal(usersDb.prepare("SELECT name FROM pragma_table_info('crm_users') WHERE name='phone'").get().name,'phone');
+  resetLeadSchemaCache();
+  await ensureLeadSchema(sqliteExecutor(usersDb));
+  assert.equal(usersDb.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('crm_users') WHERE name='phone'").get().n,1,'phone column is added once');
+  usersDb.close();
   mem.close();locked.close();enumDb.close();
   console.log('PASS runtime schema repair adds is_featured, converts won once, and fails closed');
   console.log('PASS import name/phone-only visibility, existing stage aliases, unknown stage warning, follow-up parse, round-robin');
@@ -317,6 +349,17 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
   assert.equal(sheetConfigSchema.safeParse({...config,sourceConfirmed:false}).success,false);
   assert.throws(()=>checkSheetHeaders(config,['الجوال','الاسم','العقار','الملاحظات']));
   console.log('PASS Sheets source confirmation, bounded mapping and header-drift rejection');
+  await build({entryPoints:['lib/user-contact.ts'],outfile:join(output,'user-contact.cjs'),bundle:true,platform:'node',format:'cjs'});
+  const {parseUserEmail,parseUserPhone}=createRequire(import.meta.url)(join(output,'user-contact.cjs'));
+  assert.deepEqual(parseUserEmail(' Fresh.Rep@sas.test '),{ok:true,value:'fresh.rep@sas.test'});
+  assert.deepEqual(parseUserEmail(''),{ok:true,value:''});
+  assert.equal(parseUserEmail('not-an-email').ok,false);
+  assert.deepEqual(parseUserPhone('0501111111'),{ok:true,value:'+966501111111'});
+  assert.deepEqual(parseUserPhone('00966501111111'),{ok:true,value:'+966501111111'});
+  assert.deepEqual(parseUserPhone('966501111111'),{ok:true,value:'+966501111111'});
+  assert.deepEqual(parseUserPhone(''),{ok:true,value:''});
+  assert.equal(parseUserPhone('123').ok,false);
+  console.log('PASS employee email format and Saudi mobile normalization');
   await build({entryPoints:['lib/assignment-email.ts'],outfile:join(output,'assign-mail.cjs'),bundle:true,platform:'node',format:'cjs'});
   const {
     assignmentChanged,

@@ -22,8 +22,8 @@ CREATE TABLE hr_attendance(user_id TEXT,work_day TEXT,check_in TEXT,check_out TE
 CREATE TABLE hr_requests(id TEXT PRIMARY KEY,user_id TEXT,type TEXT,details TEXT,status TEXT,created_at TEXT,start_date TEXT,end_date TEXT,review_note TEXT,reviewed_by TEXT,reviewed_at TEXT);
 CREATE TABLE hr_announcements(id TEXT PRIMARY KEY,title TEXT,details TEXT,created_at TEXT);
 `);
-sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?,?)').run(employee,'Synthetic employee','sales','emp@sas.test');
-sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?,?)').run(admin,'Synthetic admin','admin','admin@sas.test');
+sql.prepare('INSERT INTO crm_users (id,name,active,role,email) VALUES (?,?,1,?,?)').run(employee,'Synthetic employee','sales','emp@sas.test');
+sql.prepare('INSERT INTO crm_users (id,name,active,role,email) VALUES (?,?,1,?,?)').run(admin,'Synthetic admin','admin','admin@sas.test');
 let failAudit=false;
 globalThis.storageUser={userId:admin,role:'admin',name:'Synthetic admin'};
 const driver={async execute(query,args){
@@ -55,10 +55,10 @@ try{
  failAudit=true;await assert.rejects(()=>runImport([['Rollback','0500000001','Other']],mapping,admin,true));failAudit=false;
  assert.equal(sql.prepare('SELECT COUNT(*) n FROM leads').get().n,1,'all import inserts rollback if audit fails');
  const salesA=crypto.randomUUID(),salesB=crypto.randomUUID();
- sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?,?)').run(salesA,'Sales A','sales','sales-a@sas.test');
- sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?,?)').run(salesB,'Sales B','sales','sales-b@sas.test');
+ sql.prepare('INSERT INTO crm_users (id,name,active,role,email) VALUES (?,?,1,?,?)').run(salesA,'Sales A','sales','sales-a@sas.test');
+ sql.prepare('INSERT INTO crm_users (id,name,active,role,email) VALUES (?,?,1,?,?)').run(salesB,'Sales B','sales','sales-b@sas.test');
  const salesNoMail=crypto.randomUUID();
- sql.prepare('INSERT INTO crm_users VALUES (?,?,1,?,?)').run(salesNoMail,'Sales No Mail','sales','');
+ sql.prepare('INSERT INTO crm_users (id,name,active,role,email) VALUES (?,?,1,?,?)').run(salesNoMail,'Sales No Mail','sales','');
  globalThis.sentMail=[];
  assert.equal((await runImport([['No property column','0500000014']],{name:0,phone:1},admin,true)).inserted,1);
  assert.equal(sql.prepare('SELECT property_other,stage,assigned_to FROM leads WHERE phone=?').get('+966500000014').property_other,'غير محدد');
