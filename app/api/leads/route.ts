@@ -3,6 +3,7 @@ import {propertyRequestText} from '@/lib/assignment-email';
 import {notifyLeadAssignment} from '@/lib/assignment-notify';
 import {crmDb} from '@/lib/crm-db';
 import {leadSchema as schema} from '@/lib/lead-input';
+import {ensureLeadSchema, isMissingFeaturedColumn} from '@/lib/lead-schema';
 import {stageWriteAllowed} from '@/lib/lead-stages';
 
 export const dynamic = 'force-dynamic';
@@ -44,7 +45,7 @@ function retiredStageReply(
   }
 
   return reply(
-    {error: 'مرحلة مكسب لم تعد متاحة'},
+    {error: 'هذه المرحلة لم تعد متاحة'},
     400
   );
 }
@@ -194,6 +195,77 @@ function leadSelect() {
   `;
 }
 
+function presentLeads(
+  rows: unknown[],
+  featured: boolean
+) {
+  return (rows as Record<string, unknown>[]).map(row =>
+    featured
+      ? {...row, featured_available: 1}
+      : {...row, is_featured: 0, featured_available: 0}
+  );
+}
+
+async function readLeads(
+  user: {userId: string; role: string},
+  featured: boolean
+) {
+  const order = featured
+    ? 'ORDER BY leads.is_featured DESC, leads.created_at DESC'
+    : 'ORDER BY leads.created_at DESC';
+  const db = crmDb();
+
+  if (canSeeAll(user.role)) {
+    const result = await db
+      .prepare(`
+        ${leadSelect()}
+        ${order}
+      `)
+      .all();
+    return result.results;
+  }
+
+  if (user.role === 'sales') {
+    const result = await db
+      .prepare(`
+        ${leadSelect()}
+        WHERE
+          leads.assigned_to = ?
+          OR leads.created_by = ?
+          OR leads.owner = ?
+        ${order}
+      `)
+      .bind(
+        user.userId,
+        user.userId,
+        user.userId
+      )
+      .all();
+    return result.results;
+  }
+
+  if (user.role === 'field') {
+    const result = await db
+      .prepare(`
+        ${leadSelect()}
+        WHERE
+          leads.field_assigned_to = ?
+          OR leads.created_by = ?
+          OR leads.owner = ?
+        ${order}
+      `)
+      .bind(
+        user.userId,
+        user.userId,
+        user.userId
+      )
+      .all();
+    return result.results;
+  }
+
+  return [];
+}
+
 export async function GET() {
   const user = await getCrmUser();
 
@@ -205,60 +277,14 @@ export async function GET() {
   }
 
   try {
-    const db = crmDb();
-
-    if (canSeeAll(user.role)) {
-      const result = await db
-        .prepare(`
-          ${leadSelect()}
-          ORDER BY leads.is_featured DESC, leads.created_at DESC
-        `)
-        .all();
-
-      return reply(result.results);
+    let featured = (await ensureLeadSchema()).featured;
+    try {
+      return reply(presentLeads(await readLeads(user, featured), featured));
+    } catch (error) {
+      if (!featured || !isMissingFeaturedColumn(error)) throw error;
+      featured = false;
+      return reply(presentLeads(await readLeads(user, false), false));
     }
-
-    if (user.role === 'sales') {
-      const result = await db
-        .prepare(`
-          ${leadSelect()}
-          WHERE
-            leads.assigned_to = ?
-            OR leads.created_by = ?
-            OR leads.owner = ?
-          ORDER BY leads.is_featured DESC, leads.created_at DESC
-        `)
-        .bind(
-          user.userId,
-          user.userId,
-          user.userId
-        )
-        .all();
-
-      return reply(result.results);
-    }
-
-    if (user.role === 'field') {
-      const result = await db
-        .prepare(`
-          ${leadSelect()}
-          WHERE
-            leads.field_assigned_to = ?
-            OR leads.created_by = ?
-            OR leads.owner = ?
-          ORDER BY leads.is_featured DESC, leads.created_at DESC
-        `)
-        .bind(
-          user.userId,
-          user.userId,
-          user.userId
-        )
-        .all();
-
-      return reply(result.results);
-    }
-
-    return reply([]);
   } catch (error) {
     console.error(
       'Failed to load leads:',

@@ -53,7 +53,7 @@ export async function PATCH(
   const stage = typeof body.stage === 'string' ? body.stage.trim() : '';
   const note = typeof body.note === 'string' ? body.note.trim() : '';
 
-  if (!stage || (!allowedStages.has(stage) && stage !== 'won')) {
+  if (!allowedStages.has(stage)) {
     return NextResponse.json({error: 'Invalid stage'}, {status: 400});
   }
 
@@ -72,9 +72,6 @@ export async function PATCH(
 
   const previousStage = lead.stage;
   if (stage === previousStage) return NextResponse.json({ok: true});
-  if (!allowedStages.has(stage)) {
-    return NextResponse.json({error: 'Invalid stage'}, {status: 400});
-  }
 
   await crmDb()
     .prepare(`UPDATE leads SET stage = ?, updated_at = ? WHERE id = ?`)

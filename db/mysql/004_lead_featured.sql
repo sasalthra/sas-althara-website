@@ -1,11 +1,13 @@
--- 004: featured / VIP clients («عميل مميز»).
+-- 004: featured / VIP clients («عميل مميز») and retire stage `won`.
 --
 -- Additive and idempotent. Existing rows default to 0 (not featured).
--- Does not change `stage`, so historical `won` / مكسب rows stay valid.
+-- `won` stays in the stage ENUM. Rows still stored as `won` are moved to
+-- `contract_signed` and a lead_activity row records the change.
+-- The app also does this on first CRM database access. This file remains
+-- for `npm run db:migrate` / phpMyAdmin.
 --
--- RUN: after 003_leads_expansion_columns.sql, or use `npm run db:migrate`
--- (that script adds the same column without information_schema).
--- Back up `leads` first. Re-running changes nothing.
+-- RUN: after 003_leads_expansion_columns.sql. Back up `leads` first.
+-- Re-running changes nothing once `won` rows are gone.
 
 DROP PROCEDURE IF EXISTS sas_add_lead_column;
 DELIMITER //
@@ -42,6 +44,15 @@ DELIMITER ;
 
 CALL sas_add_lead_index('leads_featured_idx', 'leads_featured_idx (is_featured, created_at)');
 DROP PROCEDURE IF EXISTS sas_add_lead_index;
+
+-- History first, then the stage change. A second run matches zero rows.
+INSERT INTO lead_activity (id, lead_id, user_id, action, details)
+SELECT UUID(), id, 'system', 'stage_changed',
+  JSON_OBJECT('previousStage', 'won', 'stage', 'contract_signed', 'note', 'تم اعتماد مرحلة وقع عقد')
+FROM leads
+WHERE stage = 'won';
+
+UPDATE leads SET stage = 'contract_signed' WHERE stage = 'won';
 
 SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT
 FROM information_schema.COLUMNS

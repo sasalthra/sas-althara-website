@@ -39,6 +39,11 @@ for (const forbidden of [/\bDROP\s+TABLE\b/i, /\bDROP\s+COLUMN\b/i, /\bTRUNCATE\
 }
 assert.match(featuredMigration, /is_featured TINYINT\(1\) NOT NULL DEFAULT 0/,
   'is_featured must default to false for existing clients');
+assert.match(featuredMigration, /UPDATE leads SET stage = 'contract_signed' WHERE stage = 'won'/,
+  'the SQL migration must move stored won rows to contract_signed');
+assert.match(featuredMigration, /lead_activity/,
+  'the SQL migration must record the won conversion');
+assert.match(featuredMigration, /تم اعتماد مرحلة وقع عقد/);
 assert.ok(/information_schema\.COLUMNS/i.test(migration),
   'column additions must be guarded so re-running the migration is safe');
 assert.ok(/information_schema\.STATISTICS/i.test(migration),

@@ -1,5 +1,5 @@
 import {reportCatalog,type ReportColumn,type ReportResult,type ReportRow,type ReportId} from './report-catalog';
-import {stageLabel} from './lead-stages';
+import {canonicalStage, stageLabel} from './lead-stages';
 export class ReportError extends Error {constructor(public status:number,message:string){super(message);}}
 type Actor={userId:string;role:string};
 type Database={prepare(sql:string):{bind(...args:(string|number|null)[]):{all():Promise<{results:Record<string,unknown>[]}>}}};
@@ -56,7 +56,11 @@ function where(spec:Spec,user:Actor,f:ReportFilters){
   if(user.role!=='admin'){const assignment=user.role==='field'?'l.field_assigned_to':user.role==='supervisor'?'l.assigned_to = ? OR l.field_assigned_to':'l.assigned_to';add(`(l.owner = ? OR l.created_by = ? OR ${assignment} = ?)`,user.userId,user.userId,...(user.role==='supervisor'?[user.userId]:[]),user.userId);}
   if(f.employee){const finance=spec===specs.transactions;add('(l.assigned_to = ? OR l.field_assigned_to = ? OR l.owner = ? OR l.created_by = ?'+(finance?" OR JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.financeEmployeeId')) = ?":'')+')',f.employee,f.employee,f.employee,f.employee,...(finance?[f.employee]:[]));}
   if(f.source)add('l.source = ?',f.source);
-  if(f.stage)add(spec===specs.transactions?"JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.requestStage')) = ?":'l.stage = ?',f.stage);
+  if(f.stage){
+    if(spec===specs.transactions)add("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.requestStage')) = ?",f.stage);
+    else if(f.stage==='won'||f.stage==='contract_signed'||canonicalStage(f.stage)==='contract_signed')add('(l.stage = ? OR l.stage = ?)','contract_signed','won');
+    else add('l.stage = ?',f.stage);
+  }
   if(f.funding&&spec===specs.transactions)add("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.fundingEntity')) = ?",f.funding);
  } else if(spec.employee){if(user.role!=='admin')add(`${spec.employee} = ?`,user.userId);else if(f.employee)add(`${spec.employee} = ?`,f.employee);}
  // Date-only fields are already local work/calendar days. UTC text/timestamps are shifted to fixed Riyadh UTC+03 (Saudi Arabia has no DST).
@@ -82,6 +86,7 @@ export async function readReport(db:Database,user:Actor,id:string,f:ReportFilter
  const metrics:ReportResult['metrics']=[];
  const rows:ReportRow[]=raw.results.map(record=>{
   const r={...record};
+  if(r.stage==='won')r.stage=stageLabel('won');
   if(id==='transactions'){const data=object(r.data);for(const [key] of specs.transactions.columns)if(key in data)r[key]=data[key];r.companyDebt=data.debtPayer==='company'?data.debtSettlement:null;r.clientDebt=data.debtPayer==='client'?data.debtSettlement:null;}
   if(id==='followups'){const today=riyadhDay(now),days=Math.round((Date.parse(today+'T00:00:00Z')-Date.parse(String(r.follow_up)+'T00:00:00Z'))/86400000);r.follow_up_age=days<0?'قادمة':days===0?'اليوم':days<=7?'متأخرة 1–7 أيام':days<=30?'متأخرة 8–30 يوماً':'متأخرة أكثر من 30 يوماً';}
   if(id==='attendance'){const ms=r.check_out?Date.parse(String(r.check_out))-Date.parse(String(r.check_in)):NaN;r.hours=Number.isFinite(ms)&&ms>=0?(ms/3600000).toFixed(2):null;}
@@ -94,7 +99,7 @@ export async function readReport(db:Database,user:Actor,id:string,f:ReportFilter
   const closed=raw.results.filter(r=>r.check_out&&Number.isFinite(Date.parse(String(r.check_out))-Date.parse(String(r.check_in)))&&Date.parse(String(r.check_out))>=Date.parse(String(r.check_in)));
   metrics.push({label:'ساعات البصمات المكتملة فقط',value:closed.length?(closed.reduce((n,r)=>n+Date.parse(String(r.check_out))-Date.parse(String(r.check_in)),0)/3600000).toFixed(2):null,missing:rows.length-closed.length},{label:'دقائق التأخير المسجلة',value:rows.reduce((n,r)=>n+Number(r.late_minutes||0),0)},{label:'بصمات مفتوحة أو غير صالحة',value:rows.length-closed.length});
  }
- if(id==='followups')metrics.push({label:'مواعيد غير منتهية متأخرة قبل اليوم (الرياض)',value:rows.filter(r=>String(r.follow_up)<riyadhDay(now)&&!['won','closed'].includes(String(r.stage))).length});
+ if(id==='followups')metrics.push({label:'مواعيد غير منتهية متأخرة قبل اليوم (الرياض)',value:raw.results.filter(r=>String(r.follow_up)<riyadhDay(now)&&!['won','closed'].includes(String(r.stage))).length});
  if(id==='requests')metrics.push({label:'الطلبات المفتوحة حالياً',value:rows.filter(r=>r.status==='pending').length},{label:'طلبات الإجازة ضمن الفترة',value:rows.filter(r=>r.type==='leave').length});
  if(id==='ai'){if(rows.length===0)throw new ReportError(404,'لا توجد بيانات استخدام AI محفوظة ضمن الفترة؛ الاستخدام والتكلفة غير متاحين.');metrics.push({label:'محاولات الطلبات المسجلة',value:rows.reduce((n,r)=>n+Number(r.requests||0),0)});}
  if(id==='imports')metrics.push({label:'الصفوف المقبولة المسجلة في التشغيلات',value:rows.reduce((n,r)=>n+Number(r.inserted||0),0)});
@@ -179,7 +184,7 @@ export async function readClientsSnapshot(db:Database,user:Actor,f:Pick<ReportFi
  const result=await db.prepare(`SELECT l.stage FROM leads l${w.sql} ORDER BY l.id LIMIT 10001`).bind(...w.args).all();
  if(result.results.length>10000)throw new ReportError(422,'أكثر من 10000 عميل في اللقطة؛ ضيق مرشح الموظف. لم يعرض مجموع جزئي');
  const counts=new Map<string,number>();
- for(const row of result.results){const stage=String(row.stage??'');counts.set(stage,(counts.get(stage)||0)+1);}
+ for(const row of result.results){const raw=String(row.stage??'');const stage=raw==='won'?'contract_signed':raw;counts.set(stage,(counts.get(stage)||0)+1);}
  const total=result.results.length,notInterested=counts.get('not_interested')||0;
  const byStage=Array.from(counts,([stage,count])=>({stage,label:stageLabel(stage),count})).sort((a,b)=>b.count-a.count||a.label.localeCompare(b.label,'ar'));
  return {total,interested:total-notInterested,notInterested,byStage};

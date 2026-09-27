@@ -5,6 +5,11 @@ export function isFeaturedValue(value: unknown): boolean {
   return value === true || value === 1 || value === '1';
 }
 
+/** Hidden when the featured column could not be added. Missing means the column is usable. */
+export function featuredControlsEnabled(lead: {featured_available?: unknown}): boolean {
+  return lead.featured_available !== 0 && lead.featured_available !== false && lead.featured_available !== '0';
+}
+
 /** Admins and supervisors, plus the sales rep currently assigned to the lead. */
 export function canToggleFeatured(actor: FeatureActor, lead: FeatureLead): boolean {
   if (actor.role === 'admin' || actor.role === 'supervisor') return true;

@@ -77,6 +77,19 @@ try {
   assert.equal(wrapped.properties.status,'ok');
   assert.equal(wrapped.properties.total,1);
  }
+ put.run('won-row','alice','alice','alice','','won-row','p','','web','won','2026-09-10','2026-09-02T00:00:00.000Z','2026-09-02T00:00:00.000Z');
+ {
+  const wonView=await readReport(db,admin,'leads',filters);
+  assert.equal(wonView.rows.find(r=>r.id==='won-row').stage,'وقع عقد');
+  assert.equal(JSON.stringify(wonView).includes('مكسب'),false);
+  assert.equal(wonView.groups.stage.some(g=>g.label==='won'||g.label==='مكسب'),false);
+  const folded=await readClientsSnapshot(db,admin,{employee:''});
+  assert.equal(folded.byStage.some(s=>s.stage==='won'||s.label==='مكسب'),false);
+  assert.equal(folded.byStage.find(s=>s.stage==='contract_signed').label,'وقع عقد');
+  assert.ok(folded.byStage.find(s=>s.stage==='contract_signed').count>=2);
+  const alias=await readReport(db,admin,'leads',{...filters,stage:'مكسب'});
+  assert.ok(alias.rows.some(r=>r.id==='won-row'));
+ }
  sql.exec(`CREATE TABLE crm_transactions(id TEXT,lead_id TEXT,data TEXT,confirmed_due TEXT,updated_at TEXT);
  CREATE TABLE hr_attendance(user_id TEXT,work_day TEXT,check_in TEXT,check_out TEXT,late_minutes INTEGER);
  CREATE TABLE hr_profiles(user_id TEXT,job_title TEXT,department TEXT,leave_balance TEXT,schedule TEXT,updated_at TEXT);

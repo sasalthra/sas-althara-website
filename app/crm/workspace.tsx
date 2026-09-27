@@ -22,10 +22,10 @@ import ReportsPanel from './reports-panel';
 import data from '@/data/properties.json';
 import LeadForm, {
   Lead,
-  stages,
 } from '@/app/lead-form';
 import {formatRiyadhDate, riyadhDayKey} from '@/lib/lead-dates';
-import {canToggleFeatured, compareClients, isFeaturedValue} from '@/lib/lead-featured';
+import {canToggleFeatured, compareClients, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
+import {stageLabel} from '@/lib/lead-stages';
 
 import {
   Tabs,
@@ -317,7 +317,7 @@ export default function CRM({
 
                   <p className="subtle">
                     {leadView === 'followups'
-                      ? 'العملاء الذين موعد متابعتهم اليوم أو قبله، باستثناء المكسب والمغلق.'
+                      ? 'العملاء الذين موعد متابعتهم اليوم أو قبله، باستثناء المغلق.'
                       : 'اضغط على اسم العميل لعرض الملف الكامل.'}
                   </p>
                 </div>
@@ -431,7 +431,7 @@ export default function CRM({
                               );
 
                             const featured = isFeaturedValue(lead.is_featured);
-                            const allowFeature = canToggleFeatured({userId, role}, lead);
+                            const allowFeature = featuredControlsEnabled(lead) && canToggleFeatured({userId, role}, lead);
 
                             return (
                               <TableRow
@@ -510,11 +510,9 @@ export default function CRM({
 
                                 <TableCell className="px-2">
                                   <span className="inline-flex max-w-full truncate rounded-full border border-[#e8e3e9] bg-[#f3eaf4] px-2.5 py-1 text-xs font-medium text-[#3F1A44]">
-                                    {stages[
-                                      lead
-                                        .stage
-                                    ] ||
-                                      lead.stage}
+                                    {stageLabel(
+                                      lead.stage
+                                    )}
                                   </span>
                                 </TableCell>
 

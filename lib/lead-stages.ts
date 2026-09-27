@@ -16,20 +16,23 @@ export const stageLabels: Record<string, string> = {
   not_interested: 'غير مهتم',
   viewing: 'معاينة',
   negotiation: 'تفاوض',
-  /** Display-only. Existing rows may still be stored as `won`; it is not a choice. */
-  won: 'مكسب',
   closed: 'مغلق',
 };
 
-/** Stages staff can assign. `won` stays in `stageLabels` so stored rows still render. */
-export function stageChoices(current?: string | null): Array<[string, string]> {
-  return Object.entries(stageLabels).filter(([key]) => key !== 'won' || current === 'won');
+/** Stages staff can assign. `won` is never a choice. */
+export function stageChoices(_current?: string | null): Array<[string, string]> {
+  return Object.entries(stageLabels).filter(([key]) => key !== 'won');
 }
 
-/** Creating or switching a lead to `won` is closed. Re-saving a row that is already `won` is allowed. */
-export function stageWriteAllowed(next: string, current?: string | null): boolean {
-  if (next !== 'won') return true;
-  return current === 'won';
+/** A stored `won` value is edited and saved as وقع عقد. */
+export function editableStage(stage?: string | null): string {
+  if (stage === 'won') return 'contract_signed';
+  return stage || 'new';
+}
+
+/** `won` cannot be stored again. */
+export function stageWriteAllowed(next: string, _current?: string | null): boolean {
+  return next !== 'won';
 }
 
 /**
@@ -57,6 +60,7 @@ export const stageAliasGroups: Record<string, string[]> = {
 };
 
 export function stageLabel(stage: string): string {
+  if (stage === 'won') return stageLabels.contract_signed;
   return stageLabels[stage] || stage || 'غير محدد';
 }
 

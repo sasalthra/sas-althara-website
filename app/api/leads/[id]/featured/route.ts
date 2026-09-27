@@ -3,6 +3,7 @@ import {NextResponse} from 'next/server';
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
 import {canToggleFeatured} from '@/lib/lead-featured';
+import {ensureLeadSchema} from '@/lib/lead-schema';
 
 type LeadRow = {
   id: string;
@@ -39,6 +40,9 @@ export async function PATCH(
     .first<LeadRow>();
 
   if (!lead) return NextResponse.json({error: 'العميل غير موجود'}, {status: 404});
+  if (!(await ensureLeadSchema()).featured) {
+    return NextResponse.json({error: 'تمييز العملاء غير متاح حالياً'}, {status: 503});
+  }
   if (!canToggleFeatured(user, lead)) {
     return NextResponse.json({error: 'غير مسموح بتعديل تمييز هذا العميل'}, {status: 403});
   }

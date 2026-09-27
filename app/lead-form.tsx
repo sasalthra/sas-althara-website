@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-import {stageChoices, stageLabels as stages} from '@/lib/lead-stages';
+import {editableStage, stageChoices, stageLabels as stages} from '@/lib/lead-stages';
 export {stages};
 
 export const leadSources: Record<string, string> = {
@@ -59,6 +59,7 @@ export type Lead = {
 
   created_at?: string;
   is_featured?: boolean | number | string | null;
+  featured_available?: boolean | number | string | null;
 };
 
 type CrmRole =
@@ -129,7 +130,7 @@ export default function LeadForm({
     );
 
   const [stage, setStage] = useState(
-    initial?.stage || 'new'
+    editableStage(initial?.stage)
   );
 
   const [notes, setNotes] = useState(

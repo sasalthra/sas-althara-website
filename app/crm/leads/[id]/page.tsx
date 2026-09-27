@@ -13,11 +13,10 @@ import {Star} from 'lucide-react';
 import data from '@/data/properties.json';
 import LeadForm, {
   Lead,
-  stages,
 } from '@/app/lead-form';
 import {formatRiyadhDate} from '@/lib/lead-dates';
-import {canToggleFeatured, isFeaturedValue} from '@/lib/lead-featured';
-import {stageChoices} from '@/lib/lead-stages';
+import {canToggleFeatured, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
+import {editableStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 
 import {
   Dialog,
@@ -186,14 +185,14 @@ function getActivityNote(
       ) {
         parts.push(
           `${
-            stages[previousStage] || previousStage
+            stageLabel(previousStage)
           } ← ${
-            stages[stage] || stage
+            stageLabel(stage)
           }`
         );
       } else {
         parts.push(
-          `المرحلة: ${stages[stage] || stage}`
+          `المرحلة: ${stageLabel(stage)}`
         );
       }
     }
@@ -224,7 +223,7 @@ function getActivityNote(
       stage
     ) {
       parts.push(
-        `المرحلة: ${stages[stage] || stage}`
+        `المرحلة: ${stageLabel(stage)}`
       );
     }
 
@@ -435,7 +434,7 @@ export default function LeadDetailsPage() {
     );
 
     setNextStage(
-      lead.stage
+      editableStage(lead.stage)
     );
   }, [lead]);
 
@@ -656,9 +655,7 @@ export default function LeadDetailsPage() {
                 )}
 
                 <span className="inline-flex rounded-full border border-[#e8e3e9] bg-[#f3eaf4] px-2.5 py-1 text-[#3F1A44]">
-                  {stages[
-                    lead.stage
-                  ] || lead.stage}
+                  {stageLabel(lead.stage)}
                 </span>
               </div>
 
@@ -702,7 +699,7 @@ export default function LeadDetailsPage() {
                 + إضافة متابعة
               </button>
 
-              {canToggleFeatured({userId, role}, lead) && (
+              {featuredControlsEnabled(lead) && canToggleFeatured({userId, role}, lead) && (
                 <button
                   type="button"
                   aria-pressed={isFeaturedValue(lead.is_featured)}
@@ -720,7 +717,7 @@ export default function LeadDetailsPage() {
                 onClick={() => {
                   setDialogError('');
                   setNextStage(
-                    lead.stage
+                    editableStage(lead.stage)
                   );
                   setStageNote('');
                   setDialogMode(
@@ -1027,9 +1024,7 @@ export default function LeadDetailsPage() {
                     المرحلة الحالية
                   </div>
                   <div className="mt-1 font-semibold">
-                    {stages[
-                      lead.stage
-                    ] || lead.stage}
+                    {stageLabel(lead.stage)}
                   </div>
                 </div>
 
