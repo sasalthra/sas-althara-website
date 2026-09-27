@@ -350,13 +350,22 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
   assert.throws(()=>checkSheetHeaders(config,['الجوال','الاسم','العقار','الملاحظات']));
   console.log('PASS Sheets source confirmation, bounded mapping and header-drift rejection');
   await build({entryPoints:['lib/user-contact.ts'],outfile:join(output,'user-contact.cjs'),bundle:true,platform:'node',format:'cjs'});
-  const {parseUserEmail,parseUserPhone,parseUserName,withLiveActivityNames}=createRequire(import.meta.url)(join(output,'user-contact.cjs'));
+  const {parseUserEmail,parseUserPhone,parseUserName,parseUsername,withLiveActivityNames}=createRequire(import.meta.url)(join(output,'user-contact.cjs'));
   assert.deepEqual(parseUserName('  عهود  '),{ok:true,value:'عهود'});
   assert.equal(parseUserName('').ok,false);
   assert.equal(parseUserName('   ').ok,false);
   assert.equal(parseUserName('ع').ok,false);
   assert.equal(parseUserName('ن'.repeat(100)).ok,true);
   assert.equal(parseUserName('ن'.repeat(101)).ok,false);
+  assert.deepEqual(parseUsername('  Ohoud.Sales  '),{ok:true,value:'ohoud.sales'});
+  assert.equal(parseUsername('').ok,false);
+  assert.equal(parseUsername('   ').ok,false);
+  assert.equal(parseUsername('ab').ok,false);
+  assert.equal(parseUsername('a'.repeat(80)).ok,true);
+  assert.equal(parseUsername('a'.repeat(81)).ok,false);
+  assert.equal(parseUsername('bad name').ok,false);
+  assert.equal(parseUsername('عهود').ok,false);
+  assert.equal(parseUsername('ohoud_sales-1.2').ok,true);
   const snapshot={fieldAssignedTo:'field-1',fieldAssignedName:'خالد الميداني',dispatchedByName:'أحمد المبيعات',note:'زيارة'};
   assert.equal(withLiveActivityNames(snapshot,{actorName:'إدارة الثراء',fieldName:'نورة الميدان'}).fieldAssignedName,'نورة الميدان');
   assert.equal(withLiveActivityNames(snapshot,{actorName:'إدارة الثراء',fieldName:'نورة الميدان'}).dispatchedByName,'إدارة الثراء');
@@ -370,7 +379,7 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
   assert.deepEqual(parseUserPhone('966501111111'),{ok:true,value:'+966501111111'});
   assert.deepEqual(parseUserPhone(''),{ok:true,value:''});
   assert.equal(parseUserPhone('123').ok,false);
-  console.log('PASS employee display name, email format and Saudi mobile normalization');
+  console.log('PASS employee display name, login username, email format and Saudi mobile normalization');
   await build({entryPoints:['lib/assignment-email.ts'],outfile:join(output,'assign-mail.cjs'),bundle:true,platform:'node',format:'cjs'});
   const {
     assignmentChanged,

@@ -6,6 +6,11 @@ export type ContactField<T> = {ok: true; value: T} | {ok: false; error: string};
 /** Matches `crm_users.name` VARCHAR(100). Login username is a different column. */
 export const USER_NAME_MAX = 100;
 
+/** Matches `crm_users.username` VARCHAR(80) and the credentials sign-in lookup. */
+export const USERNAME_MIN = 3;
+export const USERNAME_MAX = 80;
+export const USERNAME_PATTERN = /^[a-z0-9._-]+$/;
+
 /**
  * Display name shown across the CRM. Required, trimmed, 2–100 characters.
  * Does not accept the login username and must not be stored in its place.
@@ -16,6 +21,26 @@ export function parseUserName(value: string | null | undefined): ContactField<st
   if (name.length < 2) return {ok: false, error: 'الاسم قصير جدًا'};
   if (name.length > USER_NAME_MAX) return {ok: false, error: 'الاسم طويل جدًا'};
   return {ok: true, value: name};
+}
+
+/**
+ * Login stored in `crm_users.username`. Required, trimmed, lowercased,
+ * 3–80 characters. Letters, digits, dot, underscore, and hyphen — the same
+ * characters account creation accepts. Sign-in looks this value up and does
+ * not read the display name.
+ */
+export function parseUsername(value: string | null | undefined): ContactField<string> {
+  const username = (value ?? '').trim().toLowerCase();
+  if (!username) return {ok: false, error: 'اسم المستخدم مطلوب'};
+  if (username.length < USERNAME_MIN) return {ok: false, error: 'اسم المستخدم قصير جدًا'};
+  if (username.length > USERNAME_MAX) return {ok: false, error: 'اسم المستخدم طويل جدًا'};
+  if (!USERNAME_PATTERN.test(username)) {
+    return {
+      ok: false,
+      error: 'اسم المستخدم يقبل الحروف الإنجليزية والأرقام والنقطة والشرطة والشرطة السفلية فقط',
+    };
+  }
+  return {ok: true, value: username};
 }
 
 /** Field assignee id copied into activity JSON, when the event recorded one. */
