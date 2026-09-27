@@ -77,9 +77,48 @@ export async function GET(
   const url = new URL(req.url);
   const assignable =
     url.searchParams.get('assignable') === '1';
+  const fieldStaff =
+    url.searchParams.get('field') === '1';
 
   try {
     const db = crmDb();
+
+    /*
+     * موظفو الميدان لاختيار التفويج.
+     * متاح للمبيعات والمشرف والمدير، بدون بريد أو جوال.
+     */
+    if (fieldStaff) {
+      if (
+        user.role !== 'admin' &&
+        user.role !== 'supervisor' &&
+        user.role !== 'sales'
+      ) {
+        return reply(
+          {
+            error:
+              'غير مسموح لك بعرض الموظفين الميدانيين',
+          },
+          403
+        );
+      }
+
+      const result = await db
+        .prepare(`
+          SELECT
+            id,
+            username,
+            name,
+            role,
+            active
+          FROM crm_users
+          WHERE active = 1
+            AND role = 'field'
+          ORDER BY name ASC
+        `)
+        .all();
+
+      return reply(result.results);
+    }
 
     /*
      * قائمة المندوبين التي يستخدمها

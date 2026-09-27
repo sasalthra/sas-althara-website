@@ -324,6 +324,8 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
     groupClientsByAssignee,
     assigneeAssignmentEmail,
     adminAssignmentEmail,
+    fieldDispatchEmail,
+    adminFieldDispatchEmail,
     formatClientText,
   }=createRequire(import.meta.url)(join(output,'assign-mail.cjs'));
   assert.equal(assignmentChanged('','sales-1'),true);
@@ -357,7 +359,29 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
   assert.match(adminMail.text,/rep@sas.test/);
   assert.match(adminMail.text,/المصدر: إكسل/);
   assert.match(formatClientText(client),/طلب العقار: فيلا دورين/);
+  const dispatchMail=fieldDispatchEmail({dispatcherName:'أحمد المبيعات',employeeName:'خالد الميداني',client,url:'https://sas.test/crm/leads/lead-1',dispatchNote:'زيارة غداً'});
+  assert.match(dispatchMail.subject,/علي/);
+  assert.match(dispatchMail.text,/أحمد المبيعات/);
+  assert.match(dispatchMail.text,/خالد الميداني/);
+  assert.match(dispatchMail.text,/الجوال: \+966501234567/);
+  assert.match(dispatchMail.text,/طلب العقار: فيلا دورين/);
+  assert.match(dispatchMail.text,/الملاحظات: يريد فيلا/);
+  assert.match(dispatchMail.text,/زيارة غداً/);
+  assert.match(dispatchMail.text,/https:\/\/sas\.test\/crm\/leads\/lead-1/);
+  assert.match(dispatchMail.html,/dir="rtl"/);
+  assert.match(dispatchMail.html,/lang="ar"/);
+  assert.match(dispatchMail.html,/#3F1A44/);
+  assert.match(dispatchMail.html,/علي &lt;script&gt;/);
+  assert.doesNotMatch(dispatchMail.html,/<script>/);
+  assert.doesNotMatch(dispatchMail.html,/info@/);
+  assert.doesNotMatch(dispatchMail.text,/info@/);
+  const adminDispatch=adminFieldDispatchEmail({dispatcherName:'أحمد المبيعات',employeeName:'خالد الميداني',client,url:'https://sas.test/crm/leads/lead-1'});
+  assert.match(adminDispatch.subject,/خالد الميداني/);
+  assert.match(adminDispatch.subject,/أحمد المبيعات/);
+  assert.match(adminDispatch.text,/https:\/\/sas\.test\/crm\/leads\/lead-1/);
+  assert.match(adminDispatch.html,/#3F1A44/);
   console.log('PASS assignment email copy, RTL HTML, admin recipients, grouping and change detection');
+  console.log('PASS field dispatch email names the sales rep, client, property, notes and client link');
   const previousSmtp={
     SMTP_HOST:process.env.SMTP_HOST,
     SMTP_PORT:process.env.SMTP_PORT,

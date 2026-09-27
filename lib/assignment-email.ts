@@ -159,3 +159,45 @@ export function adminAssignmentEmail(
   );
   return {subject, text: textParts.join('\n'), html};
 }
+
+export type FieldDispatchMailInput = {
+  dispatcherName: string;
+  employeeName: string;
+  client: AssignmentClient;
+  url: string;
+  dispatchNote?: string | null;
+};
+
+function dispatchCopy(input: FieldDispatchMailInput, audience: 'field' | 'admin') {
+  const employeeName = input.employeeName.trim() || 'الموظف الميداني';
+  const dispatcherName = input.dispatcherName.trim() || 'فريق المبيعات';
+  const dispatchNote = input.dispatchNote?.trim() || '';
+  const title = audience === 'field' ? 'تم تفويج عميل إليك' : 'تفويج عميل للميداني';
+  const subject = audience === 'field'
+    ? `تم تفويج عميل إليك — ${input.client.name || 'ساس الثراء'}`
+    : `تم تفويج عميل إلى ${employeeName} بواسطة ${dispatcherName} — ساس الثراء`;
+  const intro = audience === 'field'
+    ? `مرحباً ${employeeName}،\nتم تفويج عميل إليك بواسطة ${dispatcherName}.`
+    : `تم تفويج عميل إلى ${employeeName} بواسطة ${dispatcherName}.`;
+  const text = [
+    intro,
+    '',
+    formatClientText(input.client),
+    dispatchNote ? `\nملاحظة التفويج: ${dispatchNote}` : '',
+    '',
+    `رابط صفحة العميل: ${input.url}`,
+  ].filter(part => part !== '').join('\n');
+  const html = wrapHtml(
+    title,
+    `<p>${escapeHtml(intro).replace(/\n/g, '<br/>')}</p>${clientHtml(input.client)}${dispatchNote ? `<p>ملاحظة التفويج: ${escapeHtml(dispatchNote)}</p>` : ''}<p><a href="${escapeHtml(input.url)}" style="color:#3F1A44">فتح صفحة العميل</a></p><p style="color:#6b7280">${escapeHtml(input.url)}</p>`
+  );
+  return {subject, text, html};
+}
+
+export function fieldDispatchEmail(input: FieldDispatchMailInput) {
+  return dispatchCopy(input, 'field');
+}
+
+export function adminFieldDispatchEmail(input: FieldDispatchMailInput) {
+  return dispatchCopy(input, 'admin');
+}
