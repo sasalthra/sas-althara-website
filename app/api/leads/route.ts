@@ -3,6 +3,7 @@ import {propertyRequestText} from '@/lib/assignment-email';
 import {notifyLeadAssignment} from '@/lib/assignment-notify';
 import {crmDb} from '@/lib/crm-db';
 import {leadSchema as schema} from '@/lib/lead-input';
+import {stageWriteAllowed} from '@/lib/lead-stages';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -31,6 +32,20 @@ function canAssign(role: string) {
   return (
     role === 'admin' ||
     role === 'supervisor'
+  );
+}
+
+function retiredStageReply(
+  nextStage: string,
+  currentStage?: string | null
+) {
+  if (stageWriteAllowed(nextStage, currentStage)) {
+    return null;
+  }
+
+  return reply(
+    {error: 'مرحلة مكسب لم تعد متاحة'},
+    400
   );
 }
 
@@ -196,7 +211,7 @@ export async function GET() {
       const result = await db
         .prepare(`
           ${leadSelect()}
-          ORDER BY leads.created_at DESC
+          ORDER BY leads.is_featured DESC, leads.created_at DESC
         `)
         .all();
 
@@ -211,7 +226,7 @@ export async function GET() {
             leads.assigned_to = ?
             OR leads.created_by = ?
             OR leads.owner = ?
-          ORDER BY leads.created_at DESC
+          ORDER BY leads.is_featured DESC, leads.created_at DESC
         `)
         .bind(
           user.userId,
@@ -231,7 +246,7 @@ export async function GET() {
             leads.field_assigned_to = ?
             OR leads.created_by = ?
             OR leads.owner = ?
-          ORDER BY leads.created_at DESC
+          ORDER BY leads.is_featured DESC, leads.created_at DESC
         `)
         .bind(
           user.userId,
@@ -417,7 +432,8 @@ async function write(
             SELECT
               id,
               assigned_to,
-              field_assigned_to
+              field_assigned_to,
+              stage
             FROM leads
             WHERE id = ?
             LIMIT 1
@@ -431,6 +447,7 @@ async function write(
             field_assigned_to:
               | string
               | null;
+            stage: string;
           }>();
 
         if (!existing) {
@@ -441,6 +458,16 @@ async function write(
             },
             404
           );
+        }
+
+        const retired =
+          retiredStageReply(
+            value.stage,
+            existing.stage
+          );
+
+        if (retired) {
+          return retired;
         }
 
         const finalAssignedTo =
@@ -526,13 +553,13 @@ async function write(
       }
 
       let existing:
-        | {id: string}
+        | {id: string; stage: string}
         | null = null;
 
       if (user.role === 'sales') {
         existing = await db
           .prepare(`
-            SELECT id
+            SELECT id, stage
             FROM leads
             WHERE id = ?
               AND (
@@ -548,13 +575,13 @@ async function write(
             user.userId,
             user.userId
           )
-          .first<{id: string}>();
+          .first<{id: string; stage: string}>();
       }
 
       if (user.role === 'field') {
         existing = await db
           .prepare(`
-            SELECT id
+            SELECT id, stage
             FROM leads
             WHERE id = ?
               AND (
@@ -570,7 +597,7 @@ async function write(
             user.userId,
             user.userId
           )
-          .first<{id: string}>();
+          .first<{id: string; stage: string}>();
       }
 
       if (!existing) {
@@ -581,6 +608,16 @@ async function write(
           },
           404
         );
+      }
+
+      const retired =
+        retiredStageReply(
+          value.stage,
+          existing.stage
+        );
+
+      if (retired) {
+        return retired;
       }
 
       await db
@@ -663,6 +700,13 @@ async function write(
       ) {
         newFieldAssignedTo =
           user.userId;
+      }
+
+      const retired =
+        retiredStageReply(value.stage);
+
+      if (retired) {
+        return retired;
       }
 
       await db

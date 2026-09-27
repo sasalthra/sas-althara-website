@@ -115,7 +115,7 @@ try {
     console.log(`✗ تغيّر عدد السجلات: ${rowCount} → ${afterCount}`);
     process.exit(1);
   }
-  console.log(`✓ الخانات الخمس موجودة`);
+  console.log(`✓ الخانات المطلوبة موجودة (${COLUMNS.length})`);
   console.log(`✓ عدد السجلات كما هو: ${afterCount} (لم تُفقد أي بيانات)`);
 
   // إثبات أن استعلام التقارير الحقيقي يعمل الآن

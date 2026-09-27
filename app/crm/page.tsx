@@ -35,11 +35,13 @@ export default async function CrmPage() {
 
   const crmSession = session as typeof session & {
     crmRole?: CrmRole;
+    crmUserId?: string;
   };
 
   return (
     <Workspace
       role={crmSession.crmRole ?? 'sales'}
+      userId={crmSession.crmUserId ?? ''}
     />
   );
 }

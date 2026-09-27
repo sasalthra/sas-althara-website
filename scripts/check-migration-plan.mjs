@@ -8,11 +8,14 @@ import {parseEnv} from './lib/parse-env.mjs';
 
 // ── 1. Against the broken production schema, the plan must fix everything ──
 const legacyPlan = planMigration(LEGACY_COLUMNS, [{Key_name: 'PRIMARY'}, {Key_name: 'leads_owner_created_idx'}]);
-assert.equal(legacyPlan.addColumns.length, 5, 'all five missing columns must be planned');
+assert.equal(legacyPlan.addColumns.length, 6, 'all missing lead columns must be planned');
 assert.deepEqual(legacyPlan.addColumns.map(([c]) => c).sort(),
-  ['assigned_to', 'created_by', 'field_assigned_to', 'property_other', 'source']);
+  ['assigned_to', 'created_by', 'field_assigned_to', 'is_featured', 'property_other', 'source']);
 assert.equal(legacyPlan.widenStage, true, 'the 6-value stage ENUM must be widened');
-assert.equal(legacyPlan.addIndexes.length, 5, 'all report indexes must be planned');
+assert.ok(STAGES.includes('won'), 'historical won rows must remain a valid ENUM value');
+assert.ok(legacyPlan.statements.some(s => /MODIFY COLUMN stage/.test(s) && s.includes("'won'")),
+  'widening the stage ENUM must keep won so existing مكسب rows are not invalidated');
+assert.equal(legacyPlan.addIndexes.length, 6, 'all report indexes must be planned');
 assert.equal(legacyPlan.upToDate, false);
 
 // ── 2. The plan must never destroy data ──
@@ -40,7 +43,7 @@ const partial = planMigration(
   [...LEGACY_COLUMNS, {Field: 'source', Type: 'varchar(80)'}],
   [{Key_name: 'PRIMARY'}, {Key_name: 'leads_source_idx'}],
 );
-assert.equal(partial.addColumns.length, 4, 'an already-present column must not be re-added');
+assert.equal(partial.addColumns.length, 5, 'an already-present column must not be re-added');
 assert.ok(!partial.addColumns.some(([c]) => c === 'source'));
 assert.ok(!partial.addIndexes.some(([i]) => i === 'leads_source_idx'));
 assert.ok(!partial.statements.some(s => /SET source =/.test(s)),
@@ -87,6 +90,8 @@ assert.equal(sql.prepare("SELECT COUNT(*) n FROM leads WHERE created_by = ''").g
 assert.equal(sql.prepare("SELECT created_by FROM leads WHERE id='l2'").get().created_by, 'alice',
   'created_by must be backfilled from owner, not blanked');
 assert.equal(sql.prepare("SELECT COUNT(*) n FROM leads WHERE source='manual'").get().n, before);
+assert.equal(sql.prepare('SELECT is_featured FROM leads WHERE id=\'l1\'').get().is_featured, 0,
+  'existing rows default to not featured when the column is added');
 
 // The real report queries must now resolve.
 const rows = sql.prepare(`SELECT ${leadFields} FROM ${leadFrom} ORDER BY l.id LIMIT 10`).all();

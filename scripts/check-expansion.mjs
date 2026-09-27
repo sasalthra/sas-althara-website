@@ -118,7 +118,42 @@ try {
   assert.deepEqual(suggestMapping(['اسم العميل','رقم الجــــوال']),{name:0,phone:1});
   assert.deepEqual(suggestMapping(['الاسم','رقم الهاتف']),{name:0,phone:1});
   assert.equal(suggestMapping(['العمود 1','اسم العميل','رقم الجوال']).phone,2);
+  const wonAliases=previewImport([
+    ['عميل مكسب','0500000091','مكسب'],
+    ['عميل رابح','0500000092','رابح'],
+    ['عميل بيع','0500000093','تم البيع'],
+    ['عميل مباع','0500000094','مباع'],
+    ['عميل sold','0500000095','sold'],
+    ['عميل won','0500000096','won'],
+  ],{name:0,phone:1,stage:2},[]);
+  assert.deepEqual(wonAliases.map(r=>r.status),['ready','ready','ready','ready','ready','ready']);
+  assert.deepEqual(wonAliases.map(r=>r.lead.stage),['contract_signed','contract_signed','contract_signed','contract_signed','contract_signed','contract_signed']);
   console.log('PASS import mapping, Arabic digits, canonical phone dedup, invalid rows and raw preservation');
+  console.log('PASS retired won aliases import as contract_signed');
+  await build({stdin:{contents:`export {stageChoices, stageWriteAllowed, canonicalStage, stageLabel} from './lib/lead-stages.ts';
+export {formatRiyadhDate, riyadhDayKey} from './lib/lead-dates.ts';
+export {canToggleFeatured, compareClients} from './lib/lead-featured.ts';`,resolveDir:process.cwd(),loader:'ts'},outfile:join(output,'lead-rules.cjs'),bundle:true,platform:'node',format:'cjs'});
+  const rules=createRequire(import.meta.url)(join(output,'lead-rules.cjs'));
+  assert.equal(rules.stageChoices('new').some(([key])=>key==='won'),false);
+  assert.equal(rules.stageChoices('won').some(([key])=>key==='won'),true);
+  assert.equal(rules.stageLabel('won'),'مكسب');
+  assert.equal(rules.canonicalStage('مكسب'),'contract_signed');
+  assert.equal(rules.stageWriteAllowed('won'),false);
+  assert.equal(rules.stageWriteAllowed('won','new'),false);
+  assert.equal(rules.stageWriteAllowed('won','won'),true);
+  assert.equal(rules.riyadhDayKey('2026-09-26T21:30:00.000Z'),'2026-09-27');
+  assert.equal(rules.riyadhDayKey('2026-09-27T21:00:00.000Z'),'2026-09-28');
+  assert.equal(rules.riyadhDayKey('2026-09-27'),'2026-09-27');
+  assert.match(rules.formatRiyadhDate('2026-09-26T21:30:00.000Z'),/27/);
+  assert.match(rules.formatRiyadhDate('2026-09-26T21:30:00.000Z'),/2026/);
+  assert.equal(rules.canToggleFeatured({userId:'s',role:'admin'},{assigned_to:''}),true);
+  assert.equal(rules.canToggleFeatured({userId:'s',role:'supervisor'},{assigned_to:''}),true);
+  assert.equal(rules.canToggleFeatured({userId:'s',role:'sales'},{assigned_to:'s'}),true);
+  assert.equal(rules.canToggleFeatured({userId:'s',role:'sales'},{assigned_to:'other'}),false);
+  assert.equal(rules.canToggleFeatured({userId:'f',role:'field'},{assigned_to:'f'}),false);
+  const ordered=[{id:'old',is_featured:1,created_at:'2020-01-01T00:00:00.000Z'},{id:'newer',is_featured:0,created_at:'2026-09-01T00:00:00.000Z'}].sort(rules.compareClients);
+  assert.equal(ordered[0].id,'old');
+  console.log('PASS featured permissions, Riyadh registration date, and retired won stage rules');
   console.log('PASS import name/phone-only visibility, existing stage aliases, unknown stage warning, follow-up parse, round-robin');
   console.log('PASS Althara workbook headers, tatweel phone, dash/empty الطلب, 9-digit mobiles, حسبه/سداد stages');
   console.log('PASS unmapped optional columns never invalidate; name+phone auto-map');

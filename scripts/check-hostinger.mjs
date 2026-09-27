@@ -31,7 +31,7 @@ const secret=process.env.NEXTAUTH_SECRET;delete process.env.NEXTAUTH_SECRET;
 assert.equal(authConfigured(),false);process.env.NEXTAUTH_SECRET=secret;
 
 const sqlite=new DatabaseSync(':memory:');
-sqlite.exec('CREATE TABLE leads(id TEXT PRIMARY KEY,owner TEXT,created_by TEXT,assigned_to TEXT,field_assigned_to TEXT,name TEXT,phone TEXT,property_id TEXT,property_other TEXT,source TEXT,stage TEXT,notes TEXT,follow_up TEXT,created_at TEXT,updated_at TEXT); CREATE TABLE crm_users(id TEXT PRIMARY KEY,name TEXT,username TEXT,role TEXT,active INTEGER,email TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY,lead_id TEXT,user_id TEXT,action TEXT,details TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
+sqlite.exec('CREATE TABLE leads(id TEXT PRIMARY KEY,owner TEXT,created_by TEXT,assigned_to TEXT,field_assigned_to TEXT,name TEXT,phone TEXT,property_id TEXT,property_other TEXT,source TEXT,stage TEXT,notes TEXT,follow_up TEXT,created_at TEXT,updated_at TEXT,is_featured INTEGER NOT NULL DEFAULT 0); CREATE TABLE crm_users(id TEXT PRIMARY KEY,name TEXT,username TEXT,role TEXT,active INTEGER,email TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY,lead_id TEXT,user_id TEXT,action TEXT,details TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
 sqlite.function('JSON_UNQUOTE',v=>v);
 globalThis.qaSession=null;globalThis.qaFailDB=false;
 // Only the external MySQL driver and session retrieval are substituted.
@@ -45,13 +45,16 @@ globalThis.qaPool={async execute(sql,values){
 }};
 process.env.DB_HOST='test';process.env.DB_USER='test';process.env.DB_PASSWORD='test';process.env.DB_NAME='test';
 globalThis.sentMail=[];
-await build({entryPoints:['app/api/leads/route.ts'],outfile:'test-output/api.cjs',bundle:true,platform:'node',format:'cjs',plugins:[googleInterop,{name:'test-boundaries',setup(b){
+const apiBoundary={name:'test-boundaries',setup(b){
   b.onResolve({filter:/^next-auth$/},()=>({path:'session',namespace:'test'}));
   b.onResolve({filter:/^mysql2\/promise$/},()=>({path:'db',namespace:'test'}));
   b.onResolve({filter:/[\\/]mail$/},()=>({path:'mail',namespace:'test'}));
   b.onLoad({filter:/.*/,namespace:'test'},args=>({contents:args.path==='session'?'export async function getServerSession(){return globalThis.qaSession}':args.path==='mail'?'export async function sendMail(msg){globalThis.sentMail.push(msg);return true}':'export default {createPool(){return globalThis.qaPool}}',loader:'js'}));
-}}]});
+}};
+await build({entryPoints:['app/api/leads/route.ts'],outfile:'test-output/api.cjs',bundle:true,platform:'node',format:'cjs',plugins:[googleInterop,apiBoundary]});
+await build({entryPoints:['app/api/leads/[id]/featured/route.ts'],outfile:'test-output/featured.cjs',bundle:true,platform:'node',format:'cjs',plugins:[googleInterop,apiBoundary]});
 const api=require('../test-output/api.cjs');
+const featuredApi=require('../test-output/featured.cjs');
 const property=JSON.parse(readFileSync('data/properties.json','utf8'))[0];
 const make=(v,origin='https://sas.test')=>new Request('https://internal-host/api/leads',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(v)});
 assert.equal((await api.GET()).status,401);
@@ -64,6 +67,13 @@ assert.equal((await api.POST(make({...v,name:'لا يستبدل الأصل'}))).
 let list=await(await api.GET()).json();assert.equal(list.length,1);assert.equal(list[0].name,v.name);assert.equal(list[0].notes,v.notes);
 assert.equal((await api.PATCH(make({...v,stage:'viewing'}))).status,200);
 assert.equal((await(await api.GET()).json())[0].stage,'viewing');
+assert.equal((await api.POST(make({...v,id:crypto.randomUUID(),stage:'won'}))).status,400);
+assert.equal((await api.PATCH(make({...v,stage:'won'}))).status,400);
+assert.equal((await(await api.GET()).json())[0].stage,'viewing');
+sqlite.prepare('UPDATE leads SET stage=? WHERE id=?').run('won', v.id);
+assert.equal((await api.PATCH(make({...v,stage:'won'}))).status,200);
+assert.equal(sqlite.prepare('SELECT stage FROM leads WHERE id=?').get(v.id).stage,'won');
+sqlite.prepare('UPDATE leads SET stage=? WHERE id=?').run('viewing', v.id);
 assert.equal((await api.POST(make({...v,id:crypto.randomUUID(),propertyId:'invalid'}))).status,400);
 for(const followUp of ['2026-99-99','2026-02-30'])assert.equal((await api.POST(make({...v,followUp}))).status,400);
 assert.equal((await api.POST(make(v,'https://evil.test'))).status,403);
@@ -98,8 +108,30 @@ assert.equal((await api.PATCH(make({...assignedLead,stage:'contacted',assignedTo
 assert.equal(globalThis.sentMail.length,2);
 assert.equal(globalThis.sentMail[0].to,'sales-two@sas.test');
 assert.match(globalThis.sentMail[1].text,/مندوب آخر/);
+const featureReq=(id,featured)=>featuredApi.PATCH(new Request(`https://internal-host/api/leads/${id}/featured`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({featured})}),{params:Promise.resolve({id})});
+globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crmUserId:salesId,crmRole:'sales'};
+assert.equal((await featureReq(assignedLead.id,true)).status,403,'a sales rep who is no longer assigned cannot feature the client');
+globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crmUserId:salesTwo,crmRole:'sales'};
+assert.equal((await featureReq(v.id,true)).status,403);
+assert.equal((await featureReq(assignedLead.id,true)).status,200);
+assert.equal(Number(sqlite.prepare('SELECT is_featured FROM leads WHERE id=?').get(assignedLead.id).is_featured),1);
+globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crmUserId:'field-user',crmRole:'field'};
+sqlite.prepare('UPDATE leads SET field_assigned_to=? WHERE id=?').run('field-user', assignedLead.id);
+assert.equal((await featureReq(assignedLead.id,false)).status,403);
+globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crmUserId:'google:test-admin',crmRole:'supervisor'};
+assert.equal((await featureReq(v.id,true)).status,200);
+globalThis.qaSession=null;
+assert.equal((await featureReq(v.id,false)).status,401);
+globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crmUserId:'google:test-admin',crmRole:'admin'};
+sqlite.prepare('UPDATE leads SET is_featured=0').run();
+const featuredId=crypto.randomUUID();
+sqlite.prepare('INSERT INTO leads (id,owner,created_by,assigned_to,field_assigned_to,name,phone,property_id,property_other,source,stage,notes,follow_up,created_at,updated_at,is_featured) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(featuredId,'google:test-admin','google:test-admin','','','عميل أعلى القائمة','+966533333333',property.id,'','manual','new','','','2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z',1);
+const ordered=await (await api.GET()).json();
+assert.equal(ordered[0].id,featuredId,'featured clients sort ahead of newer unfeatured clients');
+assert.equal(ordered[0].is_featured,1);
 globalThis.qaFailDB=true;assert.equal((await api.GET()).status,503);
 assert.equal((await api.POST(make({...v,id:crypto.randomUUID()}))).status,503);
 sqlite.close();
+console.log('PASS: featured flag permissions and sort; new assignment to won is rejected; existing won rows can be re-saved');
 console.log('PASS: auth policy, session claims, owner isolation, CRUD, idempotency, input limits, origin checks, database failure. External Google and MySQL integration still requires staging verification.');
 console.log('PASS: sales assignment emails on create/reassign, skip unchanged assignee');

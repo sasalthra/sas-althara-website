@@ -16,11 +16,13 @@ const sqlDir = join(root, 'db', 'mysql');
 const migrations = readdirSync(sqlDir).filter(f => f.endsWith('.sql')).sort();
 assert.ok(migrations.includes('003_leads_expansion_columns.sql'),
   'the leads expansion migration must ship with the code that depends on it');
+assert.ok(migrations.includes('004_lead_featured.sql'),
+  'featured clients need a migration that adds leads.is_featured');
 
 const allSql = migrations.map(f => readFileSync(join(sqlDir, f), 'utf8')).join('\n');
 
 // 1. Every column the application reads or writes must be created by a migration.
-const REQUIRED_LEAD_COLUMNS = ['created_by', 'assigned_to', 'field_assigned_to', 'source', 'property_other'];
+const REQUIRED_LEAD_COLUMNS = ['created_by', 'assigned_to', 'field_assigned_to', 'source', 'property_other', 'is_featured'];
 for (const column of REQUIRED_LEAD_COLUMNS) {
   assert.ok(new RegExp(`\\b${column}\\b`).test(allSql),
     `leads.${column} is used by the app but no migration creates it`);
@@ -28,10 +30,15 @@ for (const column of REQUIRED_LEAD_COLUMNS) {
 
 // 2. The migration must be additive and idempotent — never destructive.
 const migration = readFileSync(join(sqlDir, '003_leads_expansion_columns.sql'), 'utf8');
+const featuredMigration = readFileSync(join(sqlDir, '004_lead_featured.sql'), 'utf8');
 for (const forbidden of [/\bDROP\s+TABLE\b/i, /\bDROP\s+COLUMN\b/i, /\bTRUNCATE\b/i, /\bDELETE\s+FROM\b/i]) {
   assert.ok(!forbidden.test(migration),
     `the migration must not contain ${forbidden} — it runs against live client data`);
+  assert.ok(!forbidden.test(featuredMigration),
+    `the featured migration must not contain ${forbidden} — it runs against live client data`);
 }
+assert.match(featuredMigration, /is_featured TINYINT\(1\) NOT NULL DEFAULT 0/,
+  'is_featured must default to false for existing clients');
 assert.ok(/information_schema\.COLUMNS/i.test(migration),
   'column additions must be guarded so re-running the migration is safe');
 assert.ok(/information_schema\.STATISTICS/i.test(migration),

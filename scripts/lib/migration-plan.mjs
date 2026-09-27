@@ -8,6 +8,8 @@ export const COLUMNS = [
   ['field_assigned_to', "VARCHAR(255) NOT NULL DEFAULT ''"],
   ['source',            "VARCHAR(80) NOT NULL DEFAULT 'manual'"],
   ['property_other',    "VARCHAR(500) NOT NULL DEFAULT ''"],
+  // 0 = not featured. MySQL fills existing rows with the default; no UPDATE.
+  ['is_featured',       'TINYINT(1) NOT NULL DEFAULT 0'],
 ];
 
 export const INDEXES = [
@@ -16,6 +18,7 @@ export const INDEXES = [
   ['leads_created_by_idx', '(created_by, created_at)'],
   ['leads_source_idx',     '(source)'],
   ['leads_property_idx',   '(property_id)'],
+  ['leads_featured_idx',   '(is_featured, created_at)'],
 ];
 
 export const STAGES = [
