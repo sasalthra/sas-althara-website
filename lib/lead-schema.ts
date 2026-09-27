@@ -7,6 +7,7 @@
  * Stage repair appends ENUM members (it never drops or reorders existing
  * ones) and then moves retired stages. A failure is logged and the page
  * keeps loading with the previous stage list.
+ * crm_users.phone is added the same way when an older users table lacks it.
  */
 
 import {retiredStageMoves, stageEnumValues} from './lead-stages';
@@ -188,6 +189,38 @@ async function convertRetiredStages(executor: SqlExecutor) {
   }
 }
 
+/**
+ * Older crm_users tables may have email without phone. One ALTER per process
+ * cache; a second run sees the column and does nothing. Missing table or a
+ * locked account must not fail the leads schema repair.
+ */
+async function ensureUserPhone(executor: SqlExecutor) {
+  let missing = false;
+  try {
+    const rows = rowsOf(await run(executor, 'SHOW COLUMNS FROM crm_users'));
+    missing = !rows.some(row => columnName(row).toLowerCase() === 'phone');
+  } catch (error) {
+    if (/no such table|ER_NO_SUCH_TABLE/i.test(messageOf(error))) return;
+    try {
+      await run(executor, 'SELECT phone FROM crm_users LIMIT 0');
+      return;
+    } catch (probe) {
+      if (/phone|unknown column|no such column|ER_BAD_FIELD_ERROR/i.test(messageOf(probe))) {
+        missing = true;
+      } else {
+        return;
+      }
+    }
+  }
+  if (!missing) return;
+  try {
+    await run(executor, 'ALTER TABLE crm_users ADD COLUMN phone VARCHAR(30) NULL');
+  } catch (error) {
+    if (/duplicate|already exists|ER_DUP_FIELDNAME/i.test(messageOf(error))) return;
+    console.error('crm_users.phone was not added', error);
+  }
+}
+
 async function repairStages(executor: SqlExecutor) {
   try {
     await widenStageEnum(executor);
@@ -202,6 +235,11 @@ async function repairStages(executor: SqlExecutor) {
 }
 
 async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
+  try {
+    await ensureUserPhone(executor);
+  } catch (error) {
+    console.error('crm_users phone check failed', error);
+  }
   let featured = false;
   const existing = await hasFeaturedColumn(executor);
   if (existing === null) {

@@ -3,6 +3,7 @@ import {useEffect,useState,type FormEvent,type ReactNode} from 'react';
 import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend,CartesianGrid,AreaChart,Area} from 'recharts';
 import {AlertCircle,BarChart3,Bell,Building2,Calendar,CheckCircle2,ClipboardList,Download,FileText,Filter,Home,Info,Layers,PieChart as PieIcon,TrendingUp,Users} from 'lucide-react';
 import {allowedReports,type ReportResult} from '@/lib/report-catalog';
+import {canonicalStage, displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import {CrmLink,navigateCrm,useCrmQuery} from './navigation';
 
 type Summary={id:string;label:string;kind:string;note:string;status:string;total:number|null;error?:string;metrics?:ReportResult['metrics']};
@@ -70,6 +71,18 @@ function KpiCard({value,label,icon,chip}:{value:string|number;label:string;icon:
    {chip?<span className="reports-kpi-chip">{chip}</span>:null}
   </div>
  );
+}
+
+function stageFilterValue(raw:string){
+ const text=raw.trim();
+ if(!text)return '';
+ const key=displayStage(canonicalStage(text)||text);
+ return stageChoices().some(([stageKey])=>stageKey===key)?stageLabel(key):text;
+}
+function stageFilterExtra(raw:string){
+ const selected=stageFilterValue(raw);
+ if(!selected||stageChoices().some(([,label])=>label===selected))return null;
+ return <option value={selected}>{selected}</option>;
 }
 
 function ChartEmpty({title,hint}:{title:string;hint:string}){
@@ -151,7 +164,7 @@ export default function ReportsPanel({role}:{role:string}){
   :(leadsSummary?.status==='ok'?leadsSummary.total:null);
  const employeesCount=stateData?.employees.length??null;
 
- const stagePieData=stageBars.slice(0,8).map(s=>({name:s.label,value:s.count}));
+ const stagePieData=stageBars.map(s=>({name:s.label,value:s.count}));
  const moduleBars=(stateData?.summaries||[])
   .filter(s=>s.status==='ok'&&s.total!==null)
   .map(s=>({name:s.label,value:s.total as number}));
@@ -244,7 +257,10 @@ export default function ReportsPanel({role}:{role:string}){
       <input type="date" name="to" aria-label="إلى تاريخ" defaultValue={query.get('to')||stateData?.filters.to||''}/>
      </div>
     </label>
-    <label>مرحلة العميل<input name="stage" placeholder={selectedModule==='transactions'?'مرحلة طلب التمويل':'كل المراحل'} defaultValue={query.get('stage')||''}/></label>
+    <label>مرحلة العميل{selectedModule==='transactions'
+     ?<input name="stage" placeholder="مرحلة طلب التمويل" defaultValue={query.get('stage')||''}/>
+     :<select name="stage" defaultValue={stageFilterValue(query.get('stage')||'')}><option value="">كل المراحل</option>{stageChoices().map(([key,label])=><option key={key} value={label}>{label}</option>)}{stageFilterExtra(query.get('stage')||'')}</select>
+    }</label>
     <label>مصدر العميل<input name="source" placeholder="كل المصادر" defaultValue={query.get('source')||''}/></label>
     <label>الموظف<select name="reportEmployee" defaultValue={query.get('reportEmployee')||''}><option value="">{role==='admin'?'جميع الموظفين':'نطاقي فقط'}</option>{stateData?.employees.map(e=><option key={e.id} value={e.id}>{e.name} — {e.id}</option>)}</select></label>
     <label>الوحدة التقريرية<select name="module" defaultValue={selectedModule}><option value="overview">نظرة عامة — كل المسموح</option>{modules.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label>

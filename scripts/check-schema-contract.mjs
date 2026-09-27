@@ -56,6 +56,10 @@ for (const [from, to, note] of [
   ['تم عرض العقارات', 'awaiting_offers', 'تم اعتماد مرحلة بانتظار العروض'],
   ['viewing', 'field_dispatch', 'تم اعتماد مرحلة تفويج للميداني'],
   ['visit_qualified', 'field_dispatch', 'تم اعتماد مرحلة تفويج للميداني'],
+  ['calculation_done', 'contacted', 'تم اعتماد مرحلة تم التواصل'],
+  ['تم عمل حسبة للعميل', 'contacted', 'تم اعتماد مرحلة تم التواصل'],
+  ['bank_approval', 'bank_referred', 'تم اعتماد مرحلة تمت إحالة معاملة العميل للبنك'],
+  ['مؤهل بانتظار موافقة البنك', 'bank_referred', 'تم اعتماد مرحلة تمت إحالة معاملة العميل للبنك'],
 ]) {
   assert.match(stageMigration, new RegExp(`UPDATE leads SET stage = '${to}' WHERE stage = '${from}'`),
     `005 must move ${from} to ${to}`);

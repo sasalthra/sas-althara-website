@@ -28,7 +28,8 @@ try {
  const filters=parseReportFilters(new URLSearchParams('from=2026-09-01&to=2026-09-30'));
  let report=await readReport(db,admin,'leads',filters);
  assert.equal(report.total,1,'Riyadh calendar endpoint excludes UTC timestamps after 21:00');
- assert.equal(report.groups.stage.find(x=>x.label==='new').count,1);
+ assert.equal(report.groups.stage.find(x=>x.label==='عميل جديد').count,1);
+ assert.deepEqual(report.groups.stage.map(x=>x.label),['عميل جديد']);
  report=await readReport(db,alice,'leads',filters);assert.equal(report.total,1,'owner isolation applies to totals');assert.equal(report.rows[0].id,'a');
  assert.throws(()=>parseReportFilters(new URLSearchParams('from=2026-02-30')),/date|تاريخ/);
  assert.throws(()=>parseReportFilters(new URLSearchParams('from=2026-10-01&to=2026-09-01')),/date|تاريخ/);
@@ -62,6 +63,7 @@ try {
   assert.equal(snap.notInterested,1);
   assert.equal(snap.interested,4,'interested = all stages except not_interested');
   assert.ok(snap.byStage.some(s=>s.stage==='field_dispatch'&&s.label==='تفويج للميداني'));
+  assert.deepEqual(snap.byStage.map(s=>s.stage),['new','field_dispatch','contract_signed','not_interested']);
   assert.equal(snap.byStage.some(s=>s.stage==='viewing'||s.label==='معاينة'),false);
   const aliceSnap=await readClientsSnapshot(db,alice,{employee:''});
   assert.equal(aliceSnap.total,3,'sales scope still applies without a date filter');
