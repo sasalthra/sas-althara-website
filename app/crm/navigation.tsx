@@ -25,7 +25,7 @@ export function navigateCrm(href: string) {
   for (const key of ["tab", "hr", "lead", "module", "from", "to", "source", "stage", "funding", "page", "pageSize", "reportEmployee"])
     current.searchParams.delete(key);
   target.searchParams.forEach((value, key) => current.searchParams.set(key, value));
-  window.history.pushState(null, "", current.pathname + current.search);
+  window.history.pushState(null, "", current.pathname + current.search + target.hash);
   window.dispatchEvent(new Event("crm:navigate"));
 }
 export function CrmLink({
