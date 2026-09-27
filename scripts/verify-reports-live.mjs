@@ -59,6 +59,9 @@ try {
   ok(String(cols[0].Type).includes(`'${stage}'`), `المرحلة «${stage}» مقبولة في ENUM`);
   ok(String(cols[0].Type).includes("'won'") && String(cols[0].Type).includes("'closed'"),
     'المراحل won و closed أُعيدت بعد التوسيع');
+  for (const key of ['awaiting_offers', 'field_dispatch', 'bank_referred', 'postponed']) {
+    ok(String(cols[0].Type).includes(`'${key}'`), `المرحلة ${key} مضافة إلى ENUM`);
+  }
 
   console.log(failures ? `\n✗ ${failures} تحقق فشل` : '\n✓ كل التحققات نجحت — التقارير تقرأ البيانات فعلاً');
 } finally { await conn.end(); }

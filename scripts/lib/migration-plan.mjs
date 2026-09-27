@@ -21,11 +21,24 @@ export const INDEXES = [
   ['leads_featured_idx',   '(is_featured, created_at)'],
 ];
 
+// Storage order matches production after 003, with new keys appended.
+// Do not reorder existing members: MySQL ENUM values are indexed.
 export const STAGES = [
   'new','received','no_answer','contacted','data_received','calculation_done',
   'visit_qualified','property_visited','bank_approval','deposit_paid',
   'contract_signed','transferred','unqualified','not_interested',
   'viewing','negotiation','won','closed',
+  'awaiting_offers','field_dispatch','bank_referred','postponed','properties_shown',
+];
+
+export const STAGE_MOVES = [
+  ['won', 'contract_signed', 'تم اعتماد مرحلة وقع عقد'],
+  ['received', 'contacted', 'تم اعتماد مرحلة تم التواصل'],
+  ['data_received', 'contacted', 'تم اعتماد مرحلة تم التواصل'],
+  ['properties_shown', 'awaiting_offers', 'تم اعتماد مرحلة بانتظار العروض'],
+  ['تم عرض العقارات', 'awaiting_offers', 'تم اعتماد مرحلة بانتظار العروض'],
+  ['viewing', 'field_dispatch', 'تم اعتماد مرحلة تفويج للميداني'],
+  ['visit_qualified', 'field_dispatch', 'تم اعتماد مرحلة تفويج للميداني'],
 ];
 
 // Given the output of SHOW COLUMNS / SHOW INDEX, decide what must change.

@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import properties from '../data/properties.json';
-export const stageKeys = ['new','received','no_answer','contacted','data_received','calculation_done','visit_qualified','property_visited','bank_approval','deposit_paid','contract_signed','transferred','unqualified','not_interested','viewing','negotiation','won','closed'] as const;
+import {stageEnumValues} from './lead-stages';
+export const stageKeys = stageEnumValues;
 export const leadSchema = z.object({
   id:z.string().uuid(), name:z.string().trim().min(1).max(100),
   phone:z.string().trim().regex(/^[+\d\s()-]{7,22}$/),

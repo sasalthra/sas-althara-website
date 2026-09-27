@@ -61,7 +61,8 @@ try {
   assert.equal(snap.total,5,'snapshot ignores the default date window');
   assert.equal(snap.notInterested,1);
   assert.equal(snap.interested,4,'interested = all stages except not_interested');
-  assert.ok(snap.byStage.some(s=>s.stage==='viewing'&&s.label==='معاينة'));
+  assert.ok(snap.byStage.some(s=>s.stage==='field_dispatch'&&s.label==='تفويج للميداني'));
+  assert.equal(snap.byStage.some(s=>s.stage==='viewing'||s.label==='معاينة'),false);
   const aliceSnap=await readClientsSnapshot(db,alice,{employee:''});
   assert.equal(aliceSnap.total,3,'sales scope still applies without a date filter');
   assert.equal(aliceSnap.notInterested,1);

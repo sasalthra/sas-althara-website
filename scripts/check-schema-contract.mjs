@@ -18,6 +18,8 @@ assert.ok(migrations.includes('003_leads_expansion_columns.sql'),
   'the leads expansion migration must ship with the code that depends on it');
 assert.ok(migrations.includes('004_lead_featured.sql'),
   'featured clients need a migration that adds leads.is_featured');
+assert.ok(migrations.includes('005_lead_stages.sql'),
+  'retired lead stages need a migration that appends the new ENUM values and moves existing rows');
 
 const allSql = migrations.map(f => readFileSync(join(sqlDir, f), 'utf8')).join('\n');
 
@@ -31,11 +33,14 @@ for (const column of REQUIRED_LEAD_COLUMNS) {
 // 2. The migration must be additive and idempotent — never destructive.
 const migration = readFileSync(join(sqlDir, '003_leads_expansion_columns.sql'), 'utf8');
 const featuredMigration = readFileSync(join(sqlDir, '004_lead_featured.sql'), 'utf8');
+const stageMigration = readFileSync(join(sqlDir, '005_lead_stages.sql'), 'utf8');
 for (const forbidden of [/\bDROP\s+TABLE\b/i, /\bDROP\s+COLUMN\b/i, /\bTRUNCATE\b/i, /\bDELETE\s+FROM\b/i]) {
   assert.ok(!forbidden.test(migration),
     `the migration must not contain ${forbidden} — it runs against live client data`);
   assert.ok(!forbidden.test(featuredMigration),
     `the featured migration must not contain ${forbidden} — it runs against live client data`);
+  assert.ok(!forbidden.test(stageMigration),
+    `the stage migration must not contain ${forbidden} — it runs against live client data`);
 }
 assert.match(featuredMigration, /is_featured TINYINT\(1\) NOT NULL DEFAULT 0/,
   'is_featured must default to false for existing clients');
@@ -44,24 +49,46 @@ assert.match(featuredMigration, /UPDATE leads SET stage = 'contract_signed' WHER
 assert.match(featuredMigration, /lead_activity/,
   'the SQL migration must record the won conversion');
 assert.match(featuredMigration, /تم اعتماد مرحلة وقع عقد/);
+for (const [from, to, note] of [
+  ['received', 'contacted', 'تم اعتماد مرحلة تم التواصل'],
+  ['data_received', 'contacted', 'تم اعتماد مرحلة تم التواصل'],
+  ['properties_shown', 'awaiting_offers', 'تم اعتماد مرحلة بانتظار العروض'],
+  ['تم عرض العقارات', 'awaiting_offers', 'تم اعتماد مرحلة بانتظار العروض'],
+  ['viewing', 'field_dispatch', 'تم اعتماد مرحلة تفويج للميداني'],
+  ['visit_qualified', 'field_dispatch', 'تم اعتماد مرحلة تفويج للميداني'],
+]) {
+  assert.match(stageMigration, new RegExp(`UPDATE leads SET stage = '${to}' WHERE stage = '${from}'`),
+    `005 must move ${from} to ${to}`);
+  assert.ok(stageMigration.includes(note), `005 must record ${note}`);
+  assert.match(stageMigration, /stage_changed/);
+}
 assert.ok(/information_schema\.COLUMNS/i.test(migration),
   'column additions must be guarded so re-running the migration is safe');
 assert.ok(/information_schema\.STATISTICS/i.test(migration),
   'index additions must be guarded so re-running the migration is safe');
 
 // 3. The widened stage ENUM must cover every key the validator accepts.
-const stageKeys = (readFileSync(join(root, 'lib', 'lead-input.ts'), 'utf8')
-  .match(/export const stageKeys\s*=\s*\[([^\]]+)\]/) || [])[1];
-assert.ok(stageKeys, 'could not read stageKeys from lib/lead-input.ts');
+const stageSource = readFileSync(join(root, 'lib', 'lead-stages.ts'), 'utf8');
+const stageKeys = (stageSource.match(/export const stageEnumValues\s*=\s*\[([\s\S]*?)\]\s*as const/) || [])[1];
+assert.ok(stageKeys, 'could not read stageEnumValues from lib/lead-stages.ts');
+assert.match(readFileSync(join(root, 'lib', 'lead-input.ts'), 'utf8'), /stageEnumValues/,
+  'lib/lead-input.ts must validate the same stage list as lib/lead-stages.ts');
 const keys = [...stageKeys.matchAll(/'([^']+)'/g)].map(m => m[1]);
-assert.ok(keys.length >= 18, `expected the full stage list, found ${keys.length}`);
-const enumBlock = (migration.match(/MODIFY COLUMN stage ENUM\(([\s\S]*?)\)\s*NOT NULL/) || [])[1];
-assert.ok(enumBlock, 'the migration must widen the stage ENUM');
-const enumValues = [...enumBlock.matchAll(/'([^']+)'/g)].map(m => m[1]);
+assert.ok(keys.length >= 23, `expected the full stage list, found ${keys.length}`);
+function enumValuesOf(sql) {
+  const block = (sql.match(/MODIFY COLUMN stage ENUM\(([\s\S]*?)\)\s*NOT NULL/) || [])[1];
+  assert.ok(block, 'a stage migration must widen the stage ENUM');
+  return [...block.matchAll(/'([^']+)'/g)].map(m => m[1]);
+}
+const enumValues = enumValuesOf(migration);
+const stageSqlValues = enumValuesOf(stageMigration);
+assert.deepEqual(stageSqlValues, enumValues, '003 and 005 must declare the same stage ENUM');
 for (const key of keys) {
   assert.ok(enumValues.includes(key),
-    `stage '${key}' is accepted by lib/lead-input.ts but rejected by the leads ENUM`);
+    `stage '${key}' is accepted by lib/lead-stages.ts but rejected by the leads ENUM`);
 }
+assert.deepEqual([...enumValues].sort(), [...keys].sort(),
+  'the SQL ENUM and stageEnumValues must be the same set');
 
 // 4. Behavioural proof: build the POST-migration schema and run the real report
 //    queries against it. Before the migration these same queries threw.

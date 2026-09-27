@@ -131,7 +131,7 @@ try {
   assert.deepEqual(wonAliases.map(r=>r.lead.stage),['contract_signed','contract_signed','contract_signed','contract_signed','contract_signed','contract_signed']);
   console.log('PASS import mapping, Arabic digits, canonical phone dedup, invalid rows and raw preservation');
   console.log('PASS retired won aliases import as contract_signed');
-  await build({stdin:{contents:`export {stageChoices, stageWriteAllowed, canonicalStage, stageLabel, editableStage} from './lib/lead-stages.ts';
+  await build({stdin:{contents:`export {stageChoices, stageWriteAllowed, canonicalStage, stageLabel, editableStage, stageEnumValues} from './lib/lead-stages.ts';
 export {formatRiyadhDate, riyadhDayKey} from './lib/lead-dates.ts';
 export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/lead-featured.ts';`,resolveDir:process.cwd(),loader:'ts'},outfile:join(output,'lead-rules.cjs'),bundle:true,platform:'node',format:'cjs'});
   const rules=createRequire(import.meta.url)(join(output,'lead-rules.cjs'));
@@ -146,6 +146,74 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
   assert.equal(rules.stageWriteAllowed('won','new'),false);
   assert.equal(rules.stageWriteAllowed('won','won'),false);
   assert.equal(rules.stageWriteAllowed('contract_signed','won'),true);
+  const choiceLabels=rules.stageChoices().map(([,label])=>label);
+  assert.deepEqual(choiceLabels,[
+    'عميل جديد','لم يتم الرد','تم التواصل','تم عمل حسبة للعميل','بانتظار العروض','تفويج للميداني',
+    'تم زيارة العقار','تمت إحالة معاملة العميل للبنك','مؤهل بانتظار موافقة البنك','دفع عربون','وقع عقد','إفراغ',
+    'تم تأجيل الطلب - للمتابعة','غير مؤهل','غير مهتم','تفاوض','مغلق',
+  ]);
+  for(const label of ['تم استلام العميل','تم استلام بيانات العميل','تم عرض العقارات','معاينة','مؤهل زيارة','مؤهل زيارة العقار']){
+    assert.equal(choiceLabels.includes(label),false,label);
+  }
+  assert.equal(rules.stageChoices().some(([key])=>key==='viewing'||key==='received'||key==='data_received'||key==='visit_qualified'),false);
+  assert.equal(rules.canonicalStage('تم استلام العميل'),'contacted');
+  assert.equal(rules.canonicalStage('تم استلام بيانات العميل'),'contacted');
+  assert.equal(rules.canonicalStage('received'),'contacted');
+  assert.equal(rules.canonicalStage('data_received'),'contacted');
+  assert.equal(rules.canonicalStage('تم عرض العقارات'),'awaiting_offers');
+  assert.equal(rules.canonicalStage('معاينة'),'field_dispatch');
+  assert.equal(rules.canonicalStage('viewing'),'field_dispatch');
+  assert.equal(rules.canonicalStage('مؤهل زيارة'),'field_dispatch');
+  assert.equal(rules.canonicalStage('مؤهل زيارة العقار'),'field_dispatch');
+  assert.equal(rules.canonicalStage('visit_qualified'),'field_dispatch');
+  assert.equal(rules.canonicalStage('بنتظار العروض'),'awaiting_offers');
+  assert.equal(rules.canonicalStage('بانتظار العروض'),'awaiting_offers');
+  assert.equal(rules.canonicalStage('في انتظار العروض'),'awaiting_offers');
+  assert.equal(rules.canonicalStage('مؤجل'),'postponed');
+  assert.equal(rules.canonicalStage('تأجيل'),'postponed');
+  assert.equal(rules.canonicalStage('اعادة تواصل'),'postponed');
+  assert.equal(rules.canonicalStage('إعادة تواصل'),'postponed');
+  assert.equal(rules.canonicalStage('تمت إحالة معاملة العميل للبنك'),'bank_referred');
+  assert.equal(rules.canonicalStage('تفويج للميداني'),'field_dispatch');
+  assert.equal(rules.canonicalStage('تم تأجيل الطلب - للمتابعة'),'postponed');
+  assert.equal(rules.stageLabel('viewing'),'تفويج للميداني');
+  assert.equal(rules.stageLabel('received'),'تم التواصل');
+  assert.equal(rules.stageLabel('data_received'),'تم التواصل');
+  assert.equal(rules.stageLabel('visit_qualified'),'تفويج للميداني');
+  assert.equal(rules.stageLabel('تم عرض العقارات'),'بانتظار العروض');
+  assert.equal(rules.editableStage('viewing'),'field_dispatch');
+  assert.equal(rules.editableStage('visit_qualified'),'field_dispatch');
+  assert.equal(rules.editableStage('data_received'),'contacted');
+  assert.equal(rules.editableStage('received'),'contacted');
+  assert.equal(rules.stageWriteAllowed('viewing'),false);
+  assert.equal(rules.stageWriteAllowed('received'),false);
+  assert.equal(rules.stageWriteAllowed('data_received'),false);
+  assert.equal(rules.stageWriteAllowed('visit_qualified'),false);
+  assert.equal(rules.stageWriteAllowed('properties_shown'),false);
+  assert.equal(rules.stageWriteAllowed('field_dispatch'),true);
+  assert.equal(rules.stageWriteAllowed('awaiting_offers'),true);
+  assert.equal(rules.stageWriteAllowed('bank_referred'),true);
+  assert.equal(rules.stageWriteAllowed('postponed'),true);
+  const retiredImport=previewImport([
+    ['استلام','0500000101','تم استلام العميل'],
+    ['بيانات','0500000102','تم استلام بيانات العميل'],
+    ['عرض','0500000103','تم عرض العقارات'],
+    ['معاينة صف','0500000104','معاينة'],
+    ['زيارة','0500000105','مؤهل زيارة العقار'],
+    ['بنتظار','0500000106','بنتظار العروض'],
+    ['انتظار','0500000107','في انتظار العروض'],
+    ['مؤجل صف','0500000108','مؤجل'],
+    ['تأجيل صف','0500000109','تأجيل'],
+    ['متابعة','0500000110','اعادة تواصل'],
+    ['بنك','0500000111','تمت إحالة معاملة العميل للبنك'],
+    ['ميدان','0500000112','تفويج للميداني'],
+    ['مؤجل كامل','0500000113','تم تأجيل الطلب - للمتابعة'],
+  ],{name:0,phone:1,stage:2},[]);
+  assert.deepEqual(retiredImport.map(r=>r.status),retiredImport.map(()=>'ready'));
+  assert.deepEqual(retiredImport.map(r=>r.lead.stage),[
+    'contacted','contacted','awaiting_offers','field_dispatch','field_dispatch','awaiting_offers','awaiting_offers',
+    'postponed','postponed','postponed','bank_referred','field_dispatch','postponed',
+  ]);
   assert.equal(rules.featuredControlsEnabled({}),true);
   assert.equal(rules.featuredControlsEnabled({featured_available:0}),false);
   assert.equal(rules.featuredControlsEnabled({featured_available:'0'}),false);
@@ -167,35 +235,68 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled} from './lib/
   const {ensureLeadSchema,resetLeadSchemaCache}=createRequire(import.meta.url)(join(output,'lead-schema.cjs'));
   function sqliteExecutor(db){return {async execute(sql,values=[]){const text=String(sql).trim();if(text.startsWith('SHOW'))throw Error('near SHOW: syntax error');if(text.startsWith('SELECT'))return [db.prepare(text).all(...values)];return [{affectedRows:Number(db.prepare(text).run(...values).changes)}];}};}
   const mem=new DatabaseSync(':memory:');
-  mem.exec("CREATE TABLE leads(id TEXT PRIMARY KEY, stage TEXT, created_at TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP); INSERT INTO leads VALUES ('w1','won','2020-01-01'),('n1','new','2026-01-01');");
+  mem.exec("CREATE TABLE leads(id TEXT PRIMARY KEY, stage TEXT, created_at TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP); INSERT INTO leads VALUES ('w1','won','2020-01-01'),('n1','new','2026-01-01'),('r1','received','2020-01-01'),('d1','data_received','2020-01-01'),('p1','properties_shown','2020-01-01'),('a1','تم عرض العقارات','2020-01-01'),('v1','viewing','2020-01-01'),('q1','visit_qualified','2020-01-01');");
   resetLeadSchemaCache();
   const repaired=await ensureLeadSchema(sqliteExecutor(mem));
   assert.equal(repaired.featured,true);
   assert.equal(mem.prepare("SELECT is_featured FROM leads WHERE id='n1'").get().is_featured,0);
   assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='w1'").get().stage,'contract_signed');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='r1'").get().stage,'contacted');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='d1'").get().stage,'contacted');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='p1'").get().stage,'awaiting_offers');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='a1'").get().stage,'awaiting_offers');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='v1'").get().stage,'field_dispatch');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='q1'").get().stage,'field_dispatch');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id='n1'").get().stage,'new');
   const history=mem.prepare("SELECT user_id, action, details FROM lead_activity WHERE lead_id='w1'").all();
   assert.equal(history.length,1);
   assert.equal(history[0].user_id,'system');
   assert.equal(history[0].action,'stage_changed');
   assert.match(history[0].details,/contract_signed/);
   assert.match(history[0].details,/تم اعتماد مرحلة وقع عقد/);
+  const viewingHistory=mem.prepare("SELECT details FROM lead_activity WHERE lead_id='v1'").get();
+  assert.match(viewingHistory.details,/field_dispatch/);
+  assert.match(viewingHistory.details,/تم اعتماد مرحلة تفويج للميداني/);
+  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM lead_activity').get().n,7,'one history row per converted lead');
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='leads_featured_idx'").all().length,1);
   resetLeadSchemaCache();
   await ensureLeadSchema(sqliteExecutor(mem));
-  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM lead_activity').get().n,1,'a second repair does not write another history row');
+  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM lead_activity').get().n,7,'a second repair does not write another history row');
   const locked=new DatabaseSync(':memory:');
-  locked.exec("CREATE TABLE leads(id TEXT PRIMARY KEY, stage TEXT, created_at TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT); INSERT INTO leads VALUES ('w2','won','2020-01-01');");
+  locked.exec("CREATE TABLE leads(id TEXT PRIMARY KEY, stage TEXT, created_at TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT); INSERT INTO leads VALUES ('w2','won','2020-01-01'),('v2','viewing','2020-01-01');");
   resetLeadSchemaCache();
   const lockedState=await ensureLeadSchema({async execute(sql,values=[]){const text=String(sql).trim();if(text.startsWith('SHOW')||text.startsWith('ALTER')||text.startsWith('CREATE'))throw Error('schema locked');if(text.startsWith('SELECT'))return [locked.prepare(text).all(...values)];return [{affectedRows:Number(locked.prepare(text).run(...values).changes)}];}});
   assert.equal(lockedState.featured,false);
   assert.equal(locked.prepare("SELECT stage FROM leads WHERE id='w2'").get().stage,'contract_signed');
+  assert.equal(locked.prepare("SELECT stage FROM leads WHERE id='v2'").get().stage,'field_dispatch');
   resetLeadSchemaCache();
   const failed=await ensureLeadSchema({async execute(){throw Error('access denied');}});
   assert.equal(failed.featured,false);
   const cachedFailure=await ensureLeadSchema({async execute(){throw Error('should stay cached');}});
   assert.equal(cachedFailure.featured,false);
   resetLeadSchemaCache();
-  mem.close();locked.close();
+  const enumDb=new DatabaseSync(':memory:');
+  enumDb.exec("CREATE TABLE leads(id TEXT PRIMARY KEY, stage TEXT, created_at TEXT, is_featured INTEGER NOT NULL DEFAULT 0); CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP); INSERT INTO leads (id,stage,created_at) VALUES ('r9','received','2020-01-01'),('v9','viewing','2020-01-01'),('ok','new','2026-01-01');");
+  const calls=[];
+  const widened=await ensureLeadSchema({async execute(sql,values=[]){const text=String(sql).trim();calls.push(text);if(text.startsWith('SHOW COLUMNS'))return [[{Field:'stage',Type:"enum('new','received','contacted','viewing','won','closed')"},{Field:'is_featured',Type:'tinyint(1)'}]];if(text.startsWith('SHOW'))return [[]];if(text.startsWith('ALTER TABLE leads MODIFY COLUMN stage'))return [{affectedRows:0}];if(text.startsWith('ALTER')||text.startsWith('CREATE'))return [{affectedRows:0}];if(text.startsWith('SELECT'))return [enumDb.prepare(text).all(...values)];return [{affectedRows:Number(enumDb.prepare(text).run(...values).changes)}];}});
+  assert.equal(widened.featured,true);
+  const alter=calls.find(sql=>sql.startsWith('ALTER TABLE leads MODIFY COLUMN stage'));
+  assert.ok(alter,'an ENUM stage column is widened before rows are moved');
+  const members=[...alter.matchAll(/'([^']+)'/g)].map(m=>m[1]);
+  assert.deepEqual(members.slice(0,6),['new','received','contacted','viewing','won','closed']);
+  for(const key of ['awaiting_offers','field_dispatch','bank_referred','postponed','properties_shown','visit_qualified','data_received'])assert.ok(members.includes(key),key);
+  const alterAt=calls.findIndex(sql=>sql.startsWith('ALTER TABLE leads MODIFY COLUMN stage'));
+  const updateAt=calls.findIndex(sql=>sql.startsWith('UPDATE leads SET stage'));
+  assert.ok(updateAt>alterAt,'rows move only after the ENUM includes the new keys');
+  assert.equal(enumDb.prepare("SELECT stage FROM leads WHERE id='r9'").get().stage,'contacted');
+  assert.equal(enumDb.prepare("SELECT stage FROM leads WHERE id='v9'").get().stage,'field_dispatch');
+  assert.equal(enumDb.prepare("SELECT stage FROM leads WHERE id='ok'").get().stage,'new');
+  assert.equal(enumDb.prepare('SELECT COUNT(*) AS n FROM lead_activity').get().n,2);
+  calls.length=0;
+  resetLeadSchemaCache();
+  await ensureLeadSchema({async execute(sql,values=[]){const text=String(sql).trim();calls.push(text);if(text.includes('MODIFY COLUMN stage'))throw Error('enum locked');if(text.startsWith('SHOW COLUMNS'))return [[{Field:'stage',Type:"enum('new','won')"},{Field:'is_featured',Type:'tinyint(1)'}]];if(text.startsWith('SHOW')||text.startsWith('ALTER')||text.startsWith('CREATE'))return [[]];if(text.startsWith('SELECT'))return [enumDb.prepare(text).all(...values)];return [{affectedRows:Number(enumDb.prepare(text).run(...values).changes)}];}});
+  assert.equal(enumDb.prepare('SELECT COUNT(*) AS n FROM lead_activity').get().n,2,'a failed ENUM change does not duplicate history');
+  mem.close();locked.close();enumDb.close();
   console.log('PASS runtime schema repair adds is_featured, converts won once, and fails closed');
   console.log('PASS import name/phone-only visibility, existing stage aliases, unknown stage warning, follow-up parse, round-robin');
   console.log('PASS Althara workbook headers, tatweel phone, dash/empty الطلب, 9-digit mobiles, حسبه/سداد stages');

@@ -2,6 +2,7 @@
 // Then replays the planned statements against SQLite to prove the migrated
 // schema actually satisfies the real report queries.
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {DatabaseSync} from 'node:sqlite';
 import {planMigration, LEGACY_COLUMNS, COLUMNS, INDEXES, STAGES} from './lib/migration-plan.mjs';
 import {parseEnv} from './lib/parse-env.mjs';
@@ -13,8 +14,17 @@ assert.deepEqual(legacyPlan.addColumns.map(([c]) => c).sort(),
   ['assigned_to', 'created_by', 'field_assigned_to', 'is_featured', 'property_other', 'source']);
 assert.equal(legacyPlan.widenStage, true, 'the 6-value stage ENUM must be widened');
 assert.ok(STAGES.includes('won'), 'historical won rows must remain a valid ENUM value');
-assert.ok(legacyPlan.statements.some(s => /MODIFY COLUMN stage/.test(s) && s.includes("'won'")),
-  'widening the stage ENUM must keep won so existing مكسب rows are not invalidated');
+assert.ok(STAGES.includes('viewing') && STAGES.includes('received') && STAGES.includes('visit_qualified'),
+  'retired stage keys must remain valid ENUM values');
+for (const key of ['awaiting_offers', 'field_dispatch', 'bank_referred', 'postponed', 'properties_shown']) {
+  assert.ok(STAGES.includes(key), `new stage ${key} must be added to the ENUM`);
+}
+assert.ok(legacyPlan.statements.some(s => /MODIFY COLUMN stage/.test(s) && s.includes("'won'") && s.includes("'awaiting_offers'")),
+  'widening the stage ENUM must keep won and add the new pipeline keys');
+const sqlEnum = [...readFileSync('db/mysql/005_lead_stages.sql', 'utf8').match(/MODIFY COLUMN stage ENUM\(([\s\S]*?)\)\s*NOT NULL/)[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
+assert.deepEqual(STAGES, sqlEnum, 'the migration planner must emit the same ENUM as 005');
+const stageEnumValues = [...readFileSync('lib/lead-stages.ts', 'utf8').match(/export const stageEnumValues\s*=\s*\[([\s\S]*?)\]\s*as const/)[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
+assert.deepEqual([...STAGES].sort(), [...stageEnumValues].sort(), 'planner stages and stageEnumValues must be the same set');
 assert.equal(legacyPlan.addIndexes.length, 6, 'all report indexes must be planned');
 assert.equal(legacyPlan.upToDate, false);
 
