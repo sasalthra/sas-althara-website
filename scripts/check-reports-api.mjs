@@ -26,7 +26,7 @@ try{
  response=await f.get('module=profiles');body=await response.json();assert.equal(body.report.rows[0].grace_minutes,15);assert.equal(body.report.rows[0].work_days,'0, 1, 2, 3, 4');
  response=await f.get('module=activity&from=2026-09-30&to=2026-09-30');assert.equal((await response.json()).report.total,1,'SQL timestamp date bounds');
  for(const role of ['sales','field','supervisor']){
-  f.actor({userId:'alice',role,name:'Synthetic'});body=await(await f.get()).json();assert.equal(body.summaries.length,8);assert.deepEqual(body.employees.map(e=>e.id),['alice']);
+  f.actor({userId:'alice',role,name:'Synthetic'});body=await(await f.get()).json();assert.equal(body.summaries.length,8);assert.deepEqual(body.employees.map(e=>e.id),['alice']);assert.equal(body.employees[0].name,'موظف اصطناعي أ','the employee filter reads the current crm_users name');
   for(const id of ['transactions','users','audit','imports','importRows','sheets','ai']){const before=f.count;assert.equal((await f.get('module='+id)).status,403);assert.equal((await f.get('module='+id+'&format=csv')).status,403);assert.equal(f.count,before,'denied before any SQL');}
   for(const id of ['leads','followups','activity','properties','attendance','profiles','requests','announcements'])assert.equal((await f.get('module='+id+'&format=csv')).status,403);
   assert.equal((await f.get('employee=bob')).status,403);

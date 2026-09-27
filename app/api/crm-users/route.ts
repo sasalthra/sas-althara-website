@@ -3,7 +3,7 @@ import {z} from 'zod';
 
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
-import {parseUserEmail, parseUserPhone} from '@/lib/user-contact';
+import {parseUserEmail, parseUserName, parseUserPhone} from '@/lib/user-contact';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -52,6 +52,7 @@ const createUserSchema = z.object({
 
 const updateContactSchema = z.object({
   id: z.string().trim().min(1).max(255),
+  name: z.string().max(200),
   email: z.string().max(190),
   phone: z.string().max(40),
 });
@@ -401,20 +402,22 @@ export async function PATCH(req: Request) {
 
   const parsed = updateContactSchema.safeParse(body);
   if (!parsed.success) {
-    return reply({error: 'راجع البريد الإلكتروني ورقم الجوال'}, 400);
+    return reply({error: 'راجع الاسم والبريد الإلكتروني ورقم الجوال'}, 400);
   }
 
+  const name = parseUserName(parsed.data.name);
   const email = parseUserEmail(parsed.data.email);
   const phone = parseUserPhone(parsed.data.phone);
+  if (!name.ok) return reply({error: name.error}, 400);
   if (!email.ok) return reply({error: email.error}, 400);
   if (!phone.ok) return reply({error: phone.error}, 400);
 
   try {
     const db = crmDb();
     const current = await db
-      .prepare(`SELECT id FROM crm_users WHERE id = ? LIMIT 1`)
+      .prepare(`SELECT id, username FROM crm_users WHERE id = ? LIMIT 1`)
       .bind(parsed.data.id)
-      .first<{id: string}>();
+      .first<{id: string; username: string}>();
 
     if (!current) {
       return reply({error: 'المستخدم غير موجود'}, 404);
@@ -424,19 +427,22 @@ export async function PATCH(req: Request) {
       return reply({error: 'هذا البريد مستخدم لحساب آخر'}, 409);
     }
 
+    // Display name only. username is the login and is never written here.
     await db
-      .prepare(`UPDATE crm_users SET email = ?, phone = ? WHERE id = ?`)
-      .bind(email.value, phone.value, parsed.data.id)
+      .prepare(`UPDATE crm_users SET name = ?, email = ?, phone = ? WHERE id = ?`)
+      .bind(name.value, email.value, phone.value, parsed.data.id)
       .run();
 
     return reply({
       ok: true,
       id: parsed.data.id,
+      name: name.value,
+      username: current.username,
       email: email.value,
       phone: phone.value,
     });
   } catch (error) {
     console.error('Failed to update CRM user contact:', error);
-    return reply({error: 'تعذر حفظ البريد أو الجوال'}, 503);
+    return reply({error: 'تعذر حفظ الاسم أو البريد أو الجوال'}, 503);
   }
 }

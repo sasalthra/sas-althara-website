@@ -2,6 +2,7 @@ import {NextResponse} from 'next/server';
 
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
+import {fieldAssigneeId, withLiveActivityNames} from '@/lib/user-contact';
 
 type LeadAccessRow = {
   id: string;
@@ -125,24 +126,43 @@ export async function GET(
     .bind(id)
     .all();
 
-  const activities = (results as ActivityRow[]).map(
-    item => {
-      let details: unknown = null;
+  const parsed = (results as ActivityRow[]).map(item => {
+    let details: unknown = null;
 
-      if (item.details) {
-        try {
-          details = JSON.parse(item.details);
-        } catch {
-          details = item.details;
-        }
+    if (item.details) {
+      try {
+        details = JSON.parse(item.details);
+      } catch {
+        details = item.details;
       }
-
-      return {
-        ...item,
-        details,
-      };
     }
-  );
+
+    return {
+      ...item,
+      details,
+    };
+  });
+
+  const fieldIds = [...new Set(parsed.map(item => fieldAssigneeId(item.details)).filter(Boolean))];
+  const fieldNames = new Map<string, string>();
+  if (fieldIds.length) {
+    const named = await crmDb()
+      .prepare(`SELECT id, name FROM crm_users WHERE id IN (${fieldIds.map(() => '?').join(',')})`)
+      .bind(...fieldIds)
+      .all();
+    for (const row of named.results) {
+      const name = String(row.name ?? '').trim();
+      if (name) fieldNames.set(String(row.id), name);
+    }
+  }
+
+  const activities = parsed.map(item => ({
+    ...item,
+    details: withLiveActivityNames(item.details, {
+      actorName: item.user_name,
+      fieldName: fieldNames.get(fieldAssigneeId(item.details)) ?? null,
+    }),
+  }));
 
   return NextResponse.json(activities);
 }

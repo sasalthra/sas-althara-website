@@ -6,6 +6,14 @@ import {join} from 'node:path';
 import assert from 'node:assert/strict';
 const out=mkdtempSync(join(tmpdir(),'sas-ui-'));
 try {
+ const usersPanel=readFileSync('app/crm/users-panel.tsx','utf8');
+ assert.match(usersPanel,/تعديل الاسم والبريد والجوال/);
+ assert.doesNotMatch(usersPanel,/تعديل البريد والجوال/);
+ assert.match(usersPanel,/الاسم الظاهر/);
+ assert.match(usersPanel,/text-black/);
+ assert.match(usersPanel,/border-\[#d1d5db\]/);
+ assert.match(usersPanel,/maxLength=\{100\}/);
+ console.log('PASS admin users edit includes the display name and leaves the login username as text');
  const leadPage=readFileSync('app/crm/leads/[id]/page.tsx','utf8');
  assert.match(leadPage,/تفويج للميداني/);
  assert.match(leadPage,/تحديث ميداني/);
