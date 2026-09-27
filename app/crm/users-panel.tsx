@@ -1,8 +1,18 @@
 'use client';
 
 import {useCallback, useEffect, useState} from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {CrmLink} from './navigation';
 import PurgeEmployeeClients from './purge-employee-clients';
+
+const fieldClass =
+  'w-full rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-black';
 
 type CrmUser = {
   id: string;
@@ -22,14 +32,24 @@ const roleLabels = {
   field: 'ميداني',
 };
 
-export default function UsersPanel() {
-  const [users, setUsers] = useState<CrmUser[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function UsersPanel({
+  initialUsers,
+}: {
+  initialUsers?: CrmUser[];
+} = {}) {
+  const opened = initialUsers?.[0];
+  const [users, setUsers] = useState<CrmUser[]>(initialUsers ?? []);
+  const [loading, setLoading] = useState(!initialUsers);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [editing, setEditing] = useState<string | null>(null);
-  const [draft, setDraft] = useState({name: '', email: '', phone: ''});
+  const [editing, setEditing] = useState<string | null>(opened?.id ?? null);
+  const [draft, setDraft] = useState({
+    name: opened?.name ?? '',
+    username: opened?.username ?? '',
+    email: opened?.email ?? '',
+    phone: opened?.phone ?? '',
+  });
   const [contactSaving, setContactSaving] = useState(false);
 
   const [form, setForm] = useState({
@@ -127,6 +147,7 @@ export default function UsersPanel() {
     setEditing(user.id);
     setDraft({
       name: user.name || '',
+      username: user.username || '',
       email: user.email || '',
       phone: user.phone || '',
     });
@@ -149,13 +170,22 @@ export default function UsersPanel() {
         body: JSON.stringify({
           id: editing,
           name: draft.name,
+          username: draft.username,
           email: draft.email,
           phone: draft.phone,
         }),
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || 'تعذر حفظ الاسم أو بيانات التواصل');
+        throw new Error(data.error || 'تعذر حفظ بيانات الموظف');
+      }
+
+      if (data.self) {
+        try {
+          await fetch('/api/auth/session', {cache: 'no-store', credentials: 'same-origin'});
+        } catch {
+          // The open session is the user id. The next request reloads the username.
+        }
       }
 
       setUsers(current =>
@@ -164,6 +194,7 @@ export default function UsersPanel() {
             ? {
                 ...user,
                 name: data.name || draft.name.trim(),
+                username: data.username || draft.username.trim().toLowerCase(),
                 email: data.email || '',
                 phone: data.phone || '',
               }
@@ -171,12 +202,16 @@ export default function UsersPanel() {
         )
       );
       setEditing(null);
-      setSuccess('تم تحديث الاسم والبريد والجوال');
+      setSuccess(
+        data.self
+          ? 'تم تحديث بياناتك. جلستك الحالية تبقى مفتوحة، واستخدم اسم المستخدم الجديد عند تسجيل الدخول القادم.'
+          : 'تم تحديث بيانات الموظف. يجب عليه استخدام اسم المستخدم الجديد لتسجيل الدخول.'
+      );
     } catch (saveError) {
       setError(
         saveError instanceof Error
           ? saveError.message
-          : 'تعذر حفظ الاسم أو بيانات التواصل'
+          : 'تعذر حفظ بيانات الموظف'
       );
     } finally {
       setContactSaving(false);
@@ -351,7 +386,7 @@ export default function UsersPanel() {
         {loading ? (
           <p>جاري تحميل المستخدمين...</p>
         ) : users.length ? (
-          <form onSubmit={saveContact} className="overflow-x-auto">
+          <div className="overflow-x-auto">
             <table className="w-full text-right">
               <thead>
                 <tr className="border-b">
@@ -372,18 +407,7 @@ export default function UsersPanel() {
                     className="border-b"
                   >
                     <td className="p-3">
-                      {editing === user.id ? (
-                        <input
-                          required
-                          maxLength={100}
-                          aria-label={`الاسم الظاهر لـ ${user.username}`}
-                          value={draft.name}
-                          onChange={event => setDraft({...draft, name: event.target.value})}
-                          className="w-full min-w-36 rounded-lg border border-[#d1d5db] bg-white px-2 py-1 text-black"
-                        />
-                      ) : (
-                        user.name
-                      )}
+                      {user.name}
                     </td>
 
                     <td className="p-3" dir="ltr">
@@ -391,31 +415,11 @@ export default function UsersPanel() {
                     </td>
 
                     <td className="p-3" dir="ltr">
-                      {editing === user.id ? (
-                        <input
-                          type="email"
-                          aria-label={`بريد ${user.name}`}
-                          value={draft.email}
-                          onChange={event => setDraft({...draft, email: event.target.value})}
-                          className="w-full min-w-48 rounded-lg border border-[#d1d5db] bg-white px-2 py-1 text-black"
-                        />
-                      ) : (
-                        user.email || '—'
-                      )}
+                      {user.email || '—'}
                     </td>
 
                     <td className="p-3" dir="ltr">
-                      {editing === user.id ? (
-                        <input
-                          aria-label={`جوال ${user.name}`}
-                          value={draft.phone}
-                          onChange={event => setDraft({...draft, phone: event.target.value})}
-                          placeholder="05xxxxxxxx"
-                          className="w-full min-w-36 rounded-lg border border-[#d1d5db] bg-white px-2 py-1 text-black"
-                        />
-                      ) : (
-                        user.phone || '—'
-                      )}
+                      {user.phone || '—'}
                     </td>
 
                     <td className="p-3">
@@ -430,30 +434,106 @@ export default function UsersPanel() {
                     <td className="p-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <CrmLink className="crm-button" href={`/crm?tab=hr&hr=employees&employee=${encodeURIComponent(user.id)}`}>الملف الوظيفي</CrmLink>
-                        {editing === user.id ? (
-                          <>
-                            <button type="submit" className="primary" disabled={contactSaving}>
-                              {contactSaving ? 'جارٍ الحفظ...' : 'حفظ'}
-                            </button>
-                            <button type="button" className="crm-button" onClick={() => setEditing(null)} disabled={contactSaving}>
-                              إلغاء
-                            </button>
-                          </>
-                        ) : (
-                          <button type="button" className="crm-button" onClick={() => startEdit(user)}>
-                            تعديل الاسم والبريد والجوال
-                          </button>
-                        )}
+                        <button type="button" className="crm-button" onClick={() => startEdit(user)}>
+                          تعديل بيانات الموظف
+                        </button>
                       </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </form>
+          </div>
         ) : (
           <p>لا يوجد مستخدمون.</p>
         )}
+
+        <Dialog
+          open={editing !== null}
+          onOpenChange={open => {
+            if (!open && !contactSaving) {
+              setEditing(null);
+            }
+          }}
+        >
+          <DialogContent dir="rtl" className="border border-[#d1d5db] bg-white text-black sm:max-w-lg">
+            <DialogHeader className="text-right sm:text-right">
+              <DialogTitle className="text-black">تعديل بيانات الموظف</DialogTitle>
+              <DialogDescription className="rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-sm text-black">
+                يجب على الموظف استخدام اسم المستخدم الجديد لتسجيل الدخول. كلمة المرور تبقى كما هي.
+              </DialogDescription>
+            </DialogHeader>
+            <form onSubmit={saveContact} className="space-y-3">
+              <label className="block text-sm font-medium text-black">
+                الاسم الظاهر
+                <input
+                  required
+                  maxLength={100}
+                  aria-label="الاسم الظاهر"
+                  value={draft.name}
+                  onChange={event => setDraft({...draft, name: event.target.value})}
+                  className={`${fieldClass} mt-1`}
+                />
+              </label>
+              <label className="block text-sm font-medium text-black">
+                اسم المستخدم لتسجيل الدخول
+                <input
+                  required
+                  maxLength={80}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label="اسم المستخدم لتسجيل الدخول"
+                  value={draft.username}
+                  onChange={event => setDraft({...draft, username: event.target.value})}
+                  className={`${fieldClass} mt-1`}
+                  dir="ltr"
+                />
+              </label>
+              <label className="block text-sm font-medium text-black">
+                البريد الإلكتروني
+                <input
+                  type="email"
+                  aria-label="البريد الإلكتروني"
+                  value={draft.email}
+                  onChange={event => setDraft({...draft, email: event.target.value})}
+                  className={`${fieldClass} mt-1`}
+                  dir="ltr"
+                />
+              </label>
+              <label className="block text-sm font-medium text-black">
+                الجوال
+                <input
+                  aria-label="الجوال"
+                  value={draft.phone}
+                  onChange={event => setDraft({...draft, phone: event.target.value})}
+                  placeholder="05xxxxxxxx"
+                  className={`${fieldClass} mt-1`}
+                  dir="ltr"
+                />
+              </label>
+              {error ? (
+                <p className="text-sm text-red-600" role="alert">{error}</p>
+              ) : null}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="submit"
+                  className="rounded-lg border border-[#3F1A44] bg-[#3F1A44] px-4 py-2 font-semibold text-white disabled:opacity-60"
+                  disabled={contactSaving}
+                >
+                  {contactSaving ? 'جارٍ الحفظ...' : 'حفظ'}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-[#d1d5db] bg-white px-4 py-2 text-black"
+                  onClick={() => setEditing(null)}
+                  disabled={contactSaving}
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

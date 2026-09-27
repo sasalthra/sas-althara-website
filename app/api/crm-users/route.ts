@@ -3,7 +3,15 @@ import {z} from 'zod';
 
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
-import {parseUserEmail, parseUserName, parseUserPhone} from '@/lib/user-contact';
+import {
+  parseUserEmail,
+  parseUserName,
+  parseUserPhone,
+  parseUsername,
+  USERNAME_MAX,
+  USERNAME_MIN,
+  USERNAME_PATTERN,
+} from '@/lib/user-contact';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -13,9 +21,9 @@ const createUserSchema = z.object({
     .string()
     .trim()
     .toLowerCase()
-    .min(3)
-    .max(80)
-    .regex(/^[a-z0-9._-]+$/),
+    .min(USERNAME_MIN)
+    .max(USERNAME_MAX)
+    .regex(USERNAME_PATTERN),
 
   password: z
     .string()
@@ -53,6 +61,7 @@ const createUserSchema = z.object({
 const updateContactSchema = z.object({
   id: z.string().trim().min(1).max(255),
   name: z.string().max(200),
+  username: z.string().max(120),
   email: z.string().max(190),
   phone: z.string().max(40),
 });
@@ -62,6 +71,20 @@ function sameOrigin(req: Request) {
     process.env.NEXTAUTH_URL &&
       req.headers.get('origin') === new URL(process.env.NEXTAUTH_URL).origin
   );
+}
+
+async function usernameTaken(username: string, exceptId: string) {
+  const row = await crmDb()
+    .prepare(`
+      SELECT id
+      FROM crm_users
+      WHERE LOWER(username) = ?
+        AND id <> ?
+      LIMIT 1
+    `)
+    .bind(username, exceptId)
+    .first<{id: string}>();
+  return Boolean(row);
 }
 
 async function emailTaken(email: string, exceptId?: string) {
@@ -289,8 +312,10 @@ export async function POST(
   }
 
   const input = parsed.data;
+  const username = parseUsername(input.username);
   const email = parseUserEmail(input.email || '');
   const phone = parseUserPhone(input.phone || '');
+  if (!username.ok) return reply({error: username.error}, 400);
   if (!email.ok) return reply({error: email.error}, 400);
   if (!phone.ok) return reply({error: phone.error}, 400);
 
@@ -301,17 +326,7 @@ export async function POST(
       return reply({error: 'هذا البريد مستخدم لحساب آخر'}, 409);
     }
 
-    const existing = await db
-      .prepare(`
-        SELECT id
-        FROM crm_users
-        WHERE LOWER(username) = ?
-        LIMIT 1
-      `)
-      .bind(input.username)
-      .first<{id: string}>();
-
-    if (existing) {
+    if (await usernameTaken(username.value, '')) {
       return reply(
         {
           error:
@@ -346,7 +361,7 @@ export async function POST(
       `)
       .bind(
         id,
-        input.username,
+        username.value,
         passwordHash,
         input.name,
         email.value,
@@ -402,47 +417,61 @@ export async function PATCH(req: Request) {
 
   const parsed = updateContactSchema.safeParse(body);
   if (!parsed.success) {
-    return reply({error: 'راجع الاسم والبريد الإلكتروني ورقم الجوال'}, 400);
+    return reply({error: 'راجع الاسم واسم المستخدم والبريد الإلكتروني ورقم الجوال'}, 400);
   }
 
   const name = parseUserName(parsed.data.name);
+  const username = parseUsername(parsed.data.username);
   const email = parseUserEmail(parsed.data.email);
   const phone = parseUserPhone(parsed.data.phone);
   if (!name.ok) return reply({error: name.error}, 400);
+  if (!username.ok) return reply({error: username.error}, 400);
   if (!email.ok) return reply({error: email.error}, 400);
   if (!phone.ok) return reply({error: phone.error}, 400);
 
   try {
     const db = crmDb();
     const current = await db
-      .prepare(`SELECT id, username FROM crm_users WHERE id = ? LIMIT 1`)
+      .prepare(`SELECT id FROM crm_users WHERE id = ? LIMIT 1`)
       .bind(parsed.data.id)
-      .first<{id: string; username: string}>();
+      .first<{id: string}>();
 
     if (!current) {
       return reply({error: 'المستخدم غير موجود'}, 404);
+    }
+
+    if (await usernameTaken(username.value, parsed.data.id)) {
+      return reply({error: 'اسم المستخدم مستخدم بالفعل'}, 409);
     }
 
     if (await emailTaken(email.value, parsed.data.id)) {
       return reply({error: 'هذا البريد مستخدم لحساب آخر'}, 409);
     }
 
-    // Display name only. username is the login and is never written here.
+    // Leads, activity, imports, and HR rows point at crm_users.id.
+    // password_hash is omitted so the existing password still signs in.
     await db
-      .prepare(`UPDATE crm_users SET name = ?, email = ?, phone = ? WHERE id = ?`)
-      .bind(name.value, email.value, phone.value, parsed.data.id)
+      .prepare(`UPDATE crm_users SET username = ?, name = ?, email = ?, phone = ? WHERE id = ?`)
+      .bind(username.value, name.value, email.value, phone.value, parsed.data.id)
       .run();
+
+    const self = user.userId === parsed.data.id;
 
     return reply({
       ok: true,
       id: parsed.data.id,
       name: name.value,
-      username: current.username,
+      username: username.value,
       email: email.value,
       phone: phone.value,
+      self,
     });
   } catch (error) {
-    console.error('Failed to update CRM user contact:', error);
-    return reply({error: 'تعذر حفظ الاسم أو البريد أو الجوال'}, 503);
+    const message = error instanceof Error ? error.message : '';
+    if (/duplicate|ER_DUP_ENTRY|UNIQUE constraint failed/i.test(message)) {
+      return reply({error: 'اسم المستخدم مستخدم بالفعل'}, 409);
+    }
+    console.error('Failed to update CRM user profile:', error);
+    return reply({error: 'تعذر حفظ بيانات الموظف'}, 503);
   }
 }

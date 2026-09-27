@@ -190,25 +190,29 @@ export const authOptions: NextAuthOptions = {
         token.crmName = allowed ? 'Administrator' : null;
       }
 
-      // Credentials login is by username. The name and address on the token are
-      // only copies from sign-in, so refresh them from crm_users before the
-      // session is read. Mail is not sent from this copy; assignment mail reads
-      // crm_users at send time.
+      // The session is the user id. Username, name, and email on the token are
+      // copies from sign-in, so reload them from crm_users before the session
+      // is read. A renamed login keeps this session (the id did not change)
+      // and the next request already carries the new username. A database
+      // miss leaves the existing token in place. Google sign-in is not a
+      // crm_users username and is left unchanged.
       if (!account && typeof token.crmUserId === 'string' && !token.crmUserId.startsWith('google:')) {
         try {
           const row = await crmDb()
             .prepare(`
-              SELECT name, email
+              SELECT name, email, username
               FROM crm_users
               WHERE id = ?
               LIMIT 1
             `)
             .bind(token.crmUserId)
-            .first<{name: string | null; email: string | null}>();
+            .first<{name: string | null; email: string | null; username: string | null}>();
           if (row) {
             token.email = row.email?.trim() || null;
             const freshName = row.name?.trim();
             if (freshName) token.crmName = freshName;
+            const freshUsername = row.username?.trim().toLowerCase();
+            if (freshUsername) token.crmUsername = freshUsername;
           }
         } catch (error) {
           console.error('session profile refresh failed', error);
