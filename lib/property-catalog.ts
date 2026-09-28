@@ -46,6 +46,7 @@ export function staticCatalog(): CatalogProperty[] {
     age: null,
     description: property.description || '',
     images: property.images?.length ? [...property.images] : [],
+    ...(textOrNull((property as {status?: unknown}).status) ? {status: textOrNull((property as {status?: unknown}).status) as string} : {}),
   }));
 }
 
