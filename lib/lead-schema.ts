@@ -8,6 +8,10 @@
  * ones) and then moves retired stages. A failure is logged and the page
  * keeps loading with the previous stage list.
  * crm_users.phone is added the same way when an older users table lacks it.
+ * Telegram offers use site_properties. Beds and baths are nullable TEXT so an
+ * unparsed post stores NULL, and telegram_chat_id / telegram_message_id /
+ * telegram_media_group_id are added the same once-per-process way. The repair
+ * never drops data and a failure here does not block the leads schema.
  */
 
 import {retiredStageMoves, stageEnumValues} from './lead-stages';
@@ -221,6 +225,139 @@ async function ensureUserPhone(executor: SqlExecutor) {
   }
 }
 
+const PROPERTY_COLUMNS: [string, string][] = [
+  ['title', 'TEXT NULL'],
+  ['price', 'REAL NULL'],
+  ['area', 'REAL NULL'],
+  ['beds', 'TEXT NULL'],
+  ['baths', 'TEXT NULL'],
+  ['city', 'TEXT NULL'],
+  ['address', 'TEXT NULL'],
+  ['type', 'TEXT NULL'],
+  ['purpose', 'TEXT NULL'],
+  ['street_width', 'TEXT NULL'],
+  ['facade', 'TEXT NULL'],
+  ['age', 'TEXT NULL'],
+  ['description', 'TEXT NULL'],
+  ['images', 'TEXT NULL'],
+  ['image_meta', 'TEXT NULL'],
+  ['status', 'TEXT NULL'],
+  ['telegram_chat_id', 'TEXT NULL'],
+  ['telegram_message_id', 'TEXT NULL'],
+  ['telegram_media_group_id', 'TEXT NULL'],
+  ['telegram_message_ids', 'TEXT NULL'],
+  ['telegram_source_key', 'TEXT NULL'],
+  ['created_at', 'TEXT NULL'],
+  ['updated_at', 'TEXT NULL'],
+];
+
+function safeIdent(value: string) {
+  return /^[a-z_]+$/.test(value);
+}
+
+async function columnMissing(executor: SqlExecutor, table: string, column: string): Promise<boolean> {
+  if (!safeIdent(table) || !safeIdent(column)) return false;
+  try {
+    const rows = rowsOf(await run(executor, `SHOW COLUMNS FROM ${table}`));
+    if (rows.length) return !rows.some(row => columnName(row).toLowerCase() === column);
+  } catch (error) {
+    if (/no such table|ER_NO_SUCH_TABLE/i.test(messageOf(error))) return false;
+  }
+  try {
+    await run(executor, `SELECT \`${column}\` FROM ${table} LIMIT 0`);
+    return false;
+  } catch (probe) {
+    const text = messageOf(probe);
+    if (new RegExp(column, 'i').test(text) || /unknown column|no such column|ER_BAD_FIELD_ERROR/i.test(text)) return true;
+    return false;
+  }
+}
+
+async function ensureColumn(executor: SqlExecutor, table: string, column: string, definition: string) {
+  if (!safeIdent(table) || !safeIdent(column)) return;
+  if (!(await columnMissing(executor, table, column))) return;
+  try {
+    await run(executor, `ALTER TABLE ${table} ADD COLUMN \`${column}\` ${definition}`);
+  } catch (error) {
+    if (/duplicate|already exists|ER_DUP_FIELDNAME/i.test(messageOf(error))) return;
+    console.error(`${table}.${column} was not added`, error);
+  }
+}
+
+/**
+ * Creates the published-property table and fills any telegram source columns
+ * that an older process created the table without. Idempotent.
+ */
+async function ensureTelegramSchema(executor: SqlExecutor) {
+  try {
+    await run(
+      executor,
+      `CREATE TABLE IF NOT EXISTS site_properties (
+        id TEXT PRIMARY KEY,
+        title TEXT NULL,
+        price REAL NULL,
+        area REAL NULL,
+        beds TEXT NULL,
+        baths TEXT NULL,
+        city TEXT NULL,
+        address TEXT NULL,
+        type TEXT NULL,
+        purpose TEXT NULL,
+        street_width TEXT NULL,
+        facade TEXT NULL,
+        age TEXT NULL,
+        description TEXT NULL,
+        images TEXT NULL,
+        image_meta TEXT NULL,
+        status TEXT NULL,
+        telegram_chat_id TEXT NULL,
+        telegram_message_id TEXT NULL,
+        telegram_media_group_id TEXT NULL,
+        telegram_message_ids TEXT NULL,
+        telegram_source_key TEXT NULL,
+        created_at TEXT NULL,
+        updated_at TEXT NULL
+      )`
+    );
+  } catch (error) {
+    console.error('site_properties table was not created', error);
+    return;
+  }
+  for (const [column, definition] of PROPERTY_COLUMNS) {
+    await ensureColumn(executor, 'site_properties', column, definition);
+  }
+  try {
+    await run(executor, 'CREATE UNIQUE INDEX IF NOT EXISTS site_properties_tg_key ON site_properties (telegram_source_key)');
+  } catch (error) {
+    if (!/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(error))) {
+      try {
+        await run(executor, 'ALTER TABLE site_properties ADD UNIQUE INDEX site_properties_tg_key (telegram_source_key)');
+      } catch (fallback) {
+        if (!/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(fallback))) {
+          console.error('telegram source index was not added', fallback);
+        }
+      }
+    }
+  }
+  try {
+    await run(
+      executor,
+      `CREATE TABLE IF NOT EXISTS telegram_sync_log (
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NULL,
+        message_id TEXT NULL,
+        media_group_id TEXT NULL,
+        property_id TEXT NULL,
+        action TEXT NULL,
+        note TEXT NULL,
+        created_at TEXT NULL
+      )`
+    );
+  } catch (error) {
+    console.error('telegram_sync_log table was not created', error);
+  }
+}
+
 async function repairStages(executor: SqlExecutor) {
   try {
     await widenStageEnum(executor);
@@ -235,6 +372,11 @@ async function repairStages(executor: SqlExecutor) {
 }
 
 async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
+  try {
+    await ensureTelegramSchema(executor);
+  } catch (error) {
+    console.error('telegram property schema check failed', error);
+  }
   try {
     await ensureUserPhone(executor);
   } catch (error) {

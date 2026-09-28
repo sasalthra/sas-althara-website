@@ -107,4 +107,10 @@ export const workspaceItems = [
     group: "إدارة النظام",
     roles: ["admin"],
   },
+  {
+    id: "telegram",
+    label: "مزامنة التليجرام",
+    group: "إدارة النظام",
+    roles: ["admin"],
+  },
 ];

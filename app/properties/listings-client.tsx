@@ -15,18 +15,19 @@ import SiteHeader from '../site-header';
 export type ListingProperty = {
   id: string;
   title: string;
-  price: number;
-  area: number;
+  price: number | null;
+  area: number | null;
   beds: string | null;
   baths: string | null;
-  city: string;
-  address: string;
-  type: string;
+  city: string | null;
+  address: string | null;
+  type: string | null;
   description: string;
   images: string[];
 };
 
-function money(value: number) {
+function money(value: number | null) {
+  if (value == null) return 'عند الطلب';
   return value.toLocaleString('ar-SA');
 }
 
@@ -36,7 +37,7 @@ function PropertyCard({property}: {property: ListingProperty}) {
     <a className="offer-card" href={`/properties/${property.id}`}>
       <div className="offer-card-media">
         <img
-          src={property.images[0]}
+          src={property.images[0] || '/brand/logo.png'}
           alt={property.title}
           loading="lazy"
         />
@@ -77,7 +78,7 @@ function PropertyCard({property}: {property: ListingProperty}) {
           <div>
             <span>المساحة</span>
             <strong>
-              {property.area} م² <Maximize2 size={16} />
+              {property.area == null ? '—' : property.area} م² <Maximize2 size={16} />
             </strong>
           </div>
         </div>
@@ -96,15 +97,15 @@ export default function ListingsClient({
   properties: ListingProperty[];
 }) {
   const types = useMemo(
-    () => [...new Set(properties.map(p => p.type).filter(Boolean))],
+    () => [...new Set(properties.map(p => p.type).filter((item): item is string => Boolean(item)))],
     [properties],
   );
   const cities = useMemo(
-    () => [...new Set(properties.map(p => p.city).filter(Boolean))],
+    () => [...new Set(properties.map(p => p.city).filter((item): item is string => Boolean(item)))],
     [properties],
   );
   const districts = useMemo(
-    () => [...new Set(properties.map(p => p.address).filter(Boolean))],
+    () => [...new Set(properties.map(p => p.address).filter((item): item is string => Boolean(item)))],
     [properties],
   );
 
@@ -132,9 +133,10 @@ export default function ListingsClient({
       if (type !== 'all' && property.type !== type) return false;
       if (city !== 'all' && property.city !== city) return false;
       if (district !== 'all' && property.address !== district) return false;
-      if (property.price < from || property.price > to) return false;
+      const filteringPrice = priceFrom !== '' || priceTo !== '';
+      if (filteringPrice && (property.price == null || property.price < from || property.price > to)) return false;
       if (!q) return true;
-      const haystack = `${property.title} ${property.city} ${property.address} ${property.type}`;
+      const haystack = `${property.title} ${property.city ?? ''} ${property.address ?? ''} ${property.type ?? ''}`;
       return haystack.includes(q);
     });
   }, [properties, query, type, city, district, priceFrom, priceTo]);

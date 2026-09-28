@@ -17,6 +17,7 @@ import TransactionsPanel from './transactions-panel';
 import ImportPanel from './import-panel';
 import AiPanel from './ai-panel';
 import SheetsPanel from './sheets-panel';
+import TelegramPanel from './telegram-panel';
 import ReportsPanel from './reports-panel';
 
 import data from '@/data/properties.json';
@@ -321,6 +322,7 @@ export default function CRM({
           <TabsContent value="hr"><HrPanel admin={role === 'admin'}/></TabsContent>
           <TabsContent value="ai"><AiPanel admin={role === 'admin'}/></TabsContent>
           {role === 'admin' && <TabsContent value="sheets"><SheetsPanel/></TabsContent>}
+          {role === 'admin' && <TabsContent value="telegram"><TelegramPanel/></TabsContent>}
           {['admin','supervisor'].includes(role) && <TabsContent value="import"><ImportPanel onSaved={()=>void refresh()}/></TabsContent>}
           <TabsContent value="leads">
             <div className="panel !py-6">

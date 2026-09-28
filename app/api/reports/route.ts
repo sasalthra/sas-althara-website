@@ -2,7 +2,7 @@ import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
 import {allowedReports} from '@/lib/report-catalog';
 import {ReportError,authorizeReport,parseReportFilters,readReport,readReportSnapshots,reportCsv} from '@/lib/reports';
-import properties from '@/data/properties.json';
+import {loadPublishedProperties} from '@/lib/property-catalog';
 export const dynamic='force-dynamic';
 export const runtime='nodejs';
 const headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'};
@@ -15,6 +15,7 @@ export async function GET(req:Request){
   // Validate scope before any SQL, including employee choices and overview.
   authorizeReport(user,id==='overview'?'leads':id,filters,exporting);
   const db=crmDb();
+  const properties=await loadPublishedProperties() as unknown as Record<string, unknown>[];
   const employees=user.role==='admin'?(await db.prepare('SELECT id,name FROM crm_users ORDER BY name,id LIMIT 10001').all()).results:await selfEmployee(db,user);
   if(employees.length>10000)throw new ReportError(422,'قائمة الموظفين أكبر من الحد المدعوم');
   if(filters.employee&&!employees.some(employee=>String(employee.id)===filters.employee))throw new ReportError(400,'الموظف المحدد غير موجود في النطاق المسموح');

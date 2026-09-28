@@ -2,7 +2,7 @@
 
 import {useMemo, useState} from 'react';
 import {useRouter} from 'next/navigation';
-import data from '@/data/properties.json';
+import type {CatalogProperty} from '@/lib/property-types';
 import SiteHeader from './site-header';
 import SearchAgent from './search-agent';
 import {
@@ -21,8 +21,6 @@ import {
   Users,
 } from 'lucide-react';
 
-const propertyTypes = [...new Set(data.map(p => p.type).filter(Boolean))];
-const cities = [...new Set(data.map(p => p.city).filter(Boolean))];
 
 const stats: [string, string][] = [
   ['350', 'وحدة معروضة'],
@@ -77,26 +75,35 @@ const services = [
   },
 ];
 
-function money(value: number) {
+function money(value: number | null) {
+  if (value == null) return 'عند الطلب';
   return value.toLocaleString('ar-SA');
 }
 
-export default function Catalog() {
+export default function Catalog({properties}: {properties: CatalogProperty[]}) {
   const router = useRouter();
   const [q, setQ] = useState('');
   const [type, setType] = useState('all');
   const [city, setCity] = useState('all');
   const [limit] = useState(8);
+  const propertyTypes = useMemo(
+    () => [...new Set(properties.map(p => p.type).filter((item): item is string => Boolean(item)))],
+    [properties],
+  );
+  const cities = useMemo(
+    () => [...new Set(properties.map(p => p.city).filter((item): item is string => Boolean(item)))],
+    [properties],
+  );
 
   const filtered = useMemo(
     () =>
-      data.filter(p => {
+      properties.filter(p => {
         if (type !== 'all' && p.type !== type) return false;
         if (city !== 'all' && p.city !== city) return false;
         if (!q.trim()) return true;
-        return (p.title + p.city + p.address + p.type).includes(q.trim());
+        return `${p.title} ${p.city ?? ''} ${p.address ?? ''} ${p.type ?? ''}`.includes(q.trim());
       }),
-    [q, type, city],
+    [properties, q, type, city],
   );
 
   const offers = filtered.slice(0, limit);
@@ -113,7 +120,7 @@ export default function Catalog() {
 
   return (
     <>
-      <SearchAgent onSearch={setQ} />
+      <SearchAgent onSearch={setQ} properties={properties} />
       <div className="sas-home">
         <SiteHeader variant="overlay" />
 
@@ -208,7 +215,7 @@ export default function Catalog() {
               {offers.map(p => (
                 <a className="offer-card" href={'/properties/' + p.id} key={p.id}>
                   <div className="offer-card-media">
-                    <img loading="lazy" src={p.images[0]} alt={p.title} />
+                    <img loading="lazy" src={p.images[0] || '/brand/logo.png'} alt={p.title} />
                     <span className="offer-badge is-available">متاح</span>
                     <button
                       type="button"
@@ -244,7 +251,7 @@ export default function Catalog() {
                       <div>
                         <span>المساحة</span>
                         <strong>
-                          {p.area} م² <Maximize2 size={16} />
+                          {p.area == null ? '—' : p.area} م² <Maximize2 size={16} />
                         </strong>
                       </div>
                     </div>
