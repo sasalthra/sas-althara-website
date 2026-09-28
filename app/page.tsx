@@ -1,6 +1,10 @@
 import Catalog from './catalog';
+import {loadPublishedProperties} from '@/lib/property-catalog';
 import './properties/properties.css';
 
-export default function Home() {
-  return <Catalog />;
+export const dynamic = 'force-dynamic';
+
+export default async function Home() {
+  const properties = await loadPublishedProperties();
+  return <Catalog properties={properties} />;
 }

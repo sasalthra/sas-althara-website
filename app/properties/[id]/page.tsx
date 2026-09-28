@@ -14,13 +14,16 @@ import {
   Share2,
   ShieldAlert,
 } from 'lucide-react';
-import data from '@/data/properties.json';
 import {getAdmin} from '@/lib/admin';
+import {loadPublishedProperty} from '@/lib/property-catalog';
+import type {CatalogProperty} from '@/lib/property-types';
 import LeadForm from '../../lead-form';
 import SiteHeader from '../../site-header';
 import '../properties.css';
 
-type Property = (typeof data)[number];
+export const dynamic = 'force-dynamic';
+
+type Property = CatalogProperty;
 
 export async function generateMetadata({
   params,
@@ -28,7 +31,7 @@ export async function generateMetadata({
   params: Promise<{id: string}>;
 }): Promise<Metadata> {
   const {id} = await params;
-  const property = data.find(item => item.id === id);
+  const property = await loadPublishedProperty(id);
   if (!property) return {title: 'عقار | ساس الثراء'};
   return {
     title: `${property.title} | ساس الثراء`,
@@ -36,7 +39,8 @@ export async function generateMetadata({
   };
 }
 
-function money(value: number) {
+function money(value: number | null) {
+  if (value == null) return 'عند الطلب';
   return value.toLocaleString('ar-SA');
 }
 
@@ -44,7 +48,7 @@ function internalFacilities(property: Property) {
   return [
     {label: 'الغرف', value: property.beds || '—', Icon: BedDouble},
     {label: 'الحمامات', value: property.baths || '—', Icon: Bath},
-    {label: 'المساحة', value: `${property.area} م²`, Icon: Maximize2},
+    {label: 'المساحة', value: property.area == null ? '—' : `${property.area} م²`, Icon: Maximize2},
     {label: 'المطبخ', value: 'متوفر', Icon: CheckCircle2},
     {label: 'الصالة', value: 'متوفرة', Icon: Building2},
     {label: 'التكييف', value: 'متوفر', Icon: CheckCircle2},
@@ -64,12 +68,18 @@ export default async function PropertyDetailPage({
 }) {
   const admin = await getAdmin();
   const {id} = await params;
-  const property = data.find(item => item.id === id);
+  const property = await loadPublishedProperty(id);
   if (!property) notFound();
 
   const images = property.images?.length ? property.images : ['/brand/logo.png'];
   const thumbs = images.slice(0, 5);
-  const purpose = property.type === 'فلل' ? 'للبيع' : 'عرض عقاري';
+  const purpose = property.purpose === 'إيجار' ? 'للإيجار' : property.purpose === 'بيع' ? 'للبيع' : property.type === 'فلل' ? 'للبيع' : 'عرض عقاري';
+  const extra = [
+    property.purpose ? {label: 'الغرض', value: property.purpose === 'إيجار' ? 'للإيجار' : 'للبيع'} : null,
+    property.streetWidth ? {label: 'عرض الشارع', value: `${property.streetWidth} م`} : null,
+    property.facade ? {label: 'الواجهة', value: property.facade} : null,
+    property.age ? {label: 'العمر', value: property.age === 'جديد' ? 'جديد' : `${property.age} سنوات`} : null,
+  ].filter((item): item is {label: string; value: string} => item != null);
 
   return (
     <main className="listing-detail">
@@ -176,6 +186,21 @@ export default async function PropertyDetailPage({
           <button type="button">مخطط البناء</button>
           <button type="button">عرض ثلاثي الأبعاد</button>
         </div>
+
+        {extra.length ? (
+          <section className="listing-section">
+            <h2>تفاصيل إضافية</h2>
+            <div className="listing-facilities">
+              {extra.map(item => (
+                <article key={item.label}>
+                  <MapPin size={22} />
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         <section className="listing-section">
           <h2>الوصف</h2>
