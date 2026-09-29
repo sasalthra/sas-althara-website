@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/select';
 
 import {editableStage, stageChoices, stageLabels as stages} from '@/lib/lead-stages';
+import {displayLeadPhone} from '@/lib/phone';
 export {stages};
 
 export const leadSources: Record<string, string> = {
@@ -94,7 +95,7 @@ export default function LeadForm({
   );
 
   const [phone, setPhone] = useState(
-    initial?.phone || ''
+    displayLeadPhone(initial?.phone || '')
   );
 
   const [prop, setProp] = useState(
@@ -326,6 +327,7 @@ export default function LeadForm({
       const result =
         (await response.json()) as {
           error?: string;
+          duplicate?: boolean;
         };
 
       if (!response.ok) {
@@ -335,7 +337,9 @@ export default function LeadForm({
       setDone(true);
 
       setMessage(
-        initial
+        result.duplicate
+          ? 'هذا الجوال مسجل مسبقاً. أُضيفت إعادة التسجيل إلى ملف العميل الحالي.'
+          : initial
           ? 'تم حفظ تحديث العميل.'
           : 'تم حفظ العميل في النظام.'
       );
@@ -379,7 +383,7 @@ export default function LeadForm({
           required
           type="tel"
           dir="ltr"
-          maxLength={22}
+          maxLength={32}
           value={phone}
           onChange={event =>
             setPhone(event.target.value)

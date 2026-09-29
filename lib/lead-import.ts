@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import properties from '../data/properties.json';
 import {leadSchema,stageKeys} from './lead-input';
+import {normalizeLeadPhone} from './phone';
 import {canonicalStage, displayStage, stageLabel, stageWriteAllowed} from './lead-stages';
 
 export const importFields={
@@ -176,18 +177,18 @@ function resolveProperty(mapped:Record<string,string>){
  return {propertyId:'other',propertyOther:description.length>=2?description:DEFAULT_PROPERTY_OTHER};
 }
 
-function stubLead(mapped:Record<string,string>,phone:string|null,property:{propertyId:string;propertyOther:string},stage:string,followUp:string){
+function stubLead(mapped:Record<string,string>,phone:string,property:{propertyId:string;propertyOther:string},stage:string,followUp:string){
  return {name:mapped.name||'',phone:phone||mapped.phone||'',propertyOther:property.propertyOther,propertyId:property.propertyId,stage,followUp,source:mapped.source||'excel',notes:mapped.notes||''};
 }
 
 export function previewImport(rows:string[][],mapping:Mapping,existingPhones:string[]){
  const parsed=mappingSchema.safeParse(mapping);if(!parsed.success)throw Error('راجع ربط الأعمدة');
- const seen=new Set(existingPhones.map(normalizePhone).filter(Boolean) as string[]);
+ const seen=new Set(existingPhones.map(phone=>normalizeLeadPhone(phone)).filter(Boolean));
  return rows.map((raw,index)=>{
   const mapped:Record<string,string>={};for(const [key,col] of Object.entries(parsed.data))mapped[key]=String(raw[col]??'').trim();
   const warnings:string[]=[];
   const name=(mapped.name||'').trim().slice(0,100);
-  const phone=normalizePhone(mapped.phone||'');
+  const phone=normalizeLeadPhone(mapped.phone||'');
   const property=resolveProperty(mapped);
   const followUpParsed=parseFollowUpDate(mapped.followUp||'');
   if((mapped.followUp||'').trim() && followUpParsed===null){
@@ -225,12 +226,12 @@ export function previewImport(rows:string[][],mapping:Mapping,existingPhones:str
    const required=v.error.issues.map(i=>String(i.path[0])).filter(field=>!optional.has(field));
    if(!required.length){
     const forced={id:crypto.randomUUID(),name,phone,propertyId:'other' as const,propertyOther:DEFAULT_PROPERTY_OTHER,source,notes,followUp,stage};
-    if(seen.has(phone))return {...base,status:'duplicate' as const,errors:['رقم جوال مكرر؛ لم يستبدل السجل الأصلي'],lead:forced};
+    if(seen.has(phone))return {...base,status:'duplicate' as const,errors:['رقم جوال مكرر؛ لن يُنشأ عميل جديد وسيُسجَّل على العميل الحالي'],lead:forced};
     seen.add(phone);return {...base,status:'ready' as const,errors:[],lead:forced};
    }
    return {...base,status:'invalid' as const,errors:required,lead:display};
   }
-  if(seen.has(phone))return {...base,status:'duplicate' as const,errors:['رقم جوال مكرر؛ لم يستبدل السجل الأصلي'],lead:v.data};
+  if(seen.has(phone))return {...base,status:'duplicate' as const,errors:['رقم جوال مكرر؛ لن يُنشأ عميل جديد وسيُسجَّل على العميل الحالي'],lead:v.data};
   seen.add(phone);return {...base,status:'ready' as const,errors:[],lead:v.data};
  });
 }

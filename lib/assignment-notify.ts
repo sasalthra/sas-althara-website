@@ -8,9 +8,12 @@ import {
   fieldDispatchEmail,
   groupClientsByAssignee,
   normalizeEmail,
+  reregistrationEmail,
   type AssignmentClient,
   type AssignmentEmployee,
 } from './assignment-email';
+import {leadSourceLabel, riyadhStamp} from './lead-reregistration';
+import {stageLabel} from './lead-stages';
 import {sendMail} from './mail';
 
 type CrmPerson = AssignmentEmployee & {role: string};
@@ -139,5 +142,47 @@ export async function notifyFieldDispatch(input: {
     });
   } catch (error) {
     console.error('Field dispatch email failed:', error);
+  }
+}
+
+export async function notifyReregistration(input: {
+  lead: {id: string; name: string; phone: string; stage: string; assigned_to?: string | null};
+  source: string;
+  submittedName?: string | null;
+  submittedNotes?: string | null;
+  campaign?: string | null;
+}) {
+  try {
+    const assignedTo = input.lead.assigned_to?.trim() || '';
+    const people = await loadPeople(assignedTo ? [assignedTo] : []);
+    const base = (process.env.NEXTAUTH_URL || '').replace(/\/$/, '');
+    const mail = reregistrationEmail({
+      name: input.lead.name,
+      phone: input.lead.phone,
+      stageLabel: stageLabel(input.lead.stage || ''),
+      sourceLabel: leadSourceLabel(input.source),
+      campaign: input.campaign,
+      submittedName: input.submittedName,
+      submittedNotes: input.submittedNotes,
+      url: `${base}/crm/leads/${input.lead.id}`,
+      when: riyadhStamp(),
+    });
+    if (assignedTo) {
+      const assignee = people.find((person) => person.id === assignedTo);
+      const assigneeEmail = normalizeEmail(assignee?.email);
+      if (!assigneeEmail) {
+        console.warn(`Reregistration email skipped for assignee ${assignedTo}; no email on the user`);
+      } else {
+        await sendMail({to: assigneeEmail, ...mail});
+      }
+    }
+    const adminTo = adminRecipientEmails(people);
+    if (!adminTo.length) {
+      console.warn('Reregistration admin email skipped; no admin recipients');
+      return;
+    }
+    await sendMail({to: adminTo, ...mail});
+  } catch (error) {
+    console.error('Reregistration email failed:', error);
   }
 }

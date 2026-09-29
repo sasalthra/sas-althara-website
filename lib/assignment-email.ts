@@ -201,3 +201,45 @@ export function fieldDispatchEmail(input: FieldDispatchMailInput) {
 export function adminFieldDispatchEmail(input: FieldDispatchMailInput) {
   return dispatchCopy(input, 'admin');
 }
+
+export type ReregistrationMailInput = {
+  name: string;
+  phone: string;
+  stageLabel: string;
+  sourceLabel: string;
+  campaign?: string | null;
+  submittedName?: string | null;
+  submittedNotes?: string | null;
+  url: string;
+  when: string;
+};
+
+export function reregistrationEmail(input: ReregistrationMailInput) {
+  const name = input.name.trim() || 'عميل';
+  const subject = `إعادة تسجيل عميل — ${name}`;
+  const rows: Array<[string, string]> = [
+    ['الاسم', name],
+    ['الجوال', input.phone],
+    ['المرحلة الحالية', input.stageLabel],
+    ['مصدر التسجيل الجديد', input.sourceLabel],
+    ['الحملة / النموذج', input.campaign?.trim() || ''],
+    ['الاسم المُرسل', input.submittedName?.trim() || ''],
+    ['الملاحظات', input.submittedNotes?.trim() || ''],
+    ['الوقت', input.when],
+  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+  const text = [
+    'أعاد هذا العميل التسجيل. لم يُنشأ عميل جديد، وأُضيف التفاصيل إلى سجله الحالي.',
+    '',
+    ...rows.map(([label, value]) => `${label}: ${value}`),
+    '',
+    `رابط صفحة العميل: ${input.url}`,
+  ].join('\n');
+  const table = rows
+    .map(([label, value]) => `<tr><th style="text-align:right;padding:8px 10px;border:1px solid #d1d5db;color:#111;font-weight:400;white-space:nowrap">${escapeHtml(label)}</th><td style="padding:8px 10px;border:1px solid #d1d5db;color:#111">${escapeHtml(value).replace(/\n/g, '<br/>')}</td></tr>`)
+    .join('');
+  const html = wrapHtml(
+    'إعادة تسجيل عميل',
+    `<p style="color:#111">أعاد هذا العميل التسجيل. لم يُنشأ عميل جديد، وأُضيف التفاصيل إلى سجله الحالي.</p><table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:12px 0;background:#fff;border:1px solid #d1d5db;color:#111">${table}</table><p><a href="${escapeHtml(input.url)}" style="color:#3F1A44">فتح صفحة العميل</a></p><p style="color:#6b7280">${escapeHtml(input.url)}</p>`
+  );
+  return {subject, text, html};
+}

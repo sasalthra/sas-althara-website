@@ -3,6 +3,7 @@
 import {useMemo, useState} from 'react';
 import {useRouter} from 'next/navigation';
 import type {CatalogProperty} from '@/lib/property-types';
+import PublicLeadForm from '@/components/public-lead-form';
 import SiteHeader from './site-header';
 import SearchAgent from './search-agent';
 import {
@@ -363,7 +364,16 @@ export default function Catalog({properties}: {properties: CatalogProperty[]}) {
           </section>
         </main>
 
-        <footer className="sas-footer" id="contact">
+        <section className="public-lead-band" id="contact" aria-label="تواصل معنا">
+          <PublicLeadForm
+            source="contact"
+            heading="تواصل معنا"
+            intro="اترك اسمك ورقم جوالك، ويسجّل الطلب مباشرة في نظام العملاء."
+            submitLabel="أرسل رسالة"
+          />
+        </section>
+
+        <footer className="sas-footer">
           <div>
             <img src="/brand/logo.png" alt="ساس الثراء" width={180} />
             <p>

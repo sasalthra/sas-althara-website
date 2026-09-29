@@ -214,7 +214,7 @@ assert.equal(globalThis.sentMail.length,2);
 assert.equal(globalThis.sentMail[0].to,'field@sas.test');
 assert.match(globalThis.sentMail[0].subject,/عميل اختبار/);
 assert.match(globalThis.sentMail[0].text,/أحمد المبيعات/);
-assert.match(globalThis.sentMail[0].text,/\+966500000000/);
+assert.match(globalThis.sentMail[0].text,/0500000000/);
 assert.match(globalThis.sentMail[0].text,new RegExp(property.title.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
 assert.match(globalThis.sentMail[0].text,/quote ' ; --/);
 assert.match(globalThis.sentMail[0].text,/زيارة مساءً/);
