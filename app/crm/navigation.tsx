@@ -85,9 +85,9 @@ export const workspaceItems = [
   },
   {
     id: "ai",
-    label: "المساعد الداخلي",
-    group: "مساحة الموظف",
-    roles: ["admin", "supervisor", "sales", "field"],
+    label: "المساعد الإداري",
+    group: "إدارة الأعمال",
+    roles: ["admin", "supervisor"],
   },
   {
     id: "users",

@@ -18,6 +18,17 @@ type CrmUserRow = {
   active: number;
 };
 
+async function recordLastLogin(userId: string) {
+  try {
+    await crmDb()
+      .prepare('UPDATE crm_users SET last_login_at = ? WHERE id = ?')
+      .bind(new Date().toISOString(), userId)
+      .run();
+  } catch (error) {
+    console.error('last login was not recorded', error);
+  }
+}
+
 export function authConfigured() {
   const {NEXTAUTH_URL, NEXTAUTH_SECRET} = process.env;
 
@@ -175,6 +186,7 @@ export const authOptions: NextAuthOptions = {
         token.crmName = crmUser.name;
         token.admin = crmUser.role === 'admin';
         token.adminId = crmUser.id;
+        await recordLastLogin(crmUser.id);
 
         return token;
       }
@@ -188,6 +200,7 @@ export const authOptions: NextAuthOptions = {
         token.crmUsername = allowed ? ADMIN_EMAIL : null;
         token.crmRole = allowed ? 'admin' : null;
         token.crmName = allowed ? 'Administrator' : null;
+        if (allowed && typeof token.crmUserId === 'string') await recordLastLogin(token.crmUserId);
       }
 
       // The session is the user id. Username, name, and email on the token are
