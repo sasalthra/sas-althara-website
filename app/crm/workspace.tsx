@@ -341,7 +341,7 @@ export default function CRM({
           <TabsContent value="reports"><ReportsPanel role={role}/></TabsContent>
           {role === 'admin' && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} leads={leads} initialLeadId={query.get('lead')||''}/></TabsContent>}
           <TabsContent value="hr"><HrPanel admin={role === 'admin'}/></TabsContent>
-          <TabsContent value="ai"><AiPanel admin={role === 'admin'}/></TabsContent>
+          {['admin', 'supervisor'].includes(role) && <TabsContent value="ai"><AiPanel admin={role === 'admin'}/></TabsContent>}
           {role === 'admin' && <TabsContent value="sheets"><SheetsPanel/></TabsContent>}
           {role === 'admin' && <TabsContent value="telegram"><TelegramPanel/></TabsContent>}
           {['admin','supervisor'].includes(role) && <TabsContent value="import"><ImportPanel onSaved={()=>void refresh()}/></TabsContent>}

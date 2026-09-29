@@ -15,6 +15,9 @@
  * Existing lead phones are rewritten to the Saudi local form 05XXXXXXXX once
  * per process. Shared numbers are kept (nothing is merged or deleted) and each
  * of those leads gets one phone_duplicate activity note.
+ * ai_settings / ai_usage are created the same way so provider-key save does not
+ * depend on a manual migration. crm_users.last_login_at is added once and left
+ * null until a real sign-in writes it.
  */
 
 import {planLeadPhoneMigration} from './phone';
@@ -436,6 +439,48 @@ async function repairStages(executor: SqlExecutor) {
   }
 }
 
+/**
+ * Provider settings are written on first save. Installations that never ran
+ * 002_expansion.sql otherwise fail that save with a generic error.
+ */
+async function ensureAiSchema(executor: SqlExecutor) {
+  try {
+    await run(
+      executor,
+      `CREATE TABLE IF NOT EXISTS ai_settings (
+        id VARCHAR(30) PRIMARY KEY,
+        provider VARCHAR(30) NOT NULL,
+        model VARCHAR(100) NOT NULL,
+        encrypted_key TEXT NOT NULL,
+        updated_at VARCHAR(24) NOT NULL
+      )`
+    );
+  } catch (error) {
+    console.error('ai_settings table was not created', error);
+    return;
+  }
+  await ensureColumn(executor, 'ai_settings', 'provider', 'VARCHAR(30) NULL');
+  await ensureColumn(executor, 'ai_settings', 'model', 'VARCHAR(100) NULL');
+  await ensureColumn(executor, 'ai_settings', 'updated_at', 'VARCHAR(24) NULL');
+  try {
+    await run(
+      executor,
+      `CREATE TABLE IF NOT EXISTS ai_usage (
+        user_id VARCHAR(255) NOT NULL,
+        hour_key CHAR(13) NOT NULL,
+        requests INT NOT NULL,
+        PRIMARY KEY (user_id, hour_key)
+      )`
+    );
+  } catch (error) {
+    console.error('ai_usage table was not created', error);
+  }
+}
+
+async function ensureLastLogin(executor: SqlExecutor) {
+  await ensureColumn(executor, 'crm_users', 'last_login_at', 'VARCHAR(24) NULL');
+}
+
 async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
   try {
     await ensureTelegramSchema(executor);
@@ -446,6 +491,16 @@ async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
     await ensureUserPhone(executor);
   } catch (error) {
     console.error('crm_users phone check failed', error);
+  }
+  try {
+    await ensureLastLogin(executor);
+  } catch (error) {
+    console.error('crm_users last_login_at check failed', error);
+  }
+  try {
+    await ensureAiSchema(executor);
+  } catch (error) {
+    console.error('ai settings schema check failed', error);
   }
   let featured = false;
   const existing = await hasFeaturedColumn(executor);

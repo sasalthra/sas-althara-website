@@ -39,8 +39,10 @@ try {
  assert.match(admin,/استيراد Excel/,'admin can reach import');
  assert.match(supervisor,/استيراد Excel/);
  assert.doesNotMatch(sales,/استيراد Excel|إعدادات Google Sheets/);
- for(const html of [admin,sales,supervisor])assert.match(html,/المساعد الداخلي/,'all authorized roles can reach read-only AI');
- console.log('PASS rendered workspace navigation: Sheets admin-only, import managers-only, AI all CRM roles');
+ for(const html of [admin,supervisor])assert.match(html,/المساعد الإداري/,'managers can open the admin assistant');
+ assert.doesNotMatch(sales,/المساعد الإداري/,'sales do not see the admin assistant');
+ assert.doesNotMatch(sales,/المساعد الداخلي/);
+ console.log('PASS rendered workspace navigation: Sheets admin-only, import managers-only, admin assistant for admin and supervisor');
  await build({stdin:{contents:`import React from 'react';import {renderToStaticMarkup} from 'react-dom/server';import HrPanel from './app/crm/hr-panel';export const html=renderToStaticMarkup(<HrPanel admin={false}/>);`,resolveDir:process.cwd(),loader:'tsx'},outfile:join(out,'hr-ui.cjs'),bundle:true,platform:'node',format:'cjs'});
  const {html}=createRequire(import.meta.url)(join(out,'hr-ui.cjs'));
  assert.match(html,/hr=attendance/,'calendar destination available');
