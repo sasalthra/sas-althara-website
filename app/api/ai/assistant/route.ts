@@ -10,7 +10,9 @@ import {
   redactPhones,
 } from '@/lib/admin-assistant';
 import {displayLeadPhone} from '@/lib/phone';
-import {completeFromAggregates} from '@/lib/ai-complete';
+import {completeFromAggregates, ProviderCallError} from '@/lib/ai-complete';
+import {credentialsFromRow, readEnvAi} from '@/lib/ai-env.server';
+import {providerFailureNotice} from '@/lib/ai-public';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,17 +37,24 @@ function localAlerts(snapshot: Awaited<ReturnType<typeof loadAssistantSnapshot>>
 
 export async function GET() {
   return endpoint(async () => {
-    await actor(undefined, roles);
+    const user = await actor(undefined, roles);
     const snapshot = await loadAssistantSnapshot(crmDb());
-    const config = await crmDb()
-      .prepare("SELECT provider FROM ai_settings WHERE id='primary'")
-      .first<{provider: string}>();
+    const env = readEnvAi();
+    let configured = Boolean(env);
+    if (!env) {
+      const config = await crmDb()
+        .prepare("SELECT provider FROM ai_settings WHERE id='primary'")
+        .first<{provider: string}>();
+      configured = Boolean(config && ['openai', 'anthropic'].includes(config.provider));
+    }
     return reply({
       kpis: snapshot.kpis,
       alerts: localAlerts(snapshot),
       alertsTotal: snapshot.alertsTotal,
       overdueRule: OVERDUE_RULE,
-      configured: Boolean(config && ['openai', 'anthropic'].includes(config.provider)),
+      configured,
+      providerSource: env ? 'env' : 'database',
+      ...(env && user.role === 'admin' ? {model: env.model} : {}),
     });
   });
 }
@@ -65,6 +74,15 @@ async function withinLimit(userId: string) {
   return allowed;
 }
 
+function localReply(local: string, notice?: string, reason?: string) {
+  return reply({
+    answer: notice ? `${notice}\n\n${local}` : local,
+    source: 'local',
+    ...(reason ? {reason} : {}),
+    ...(notice ? {notice} : {}),
+  });
+}
+
 export async function POST(req: Request) {
   return endpoint(async () => {
     const user = await actor(req, roles);
@@ -72,29 +90,37 @@ export async function POST(req: Request) {
     const db = crmDb();
     const snapshot = await loadAssistantSnapshot(db);
     const local = redactPhones(answerDeterministic(input.question, snapshot));
-    const config = await db
+    const env = readEnvAi();
+    const config = env ? null : await db
       .prepare("SELECT provider, model, encrypted_key FROM ai_settings WHERE id='primary'")
       .first<{provider: string; model: string; encrypted_key: string}>();
-    if (!config || !['openai', 'anthropic'].includes(config.provider)) {
-      return reply({answer: local, source: 'local'});
+    let credentials;
+    try {
+      credentials = credentialsFromRow(config);
+    } catch {
+      console.error('admin assistant could not read the stored provider key');
+      return localReply(local, providerFailureNotice('other'), 'provider');
     }
+    if (!credentials) return reply({answer: local, source: 'local'});
     try {
       const allowed = await withinLimit(user.userId);
       if (!allowed) return reply({answer: local, source: 'local', reason: 'limit'});
       await db.prepare('INSERT INTO crm_audit (id,actor_id,action,target_id,details,created_at) VALUES (?,?,?,?,?,?)')
-        .bind(crypto.randomUUID(), user.userId, 'ai.read', 'assistant', JSON.stringify({provider: config.provider}), new Date().toISOString())
+        .bind(crypto.randomUUID(), user.userId, 'ai.read', 'assistant', JSON.stringify({provider: credentials.provider, source: credentials.source}), new Date().toISOString())
         .run();
       const answer = await completeFromAggregates({
-        provider: config.provider,
-        model: config.model,
-        encryptedKey: config.encrypted_key,
+        provider: credentials.provider,
+        model: credentials.model,
+        apiKey: credentials.apiKey,
         question: input.question,
         facts: modelFacts(snapshot),
       });
       return reply({answer, source: 'model'});
     } catch (error) {
-      console.error('admin assistant provider call failed', error);
-      return reply({answer: local, source: 'local', reason: 'provider'});
+      const failure = error instanceof ProviderCallError ? error.failure : 'other';
+      console.error(`admin assistant provider call failed: ${failure}`);
+      const notice = providerFailureNotice(failure === 'model_not_found' ? 'other' : failure);
+      return localReply(local, notice, failure === 'auth' || failure === 'quota' || failure === 'network' ? failure : 'provider');
     }
   });
 }

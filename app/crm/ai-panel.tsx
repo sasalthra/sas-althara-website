@@ -3,6 +3,7 @@
 import {FormEvent, useEffect, useRef, useState} from 'react';
 import {AlertCircle, BadgeCheck, Building2, Wallet} from 'lucide-react';
 import {OVERDUE_RULE, SUGGESTED_QUESTIONS} from '@/lib/admin-assistant';
+import {envStatusLine} from '@/lib/ai-public';
 
 type ChatMessage = {role: 'user' | 'assistant'; text: string};
 type Spend = {available: boolean; total: number};
@@ -44,7 +45,7 @@ function spendHint(spend: Spend | undefined) {
   return 'مجموع مصروف الحملات المسجّل في النظام';
 }
 
-export default function AiPanel({admin}: {admin: boolean}) {
+export default function AiPanel({admin, envModel = null}: {admin: boolean; envModel?: string | null}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState('');
   const [busy, setBusy] = useState(false);
@@ -58,9 +59,11 @@ export default function AiPanel({admin}: {admin: boolean}) {
   const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
-  const [settingsStatus, setSettingsStatus] = useState('لم تُفحص الإعدادات بعد');
+  const [settingsStatus, setSettingsStatus] = useState(envModel ? envStatusLine(envModel) : 'لم تُفحص الإعدادات بعد');
   const [settingsMessage, setSettingsMessage] = useState('');
   const [saving, setSaving] = useState(false);
+  const [envLocked, setEnvLocked] = useState(Boolean(envModel));
+  const [shownModel, setShownModel] = useState(envModel ?? '');
   const [historyReady, setHistoryReady] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -96,6 +99,11 @@ export default function AiPanel({admin}: {admin: boolean}) {
         setAlertsTotal(Number(data.alertsTotal) || 0);
         if (typeof data.overdueRule === 'string') setRule(data.overdueRule);
         setConfigured(Boolean(data.configured));
+        if (data.providerSource === 'env' && typeof data.model === 'string') {
+          setEnvLocked(true);
+          setShownModel(data.model);
+          setSettingsStatus(envStatusLine(data.model));
+        }
         setLoadError('');
       } catch (error) {
         if (!cancelled) setLoadError(error instanceof Error ? error.message : 'تعذر تحميل المؤشرات');
@@ -112,6 +120,13 @@ export default function AiPanel({admin}: {admin: boolean}) {
       const response = await fetch('/api/ai/settings');
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'تعذر قراءة الإعدادات');
+      if (data.source === 'env' && typeof data.model === 'string') {
+        setEnvLocked(true);
+        setShownModel(data.model);
+        setSettingsStatus(envStatusLine(data.model));
+        setSettingsMessage('');
+        return;
+      }
       if (data.configured) {
         setProvider(data.provider);
         setModel(data.model);
@@ -165,7 +180,8 @@ export default function AiPanel({admin}: {admin: boolean}) {
       if (!response.ok) throw new Error(data.error || 'تعذر تنفيذ السؤال');
       const answer = typeof data.answer === 'string' ? data.answer : '';
       setMessages(current => [...current, {role: 'assistant', text: answer}]);
-      if (data.source === 'local') setNotice('الإجابة من بيانات النظام مباشرة.');
+      if (typeof data.notice === 'string' && data.notice) setNotice(data.notice);
+      else if (data.source === 'local') setNotice('الإجابة من بيانات النظام مباشرة.');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'تعذر تنفيذ السؤال');
     } finally {
@@ -267,7 +283,8 @@ export default function AiPanel({admin}: {admin: boolean}) {
           <p className="assistant-footnote">{rule}{alertsTotal > alerts.length ? ` يُعرض أقدم ${alerts.length} تنبيهاً.` : ''}</p>
         </aside>
       </div>
-      {admin && (
+      {admin && envLocked && <p className="assistant-note" role="status">{envStatusLine(shownModel || 'gpt-4o-mini')}</p>}
+      {admin && !envLocked && (
         <details className="assistant-settings panel" onToggle={event => { if (event.currentTarget.open) void loadSettings(); }}>
           <summary>إعدادات المزود</summary>
           <p role="status">{settingsStatus}</p>
