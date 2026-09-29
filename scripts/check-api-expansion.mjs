@@ -47,6 +47,7 @@ try {
  console.log('PASS HR API identity, employee cannot change schedule/review, invalid location, own service request');
  await build({entryPoints:['app/api/ai/settings/route.ts'],outfile:join(out,'ai.cjs'),bundle:true,platform:'node',format:'cjs',plugins:[boundaries]});
  const ai=createRequire(import.meta.url)(join(out,'ai.cjs'));
+ delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_MODEL; delete process.env.AI_PROVIDER;
  assert.equal((await ai.GET()).status,403);
  globalThis.testUser=user;process.env.APP_ENCRYPTION_KEY=Buffer.alloc(32,3).toString('base64');
  const aiKey='test-provider-key-not-real';

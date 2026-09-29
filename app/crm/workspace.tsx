@@ -61,6 +61,7 @@ type CrmRole =
 type WorkspaceProps = {
   role: CrmRole;
   userId?: string;
+  aiEnvModel?: string | null;
 };
 
 function formatUpdateDate(
@@ -122,6 +123,7 @@ function compactPropertyTitle(
 export default function CRM({
   role,
   userId = '',
+  aiEnvModel = null,
 }: WorkspaceProps) {
   const query=useCrmQuery();
   const items=workspaceItems.filter(item=>item.roles.includes(role));
@@ -341,7 +343,7 @@ export default function CRM({
           <TabsContent value="reports"><ReportsPanel role={role}/></TabsContent>
           {role === 'admin' && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} leads={leads} initialLeadId={query.get('lead')||''}/></TabsContent>}
           <TabsContent value="hr"><HrPanel admin={role === 'admin'}/></TabsContent>
-          {['admin', 'supervisor'].includes(role) && <TabsContent value="ai"><AiPanel admin={role === 'admin'}/></TabsContent>}
+          {['admin', 'supervisor'].includes(role) && <TabsContent value="ai"><AiPanel admin={role === 'admin'} envModel={aiEnvModel}/></TabsContent>}
           {role === 'admin' && <TabsContent value="sheets"><SheetsPanel/></TabsContent>}
           {role === 'admin' && <TabsContent value="telegram"><TelegramPanel/></TabsContent>}
           {['admin','supervisor'].includes(role) && <TabsContent value="import"><ImportPanel onSaved={()=>void refresh()}/></TabsContent>}

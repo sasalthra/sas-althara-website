@@ -237,6 +237,9 @@ try {
   assert.match(supervisorBody.alerts[0].line, /العميل عميل_سري دون متابعة منذ \d+ أيام/);
   assert.equal(supervisorBody.kpis.overdue, 1);
   assert.equal(supervisorBody.kpis.campaignSpend.available, false);
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_MODEL;
+  delete process.env.AI_PROVIDER;
   process.env.APP_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
   globalThis.assistantConfig = {provider: 'openai', model: 'test-model', encrypted_key: seal('test-provider-key-not-real', 'openai')};
   let captured = '';
@@ -295,6 +298,88 @@ try {
   delete process.env.APP_ENCRYPTION_KEY;
   console.log('PASS provider save names a missing encryption key and still stores ciphertext');
 
+  const envKey = 'sk-env-test-key-not-real';
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warnings.push(args.map(String).join(' ')); };
+  process.env.OPENAI_API_KEY = envKey;
+  process.env.OPENAI_MODEL = 'sas_althra_ai';
+  delete process.env.AI_PROVIDER;
+  delete process.env.APP_ENCRYPTION_KEY;
+  globalThis.assistantConfig = {provider: 'openai', model: 'db-model', encrypted_key: 'not-a-real-sealed-key'};
+  globalThis.assistantWrites = [];
+  const envSettings = await (await settings.GET()).json();
+  assert.equal(envSettings.source, 'env');
+  assert.equal(envSettings.formEnabled, false);
+  assert.equal(envSettings.model, 'gpt-4o-mini');
+  assert.equal(envSettings.provider, 'openai');
+  assert.equal(JSON.stringify(envSettings).includes(envKey), false);
+  assert.equal('apiKey' in envSettings, false);
+  assert.equal(warnings.some(line => line.includes(envKey)), false);
+  assert.match(warnings.join('\n'), /sas_althra_ai/);
+  assert.match(warnings.join('\n'), /gpt-4o-mini/);
+  const blocked = await settings.POST(request({provider: 'openai', model: 'gpt-4o-mini', apiKey: 'posted-key-should-not-store'}));
+  const blockedBody = await blocked.json();
+  assert.equal(blocked.status, 409);
+  assert.match(blockedBody.error, /إعدادات الخادم/);
+  assert.equal(JSON.stringify(blockedBody).includes('posted-key-should-not-store'), false);
+  assert.equal(JSON.stringify(blockedBody).includes(envKey), false);
+  assert.equal(globalThis.assistantWrites.some(write => JSON.stringify(write).includes('posted-key-should-not-store')), false);
+  globalThis.assistantUser = {userId: 'admin-user', role: 'admin', name: 'إدارة'};
+  const envStatus = await (await route.GET()).json();
+  assert.equal(envStatus.configured, true);
+  assert.equal(envStatus.providerSource, 'env');
+  assert.equal(envStatus.model, 'gpt-4o-mini');
+  assert.equal(JSON.stringify(envStatus).includes(envKey), false);
+  let calls = [];
+  globalThis.fetch = async (url, init) => {
+    const headers = init?.headers || {};
+    calls.push({url: String(url), model: JSON.parse(init.body).model, authorization: headers.Authorization || '', apiKeyHeader: headers['x-api-key'] || ''});
+    const model = calls.at(-1).model;
+    if (model !== 'gpt-4o-mini') {
+      return new Response(JSON.stringify({error: {code: 'model_not_found', message: 'The model does not exist or you do not have access to it.'}}), {status: 404, headers: {'content-type': 'application/json'}});
+    }
+    return new Response(JSON.stringify({choices: [{message: {content: 'إجابة من الخادم'}}]}), {status: 200, headers: {'content-type': 'application/json'}});
+  };
+  const envAnswer = await (await route.POST(request({question: 'ملخص الفريق'}))).json();
+  assert.equal(envAnswer.source, 'model');
+  assert.equal(envAnswer.answer, 'إجابة من الخادم');
+  assert.deepEqual(calls.map(call => call.model), ['gpt-4o-mini']);
+  assert.equal(calls[0].authorization, `Bearer ${envKey}`);
+  assert.equal(JSON.stringify(envAnswer).includes(envKey), false);
+  assert.equal(JSON.stringify(globalThis.assistantWrites).includes(envKey), false);
+  process.env.OPENAI_MODEL = 'gpt-4.1-preview';
+  calls = [];
+  const retried = await (await route.POST(request({question: 'ملخص الفريق'}))).json();
+  assert.equal(retried.source, 'model');
+  assert.deepEqual(calls.map(call => call.model), ['gpt-4.1-preview', 'gpt-4o-mini']);
+  assert.match(warnings.join('\n'), /model_not_found/);
+  assert.equal(warnings.join('\n').includes(envKey), false);
+  globalThis.fetch = async () => new Response(JSON.stringify({error: {message: 'LEAKED_PROVIDER_BODY', code: 'invalid_api_key'}}), {status: 401, headers: {'content-type': 'application/json'}});
+  const invalidKey = await (await route.POST(request({question: 'ملخص الفريق'}))).json();
+  assert.equal(invalidKey.source, 'local');
+  assert.match(invalidKey.answer, /مفتاح المزود غير صالح/);
+  assert.match(invalidKey.notice, /مفتاح المزود غير صالح/);
+  assert.match(invalidKey.answer, /نورة:/);
+  assert.equal(invalidKey.answer.includes('LEAKED_PROVIDER_BODY'), false);
+  assert.equal(JSON.stringify(invalidKey).includes(envKey), false);
+  globalThis.fetch = async () => new Response(JSON.stringify({error: {message: 'LEAKED_PROVIDER_BODY', code: 'insufficient_quota'}}), {status: 429, headers: {'content-type': 'application/json'}});
+  const quota = await (await route.POST(request({question: 'حلل أداء الموظفين'}))).json();
+  assert.match(quota.answer, /حصة الاستخدام/);
+  assert.match(quota.answer, /نورة:/);
+  assert.equal(quota.answer.includes('LEAKED_PROVIDER_BODY'), false);
+  globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
+  const offline = await (await route.POST(request({question: 'ملخص الفريق'}))).json();
+  assert.match(offline.answer, /مشكلة في الشبكة/);
+  assert.match(offline.answer, /نورة:/);
+  assert.equal(offline.source, 'local');
+  console.warn = originalWarn;
+  globalThis.fetch = originalFetch;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_MODEL;
+  delete process.env.AI_PROVIDER;
+  console.log('PASS env provider ignores the database key, hides invalid models, and keeps Arabic fallbacks');
+
   const panelSource = readFileSync('app/crm/ai-panel.tsx', 'utf8');
   const css = readFileSync('app/crm/crm.css', 'utf8');
   const assistantCss = css.slice(css.indexOf('.admin-assistant'));
@@ -310,7 +395,7 @@ try {
   assert.doesNotMatch(assistantCss, /#(?:0d9488|14b8a6|0f766e|10b981|16a34a|22c55e|d4af37|c9a227|b45309)/i);
   await build({
     stdin: {
-      contents: `import React from 'react';import {renderToStaticMarkup} from 'react-dom/server';import AiPanel from './app/crm/ai-panel';import CRM from './app/crm/workspace';export const panel=renderToStaticMarkup(<AiPanel admin={true}/>);export const supervisorPanel=renderToStaticMarkup(<AiPanel admin={false}/>);export const admin=renderToStaticMarkup(<CRM role="admin"/>);export const supervisor=renderToStaticMarkup(<CRM role="supervisor"/>);export const sales=renderToStaticMarkup(<CRM role="sales"/>);`,
+      contents: `import React from 'react';import {renderToStaticMarkup} from 'react-dom/server';import AiPanel from './app/crm/ai-panel';import CRM from './app/crm/workspace';export const panel=renderToStaticMarkup(<AiPanel admin={true}/>);export const supervisorPanel=renderToStaticMarkup(<AiPanel admin={false}/>);export const envPanel=renderToStaticMarkup(<AiPanel admin envModel="gpt-4o-mini"/>);export const envStaff=renderToStaticMarkup(<AiPanel admin={false} envModel="gpt-4o-mini"/>);export const admin=renderToStaticMarkup(<CRM role="admin"/>);export const supervisor=renderToStaticMarkup(<CRM role="supervisor"/>);export const sales=renderToStaticMarkup(<CRM role="sales"/>);`,
       resolveDir: process.cwd(),
       loader: 'tsx',
     },
@@ -328,6 +413,12 @@ try {
   assert.match(ui.panel, /إعدادات المزود/);
   assert.match(ui.panel, /assistant-badge/);
   assert.doesNotMatch(ui.supervisorPanel, /إعدادات المزود/);
+  assert.match(ui.envPanel, /المزود مضبوط من إعدادات الخادم \(env\) — الطراز: gpt-4o-mini/);
+  assert.doesNotMatch(ui.envPanel, /type="password"/);
+  assert.doesNotMatch(ui.envPanel, /حفظ الإعدادات والمفتاح/);
+  assert.doesNotMatch(ui.envPanel, /APP_ENCRYPTION_KEY/);
+  assert.doesNotMatch(ui.envStaff, /إعدادات الخادم \(env\)/);
+  assert.match(ui.envStaff, /اسأل عن أداء الشركة/);
   assert.match(ui.admin, /المساعد الإداري/);
   assert.match(ui.supervisor, /المساعد الإداري/);
   assert.doesNotMatch(ui.sales, /المساعد الإداري/);

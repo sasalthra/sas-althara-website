@@ -1,6 +1,7 @@
 import {getServerSession} from 'next-auth';
 
 import {authOptions} from '@/lib/auth';
+import {publicAiEnv} from '@/lib/ai-env.server';
 import {LoginButton} from './auth-buttons';
 import Workspace from './workspace';
 
@@ -38,10 +39,13 @@ export default async function CrmPage() {
     crmUserId?: string;
   };
 
+  const aiEnv = publicAiEnv();
+
   return (
     <Workspace
       role={crmSession.crmRole ?? 'sales'}
       userId={crmSession.crmUserId ?? ''}
+      aiEnvModel={aiEnv?.model ?? null}
     />
   );
 }
