@@ -1,7 +1,9 @@
-import {notifyImportAssignments} from './assignment-notify';
+import {notifyImportAssignments,notifyReregistration} from './assignment-notify';
 import {propertyRequestText} from './assignment-email';
 import {crmDb,crmTransaction} from './crm-db';
 import {assigneesForReady,previewImport,type Assignment,type Mapping} from './lead-import';
+import {findLeadByNormalizedPhone,noteReregistration,type ExistingLead} from './lead-reregistration';
+import {normalizeLeadPhone} from './phone';
 import {ApiError} from './secure-api';
 
 async function activeSalesIds(db:ReturnType<typeof crmDb>,ids:string[]){
@@ -20,12 +22,22 @@ export async function runImport(rows:string[][],mapping:Mapping,userId:string,co
   const existing=await db.prepare('SELECT phone FROM leads').all();
   const preview=previewImport(rows,mapping,existing.results.map(r=>String(r.phone)));
   const assignedClients:{assignedTo:string;client:{name:string;phone:string;stage:string;source:string;notes:string;propertyRequest:string;followUp:string}}[]=[];
+  const reregistrations:{lead:ExistingLead;submittedName:string;submittedNotes:string;campaign:string}[]=[];
   if(commit){
    const now=new Date().toISOString();
    const ready=preview.filter(r=>r.status==='ready'&&r.lead);
    const assigned=assigneesForReady(ready.length,assignment);
    let i=0;
    for(const r of preview){
+    if(r.status==='duplicate'&&r.lead?.phone){
+     const existing=await findLeadByNormalizedPhone(db,r.lead.phone);
+     if(existing){
+      const campaign=(r.lead.source&&r.lead.source!=='excel'?r.lead.source:'').slice(0,120);
+      await noteReregistration(db,existing,{actorId:userId,source,submittedName:r.lead.name||'',submittedNotes:r.lead.notes||'',campaign});
+      reregistrations.push({lead:{...existing,phone:normalizeLeadPhone(existing.phone)||existing.phone},submittedName:r.lead.name||'',submittedNotes:r.lead.notes||'',campaign});
+     }
+     continue;
+    }
     if(r.status!=='ready'||!r.lead)continue;const v=r.lead;
     const assignedTo=assigned[i++]||'';
     const leadSource=v.source==='excel'?source:v.source;
@@ -34,14 +46,21 @@ export async function runImport(rows:string[][],mapping:Mapping,userId:string,co
     await db.prepare('INSERT INTO lead_activity (id,lead_id,user_id,action,details) VALUES (?,?,?,?,?)').bind(crypto.randomUUID(),v.id,userId,'imported',JSON.stringify({source,assignedTo:assignedTo||null,stage:v.stage})).run();
     if(assignedTo)assignedClients.push({assignedTo,client:{name:v.name,phone:v.phone,stage:v.stage,source:leadSource,notes:v.notes,propertyRequest:propertyRequestText(v.propertyId,v.propertyOther),followUp:v.followUp}});
    }
-   await db.prepare('INSERT INTO crm_audit (id,actor_id,action,target_id,details,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(),userId,'leads.import',source,JSON.stringify({inserted:ready.length,assignment:assignment?.mode||'unassigned'}),now).run();
+   await db.prepare('INSERT INTO crm_audit (id,actor_id,action,target_id,details,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(),userId,'leads.import',source,JSON.stringify({inserted:ready.length,duplicates:reregistrations.length,assignment:assignment?.mode||'unassigned'}),now).run();
   }
-  return {rows:preview,inserted:commit?preview.filter(r=>r.status==='ready').length:0,assignedClients};
+  return {rows:preview,inserted:commit?preview.filter(r=>r.status==='ready').length:0,assignedClients,reregistrations};
  };
  const result=commit?await crmTransaction(execute):await execute(crmDb());
  if(commit&&result.assignedClients.length){
   try{await notifyImportAssignments(result.assignedClients);}
   catch(error){console.error('Import assignment email failed:',error);}
+ }
+ if(commit){
+  for(const item of result.reregistrations){
+   try{
+    await notifyReregistration({lead:item.lead,source,submittedName:item.submittedName,submittedNotes:item.submittedNotes,campaign:item.campaign});
+   }catch(error){console.error('Import reregistration email failed:',error);}
+  }
  }
  return {rows:result.rows,inserted:result.inserted};
 }

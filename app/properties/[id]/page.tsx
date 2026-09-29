@@ -17,6 +17,7 @@ import {
 import {getAdmin} from '@/lib/admin';
 import {loadPublishedProperty} from '@/lib/property-catalog';
 import type {CatalogProperty} from '@/lib/property-types';
+import PublicLeadForm from '@/components/public-lead-form';
 import LeadForm from '../../lead-form';
 import SiteHeader from '../../site-header';
 import '../properties.css';
@@ -146,6 +147,14 @@ export default async function PropertyDetailPage({
                 <Phone size={16} /> اتصال
               </a>
             </div>
+            <PublicLeadForm
+              source="property-inquiry"
+              propertyId={property.id}
+              propertyTitle={property.title}
+              heading="استفسار عن هذا العقار"
+              intro="أدخل جوالك بأي صيغة، ويصل الطلب إلى ملف العميل في النظام."
+              submitLabel="أرسل الاستفسار"
+            />
             {admin ? (
               <div className="listing-admin-lead">
                 <h3>تسجيل اهتمام داخلي</h3>

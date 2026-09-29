@@ -12,8 +12,12 @@
  * unparsed post stores NULL, and telegram_chat_id / telegram_message_id /
  * telegram_media_group_id are added the same once-per-process way. The repair
  * never drops data and a failure here does not block the leads schema.
+ * Existing lead phones are rewritten to the Saudi local form 05XXXXXXXX once
+ * per process. Shared numbers are kept (nothing is merged or deleted) and each
+ * of those leads gets one phone_duplicate activity note.
  */
 
+import {planLeadPhoneMigration} from './phone';
 import {retiredStageMoves, stageEnumValues} from './lead-stages';
 
 export type LeadSchemaState = {featured: boolean};
@@ -358,6 +362,67 @@ async function ensureTelegramSchema(executor: SqlExecutor) {
   }
 }
 
+/**
+ * One pass per process cache. A missing phone column or a locked account is
+ * logged and skipped. A second process run sees stored 05 numbers and existing
+ * phone_duplicate notes, so it does not write them again.
+ */
+async function normalizeExistingLeadPhones(executor: SqlExecutor) {
+  let rows: Record<string, unknown>[] = [];
+  try {
+    rows = rowsOf(await run(executor, 'SELECT id, phone FROM leads'));
+  } catch (error) {
+    console.error('lead phone normalization skipped', error);
+    return;
+  }
+  const plan = planLeadPhoneMigration(
+    rows
+      .map(row => ({id: String(row.id ?? ''), phone: String(row.phone ?? '')}))
+      .filter(row => row.id)
+  );
+  for (const update of plan.updates) {
+    try {
+      await run(executor, 'UPDATE leads SET phone = ? WHERE id = ?', [update.phone, update.id]);
+    } catch (error) {
+      console.error('lead phone was not normalized', error);
+    }
+  }
+  if (!plan.duplicateNotes.length) return;
+  let noted = new Set<string>();
+  try {
+    noted = new Set(
+      rowsOf(await run(executor, "SELECT lead_id FROM lead_activity WHERE action = 'phone_duplicate'"))
+        .map(row => String(row.lead_id ?? row.leadId ?? ''))
+        .filter(Boolean)
+    );
+  } catch (error) {
+    console.error('duplicate phone notes were not checked', error);
+    return;
+  }
+  for (const item of plan.duplicateNotes) {
+    if (noted.has(item.id)) continue;
+    try {
+      await run(
+        executor,
+        'INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES (?, ?, ?, ?, ?)',
+        [
+          crypto.randomUUID(),
+          item.id,
+          'system',
+          'phone_duplicate',
+          JSON.stringify({
+            note: `رقم الجوال ${item.phone} مكرر على ${item.count} عملاء بعد توحيد الصيغة. لم يُدمج السجل ولم يُحذف أي عميل.`,
+            phone: item.phone,
+            count: item.count,
+          }),
+        ]
+      );
+    } catch (error) {
+      console.error('duplicate phone note was not written', error);
+    }
+  }
+}
+
 async function repairStages(executor: SqlExecutor) {
   try {
     await widenStageEnum(executor);
@@ -386,6 +451,11 @@ async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
   const existing = await hasFeaturedColumn(executor);
   if (existing === null) {
     await repairStages(executor);
+    try {
+      await normalizeExistingLeadPhones(executor);
+    } catch (error) {
+      console.error('lead phone normalization failed', error);
+    }
     return {featured: false};
   }
   featured = existing;
@@ -400,6 +470,11 @@ async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
   }
   if (featured) await ensureFeaturedIndex(executor);
   await repairStages(executor);
+  try {
+    await normalizeExistingLeadPhones(executor);
+  } catch (error) {
+    console.error('lead phone normalization failed', error);
+  }
   return {featured};
 }
 

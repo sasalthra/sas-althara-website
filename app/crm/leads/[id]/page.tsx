@@ -17,6 +17,7 @@ import LeadForm, {
 import {formatRiyadhDate} from '@/lib/lead-dates';
 import {canToggleFeatured, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
 import {editableStage, stageChoices, stageLabel} from '@/lib/lead-stages';
+import {displayLeadPhone} from '@/lib/phone';
 
 import {
   Dialog,
@@ -166,6 +167,10 @@ function actionLabel(
       return 'تفويج للميداني';
     case 'field_update':
       return 'تحديث ميداني';
+    case 'reregistered':
+      return 'إعادة تسجيل';
+    case 'phone_duplicate':
+      return 'رقم مكرر';
     default:
       return action
         .replaceAll('_', ' ')
@@ -794,7 +799,7 @@ export default function LeadDetailsPage() {
 
               <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
                 <span dir="ltr">
-                  {lead.phone}
+                  {displayLeadPhone(lead.phone)}
                 </span>
 
                 <span>
@@ -1232,7 +1237,7 @@ export default function LeadDetailsPage() {
                     dir="ltr"
                     className="mt-1 text-right font-semibold"
                   >
-                    {lead.phone}
+                    {displayLeadPhone(lead.phone)}
                   </div>
                 </div>
 

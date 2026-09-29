@@ -1,10 +1,12 @@
 import {getCrmUser} from '@/lib/admin';
 import {propertyRequestText} from '@/lib/assignment-email';
-import {notifyLeadAssignment} from '@/lib/assignment-notify';
+import {notifyLeadAssignment, notifyReregistration} from '@/lib/assignment-notify';
 import {crmDb} from '@/lib/crm-db';
 import {leadSchema as schema} from '@/lib/lead-input';
+import {findLeadByNormalizedPhone, noteReregistration} from '@/lib/lead-reregistration';
 import {ensureLeadSchema, isMissingFeaturedColumn} from '@/lib/lead-schema';
 import {stageWriteAllowed} from '@/lib/lead-stages';
+import {displayLeadPhone, normalizeLeadPhone} from '@/lib/phone';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -199,11 +201,12 @@ function presentLeads(
   rows: unknown[],
   featured: boolean
 ) {
-  return (rows as Record<string, unknown>[]).map(row =>
-    featured
-      ? {...row, featured_available: 1}
-      : {...row, is_featured: 0, featured_available: 0}
-  );
+  return (rows as Record<string, unknown>[]).map(row => {
+    const phone = displayLeadPhone(String(row.phone ?? ''));
+    return featured
+      ? {...row, phone, featured_available: 1}
+      : {...row, phone, is_featured: 0, featured_available: 0};
+  });
 }
 
 async function readLeads(
@@ -370,13 +373,14 @@ async function write(
       chunks.push(value);
     }
 
-    input = schema.safeParse(
-      JSON.parse(
-        Buffer.concat(
-          chunks
-        ).toString('utf8')
-      )
-    );
+    const parsed = JSON.parse(
+      Buffer.concat(chunks).toString('utf8')
+    ) as unknown;
+    const withPhone =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? {...(parsed as Record<string, unknown>), phone: normalizeLeadPhone(String((parsed as {phone?: unknown}).phone ?? ''))}
+        : parsed;
+    input = schema.safeParse(withPhone);
   } catch {
     return reply(
       {error: 'بيانات غير صالحة'},
@@ -702,6 +706,46 @@ async function write(
         )
         .run();
     } else {
+      const retired =
+        retiredStageReply(value.stage);
+
+      if (retired) {
+        return retired;
+      }
+
+      const existingPhone = await findLeadByNormalizedPhone(
+        db,
+        value.phone,
+        value.id
+      );
+      if (existingPhone) {
+        await noteReregistration(db, existingPhone, {
+          actorId: user.userId,
+          source: value.source || 'manual',
+          submittedName: value.name,
+          submittedNotes: value.notes,
+          campaign: '',
+        });
+        try {
+          await notifyReregistration({
+            lead: {
+              ...existingPhone,
+              phone: normalizeLeadPhone(existingPhone.phone) || existingPhone.phone,
+            },
+            source: value.source || 'manual',
+            submittedName: value.name,
+            submittedNotes: value.notes,
+          });
+        } catch (error) {
+          console.error('manual reregistration email failed', error);
+        }
+        return reply({
+          ok: true,
+          id: existingPhone.id,
+          duplicate: true,
+        });
+      }
+
       let newAssignedTo:
         | string
         | null = null;
@@ -726,13 +770,6 @@ async function write(
       ) {
         newFieldAssignedTo =
           user.userId;
-      }
-
-      const retired =
-        retiredStageReply(value.stage);
-
-      if (retired) {
-        return retired;
       }
 
       await db

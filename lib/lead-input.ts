@@ -4,7 +4,7 @@ import {stageEnumValues} from './lead-stages';
 export const stageKeys = stageEnumValues;
 export const leadSchema = z.object({
   id:z.string().uuid(), name:z.string().trim().min(1).max(100),
-  phone:z.string().trim().regex(/^[+\d\s()-]{7,22}$/),
+  phone:z.string().trim().regex(/^\d{1,22}$/),
   propertyId:z.string().refine(id => id === 'other' || properties.some(p => p.id === id)),
   propertyOther:z.string().trim().max(500).default(''),
   source:z.string().trim().min(1).max(80).default('manual'),

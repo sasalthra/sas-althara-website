@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useState,
 } from 'react';
 import {Star} from 'lucide-react';
@@ -27,6 +28,7 @@ import LeadForm, {
 import {formatRiyadhDate, riyadhDayKey} from '@/lib/lead-dates';
 import {canToggleFeatured, compareClients, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
 import {displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
+import {displayLeadPhone, leadPhoneMatchesQuery} from '@/lib/phone';
 
 import {
   Tabs,
@@ -162,6 +164,8 @@ export default function CRM({
   const [leadView, setLeadView] =
     useState<'all' | 'followups'>('all');
 
+  const [duplicateOnly, setDuplicateOnly] = useState(false);
+
   const [open, setOpen] =
     useState(false);
 
@@ -258,6 +262,18 @@ export default function CRM({
       !['won', 'closed'].includes(lead.stage)
     );
 
+  const duplicatePhones = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const lead of leads) {
+      const phone = displayLeadPhone(lead.phone);
+      if (!phone) continue;
+      counts.set(phone, (counts.get(phone) || 0) + 1);
+    }
+    return [...counts.entries()].filter(([, count]) => count > 1).map(([phone]) => phone);
+  }, [leads]);
+  const duplicatePhoneSet = useMemo(() => new Set(duplicatePhones), [duplicatePhones]);
+  const canReviewDuplicates = role === 'admin' || role === 'supervisor';
+
   const shown =
     leads.filter(lead => {
       if (leadView === 'followups' && !needsFollowUp(lead)) {
@@ -268,6 +284,10 @@ export default function CRM({
         return false;
       }
 
+      if (duplicateOnly && canReviewDuplicates && !duplicatePhoneSet.has(displayLeadPhone(lead.phone))) {
+        return false;
+      }
+
       const property =
         data.find(
           property =>
@@ -275,19 +295,20 @@ export default function CRM({
             lead.property_id
         );
 
+      const phoneShown = displayLeadPhone(lead.phone);
+      const queryText = q.trim();
       const searchable = [
         lead.name,
-        lead.phone,
+        phoneShown,
         property?.title || lead.property_other || '',
         lead.assigned_name || '',
         lead.field_assigned_name || '',
       ].join(' ');
 
+      if (!queryText) return true;
       return searchable
         .toLowerCase()
-        .includes(
-          q.trim().toLowerCase()
-        );
+        .includes(queryText.toLowerCase()) || leadPhoneMatchesQuery(phoneShown, queryText);
     }).sort(compareClients);
 
   const followUps =
@@ -360,6 +381,29 @@ export default function CRM({
                     ))}
                   </select>
                 </label>
+
+                {canReviewDuplicates ? (
+                  <div className="w-full rounded-lg border border-[#d1d5db] bg-white p-3 text-black lg:w-[280px]">
+                    <button
+                      type="button"
+                      className="w-full rounded-lg border border-[#d1d5db] px-3 py-2 text-right text-black"
+                      style={duplicateOnly ? {background: '#3F1A44', color: '#fff', borderColor: '#3F1A44'} : undefined}
+                      aria-pressed={duplicateOnly}
+                      onClick={() => setDuplicateOnly(value => !value)}
+                    >
+                      أرقام مكررة <strong>{duplicatePhones.length}</strong>
+                    </button>
+                    {duplicatePhones.length ? (
+                      <ul className="mt-2 space-y-1 text-sm text-black">
+                        {duplicatePhones.map(phone => (
+                          <li key={phone} dir="ltr" className="truncate">{phone}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-sm text-black">لا توجد أرقام مكررة.</p>
+                    )}
+                  </div>
+                ) : null}
 
                 <label className="search w-full lg:w-[420px]">
                   <input
@@ -526,10 +570,10 @@ export default function CRM({
                                   <div
                                     className="truncate"
                                     title={
-                                      lead.phone
+                                      displayLeadPhone(lead.phone)
                                     }
                                   >
-                                    {lead.phone}
+                                    {displayLeadPhone(lead.phone)}
                                   </div>
                                 </TableCell>
 

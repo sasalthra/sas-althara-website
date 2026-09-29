@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
+import {normalizeLeadPhone} from '@/lib/phone';
 
 type LeadRow = {
   id: string;
@@ -9,6 +10,7 @@ type LeadRow = {
   assigned_to: string | null;
   field_assigned_to: string | null;
   created_by: string | null;
+  phone: string;
 };
 
 function canUpdate(user: {userId: string; role: string}, lead: LeadRow) {
@@ -50,7 +52,7 @@ export async function POST(
 
   const lead = await crmDb()
     .prepare(`
-      SELECT id, owner, assigned_to, field_assigned_to, created_by
+      SELECT id, owner, assigned_to, field_assigned_to, created_by, phone
       FROM leads
       WHERE id = ?
       LIMIT 1
@@ -64,9 +66,13 @@ export async function POST(
   }
 
   const now = new Date().toISOString().replace('T', ' ').replace('Z', '');
+  const submittedPhone = body && typeof body === 'object' && typeof (body as {phone?: unknown}).phone === 'string'
+    ? (body as {phone: string}).phone
+    : lead.phone;
+  const phone = normalizeLeadPhone(submittedPhone) || normalizeLeadPhone(lead.phone) || lead.phone;
   await crmDb()
-    .prepare(`UPDATE leads SET updated_at = ? WHERE id = ?`)
-    .bind(now, id)
+    .prepare(`UPDATE leads SET phone = ?, updated_at = ? WHERE id = ?`)
+    .bind(phone, now, id)
     .run();
 
   await crmDb()
