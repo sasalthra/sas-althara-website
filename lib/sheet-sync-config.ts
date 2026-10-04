@@ -113,7 +113,7 @@ export function parseSheetRef(input: string): {sheetId: string; gid: string} | n
 }
 
 export function parseCsv(text: string): string[][] {
-  const input = text.replace(/^\uFEFF/, '');
+  const input = text.replace(/^\uFEFF/, '').replace(/^\uFFFE/, '');
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = '';
@@ -156,17 +156,48 @@ export function parseCsv(text: string): string[][] {
   return rows;
 }
 
+/** Trim, drop a BOM and zero-width marks. Does not fold Arabic letters. */
+export function normalizeHeaderCell(header: string) {
+  return String(header ?? '')
+    .replace(/\uFEFF/g, '')
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 150);
+}
+
 export function normalizeHeaderRow(headers: string[]) {
-  const copy = headers.map(header => header.replace(/^\uFEFF/, '').trim().slice(0, 150));
+  const copy = headers.map(normalizeHeaderCell);
   while (copy.length && copy[copy.length - 1] === '') copy.pop();
   return copy;
 }
 
+/**
+ * Loose header match. Saved and live headers are trimmed, stripped of BOM and
+ * zero-width characters, then folded (ة/ه, ى/ي, hamza, case). Extra columns on
+ * the live sheet are allowed. A shorter live row, or a different name in the
+ * same position, does not match — column indexes would point at the wrong field.
+ */
 export function sameHeaders(saved: string[], live: string[]) {
-  const left = normalizeHeaderRow(saved);
-  const right = normalizeHeaderRow(live);
-  if (!left.length || left.length !== right.length) return false;
+  const left = normalizeHeaderRow(saved).map(foldHeader);
+  const right = normalizeHeaderRow(live).map(foldHeader);
+  if (!left.length || left.length > right.length) return false;
   return left.every((header, index) => header === right[index]);
+}
+
+/** Operational error text safe to store and show. No tokens, keys, or mobiles. */
+export function publicSyncError(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const text = raw
+    .replace(/-----BEGIN[\s\S]*?-----END[^-]*-----/g, '[redacted]')
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/private_key["']?\s*[:=]\s*["'][^"']+["']/gi, 'private_key=[redacted]')
+    .replace(/\+?966\d{8,12}/g, '+966••••')
+    .replace(/05\d{8}/g, '05••••••••')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
+  return text || 'خطأ غير معروف';
 }
 
 const matchers: {key: SheetField; test: (folded: string) => boolean}[] = [

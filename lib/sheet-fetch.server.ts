@@ -6,6 +6,7 @@ import {parseCsv, parseSheetTabList, type SheetTab} from './sheet-sync-config';
 
 const MAX_ROWS = 5001;
 const MAX_BYTES = 5_000_000;
+const SHEET_USER_AGENT = 'Mozilla/5.0 (compatible; SasAltharaCRM/1.0; +https://sasalthra.sa)';
 
 type ServiceAccount = {client_email: string; private_key: string};
 
@@ -112,6 +113,7 @@ export async function listSheetTabs(sheetId: string): Promise<SheetTab[]> {
       redirect: 'follow',
       cache: 'no-store',
       signal: AbortSignal.timeout(15000),
+      headers: {'User-Agent': SHEET_USER_AGENT, Accept: 'text/html'},
     });
     if (response.ok) {
       const text = (await response.text()).slice(0, 1_000_000);
@@ -150,34 +152,71 @@ export async function listSheetTabs(sheetId: string): Promise<SheetTab[]> {
   }
 }
 
+function publicCsvUrls(sheetId: string, gid: string) {
+  const exported = new URL(`https://docs.google.com/spreadsheets/d/${sheetId}/export`);
+  exported.searchParams.set('format', 'csv');
+  if (gid) exported.searchParams.set('gid', gid);
+  const gviz = new URL(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq`);
+  gviz.searchParams.set('tqx', 'out:csv');
+  if (gid) gviz.searchParams.set('gid', gid);
+  return [exported, gviz];
+}
+
+/**
+ * Google's CSV export answers with a 307 to googleusercontent. Follow it, and
+ * send a User-Agent so the redirect is not replaced by an HTML interstitial.
+ */
+async function fetchPublicCsv(url: URL) {
+  const response = await fetch(url, {
+    redirect: 'follow',
+    cache: 'no-store',
+    signal: AbortSignal.timeout(20000),
+    headers: {
+      'User-Agent': SHEET_USER_AGENT,
+      Accept: 'text/csv,text/plain;q=0.9,*/*;q=0.8',
+    },
+  });
+  const text = await response.text();
+  return {
+    ok: response.ok,
+    status: response.status,
+    contentType: response.headers.get('content-type') || '',
+    text,
+  };
+}
+
 /** Public CSV export first. Private sheets fall back to a Google service account when one is configured. */
 export async function readSheetGrid(sheetId: string, gid = ''): Promise<string[][]> {
   if (!/^[a-zA-Z0-9_-]{20,100}$/.test(sheetId)) throw new ApiError(400, 'معرف الجدول غير صالح');
   if (gid && !/^\d{1,20}$/.test(gid)) throw new ApiError(400, 'رقم الورقة غير صالح');
-  const url = new URL(`https://docs.google.com/spreadsheets/d/${sheetId}/export`);
-  url.searchParams.set('format', 'csv');
-  if (gid) url.searchParams.set('gid', gid);
   let publicFailed = false;
-  try {
-    const response = await fetch(url, {redirect: 'follow', cache: 'no-store', signal: AbortSignal.timeout(20000)});
-    const text = await response.text();
-    if (text.length > MAX_BYTES) throw new ApiError(413, 'الجدول أكبر من الحد المسموح');
-    if (response.ok && looksLikeCsv(text, response.headers.get('content-type') || '')) {
-      const grid = limitGrid(parseCsv(text));
-      if (grid.length) return grid;
+  let lastStatus = 0;
+  let lastType = '';
+  for (const url of publicCsvUrls(sheetId, gid)) {
+    try {
+      const fetched = await fetchPublicCsv(url);
+      lastStatus = fetched.status;
+      lastType = fetched.contentType;
+      if (fetched.text.length > MAX_BYTES) throw new ApiError(413, 'الجدول أكبر من الحد المسموح');
+      if (fetched.ok && looksLikeCsv(fetched.text, fetched.contentType)) {
+        const grid = limitGrid(parseCsv(fetched.text));
+        if (grid.length) return grid;
+      }
+      publicFailed = true;
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      publicFailed = true;
+      lastType = error instanceof Error ? error.message : 'network';
     }
-    publicFailed = true;
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    publicFailed = true;
   }
   const account = readServiceAccount();
   if (!account) {
+    const statusNote = lastStatus ? ` (${lastStatus}${lastType ? ` ${lastType}` : ''})` : '';
     throw new ApiError(
       502,
       publicFailed
-        ? 'تعذر قراءة الجدول. إن كان خاصاً أضف GOOGLE_SERVICE_ACCOUNT_JSON وشارك الجدول مع حساب الخدمة'
-        : 'تعذر قراءة الجدول'
+        ? `تعذر قراءة تصدير CSV${statusNote}. إن كان الجدول خاصاً أضف GOOGLE_SERVICE_ACCOUNT_JSON وشارك الجدول مع حساب الخدمة`
+        : `تعذر قراءة الجدول${statusNote}`
     );
   }
   return limitGrid(await fetchPrivateGrid(account, sheetId, gid));

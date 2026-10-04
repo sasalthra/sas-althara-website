@@ -16,6 +16,7 @@ import LeadForm, {
 } from '@/app/lead-form';
 import {formatRiyadhDate} from '@/lib/lead-dates';
 import {canToggleFeatured, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
+import NewLeadBadge from '@/components/new-lead-badge';
 import {editableStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import {displayLeadPhone} from '@/lib/phone';
 
@@ -784,6 +785,7 @@ export default function LeadDetailsPage() {
                     <Star className="size-6 fill-[#3F1A44] text-[#3F1A44]" aria-hidden />
                   )}
                   {lead.name}
+                  <NewLeadBadge lead={lead} />
                 </h1>
 
                 {isFeaturedValue(lead.is_featured) && (

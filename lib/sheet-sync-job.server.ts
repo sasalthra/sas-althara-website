@@ -4,8 +4,10 @@ import {notifyNewLeads, notifyReregistrationBatch, notifySheetBackfillSummaries,
 import {cronAuthorized} from './cron-auth';
 import {readSheetGrid} from './sheet-fetch.server';
 import {importSheetGrid, type SheetCreatedLead, type SheetImportResult, type SheetReregistration, type StoredSheetSource} from './sheet-sync';
-import {sheetsSyncIntervalMs, type SheetMapping} from './sheet-sync-config';
+import {publicSyncError, sheetsSyncIntervalMs, type SheetMapping} from './sheet-sync-config';
 import {ApiError} from './secure-api';
+
+export type SheetSyncStep = {step: string; ok: boolean; detail: string};
 
 export type SheetSyncReport = {
   ok: boolean;
@@ -15,7 +17,13 @@ export type SheetSyncReport = {
   duplicates: number;
   invalid: number;
   unchanged: number;
+  rowsRead: number;
+  created: number;
+  existing: number;
+  skippedRows: number;
+  errorMessage: string;
   errors: string[];
+  steps: SheetSyncStep[];
   at: string;
 };
 
@@ -27,7 +35,13 @@ const EMPTY_REPORT = (reason = ''): SheetSyncReport => ({
   duplicates: 0,
   invalid: 0,
   unchanged: 0,
+  rowsRead: 0,
+  created: 0,
+  existing: 0,
+  skippedRows: 0,
+  errorMessage: reason,
   errors: reason ? [reason] : [],
+  steps: [],
   at: new Date().toISOString(),
 });
 
@@ -105,36 +119,79 @@ async function sourceAlreadySynced(sourceId: string) {
   return Boolean(row?.id);
 }
 
-async function saveSourceResult(sourceId: string, result: SheetImportResult | {error: string}) {
-  const summary =
-    'inserted' in result
-      ? {
-          inserted: result.inserted,
-          duplicates: result.duplicates,
-          invalid: result.invalid,
-          unchanged: result.unchanged,
-          error: result.error || '',
-          errors: result.errors.slice(0, 30),
-        }
-      : {inserted: 0, duplicates: 0, invalid: 0, unchanged: 0, error: result.error, errors: [result.error]};
-  await crmDb()
-    .prepare('UPDATE crm_sheet_sources SET last_run = ?, last_result = ? WHERE id = ?')
-    .bind(new Date().toISOString(), JSON.stringify(summary), sourceId)
-    .run();
+async function saveSourceResult(sourceId: string, result: SheetImportResult | {error: string; rowsRead?: number; skippedRows?: number}) {
+  const now = new Date().toISOString();
+  const inserted = 'inserted' in result ? result.inserted : 0;
+  const duplicates = 'duplicates' in result ? result.duplicates : 0;
+  const invalid = 'invalid' in result ? result.invalid : 0;
+  const unchanged = 'unchanged' in result ? result.unchanged : 0;
+  const rowsRead = 'rowsRead' in result ? result.rowsRead || 0 : 0;
+  const skippedRows = 'skippedRows' in result ? result.skippedRows || 0 : 0;
+  const error = result.error || '';
+  const errors = 'errors' in result ? result.errors.slice(0, 30) : error ? [error] : [];
+  const summary = {inserted, duplicates, invalid, unchanged, rowsRead, skippedRows, error, errors};
+  const payload = JSON.stringify(summary);
+  try {
+    await crmDb()
+      .prepare(
+        `UPDATE crm_sheet_sources
+         SET last_run = ?, last_result = ?, last_run_at = ?, rows_read = ?, \`created\` = ?, existing = ?, skipped = ?, error_message = ?
+         WHERE id = ?`
+      )
+      .bind(now, payload, now, rowsRead, inserted, duplicates, skippedRows, error, sourceId)
+      .run();
+  } catch (errorValue) {
+    if (!/unknown column|no such column|ER_BAD_FIELD_ERROR/i.test(publicSyncError(errorValue))) throw errorValue;
+    await crmDb()
+      .prepare('UPDATE crm_sheet_sources SET last_run = ?, last_result = ? WHERE id = ?')
+      .bind(now, payload, sourceId)
+      .run();
+  }
+}
+
+function logSync(report: SheetSyncReport) {
+  report.created = report.inserted;
+  report.existing = report.duplicates;
+  report.errorMessage = report.errorMessage || report.errors.find(Boolean) || '';
+  report.at = new Date().toISOString();
+  console.log(
+    `[sheet-sync] ${JSON.stringify({
+      ok: report.ok,
+      skippedRun: report.skipped,
+      reason: report.reason,
+      rowsRead: report.rowsRead,
+      created: report.created,
+      existing: report.existing,
+      skipped: report.skippedRows,
+      error: report.errorMessage,
+      at: report.at,
+    })}`
+  );
+  return report;
 }
 
 async function doSync(): Promise<SheetSyncReport> {
   if (!process.env.DB_HOST || !process.env.DB_USER || !process.env.DB_NAME) {
-    return EMPTY_REPORT('قاعدة البيانات غير مضبوطة');
+    const report = EMPTY_REPORT('قاعدة البيانات غير مضبوطة');
+    report.steps.push({step: 'قاعدة البيانات', ok: false, detail: report.reason});
+    return logSync(report);
   }
   let token = '';
   try {
     token = await acquireLock();
   } catch (error) {
-    console.error('sheet sync lock failed', error instanceof Error ? error.name : 'error');
-    return EMPTY_REPORT('تعذر حجز قفل المزامنة');
+    const message = publicSyncError(error);
+    console.error('sheet sync lock failed', message);
+    const report = EMPTY_REPORT('تعذر حجز قفل المزامنة');
+    report.errorMessage = message;
+    report.steps.push({step: 'قفل المزامنة', ok: false, detail: message});
+    return logSync(report);
   }
-  if (!token) return {...EMPTY_REPORT('المزامنة تعمل بالفعل'), ok: true};
+  if (!token) {
+    const report = {...EMPTY_REPORT('المزامنة تعمل بالفعل'), ok: true};
+    report.steps.push({step: 'قفل المزامنة', ok: true, detail: 'تشغيل آخر ما زال يعمل'});
+    return logSync(report);
+  }
   const created: SheetCreatedLead[] = [];
   const reregistrations: SheetReregistration[] = [];
   const backfills: SheetBackfillNotice[] = [];
@@ -143,24 +200,53 @@ async function doSync(): Promise<SheetSyncReport> {
   report.skipped = false;
   report.reason = '';
   report.errors = [];
+  report.errorMessage = '';
   try {
     const owner = await ownerId();
     if (!owner) {
+      const message = 'لا يوجد مدير نشط لحفظ العملاء';
       report.ok = false;
-      report.errors.push('لا يوجد مدير نشط لحفظ العملاء');
-      return report;
+      report.errors.push(message);
+      report.errorMessage = message;
+      report.steps.push({step: 'المدير', ok: false, detail: message});
+      const sources = (await loadSources()).filter(source => source.enabled && source.id);
+      for (const source of sources) {
+        try {
+          await saveSourceResult(source.id, {error: message});
+        } catch (saveError) {
+          console.error('sheet source result was not saved', publicSyncError(saveError));
+        }
+      }
+      return logSync(report);
     }
+    report.steps.push({step: 'المدير', ok: true, detail: 'يوجد مدير نشط لحفظ العملاء'});
     const sources = (await loadSources()).filter(source => source.enabled && source.id && source.sheetId);
+    if (!sources.length) {
+      report.steps.push({step: 'المصادر', ok: false, detail: 'لا يوجد مصدر مفعّل. ورقة تيك توك تُزرع عند أول اتصال بقاعدة البيانات حتى لو وُجدت مصادر أخرى.'});
+    }
     for (const source of sources) {
+      const label = source.label || source.id;
       try {
         const backfill = !(await sourceAlreadySynced(source.id));
         const grid = await readSheetGrid(source.sheetId, source.gid);
+        report.steps.push({
+          step: `${label}: جلب CSV`,
+          ok: true,
+          detail: `الورقة ${source.gid || '0'} — ${Math.max(0, grid.length - 1)} صف بيانات`,
+        });
         const result = await importSheetGrid(crmDb(), source, grid, owner);
         await saveSourceResult(source.id, result);
         report.inserted += result.inserted;
         report.duplicates += result.duplicates;
         report.invalid += result.invalid;
         report.unchanged += result.unchanged;
+        report.rowsRead += result.rowsRead;
+        report.skippedRows += result.skippedRows;
+        report.steps.push({
+          step: `${label}: الحفظ`,
+          ok: !result.error,
+          detail: `قُرئ ${result.rowsRead}، جديد ${result.inserted}، موجود ${result.duplicates}، متخطى ${result.skippedRows}${result.error ? `. ${result.error}` : ''}`,
+        });
         if (backfill) {
           if (!result.error && result.inserted + result.duplicates + result.invalid > 0) {
             backfills.push({
@@ -179,65 +265,74 @@ async function doSync(): Promise<SheetSyncReport> {
           report.errors.push(result.error);
         } else if (result.errors.length) report.errors.push(...result.errors.slice(0, 5));
       } catch (error) {
-        const message = error instanceof ApiError ? error.message : 'تعذر قراءة هذا المصدر';
-        console.error('sheet source sync failed', error instanceof Error ? error.name : 'error');
+        const message = error instanceof ApiError ? error.message : publicSyncError(error);
+        console.error('sheet source sync failed', message);
         report.ok = false;
         report.errors.push(message);
+        report.steps.push({step: `${label}: جلب CSV`, ok: false, detail: message});
         try {
           await saveSourceResult(source.id, {error: message});
         } catch (saveError) {
-          console.error('sheet source result was not saved', saveError instanceof Error ? saveError.name : 'error');
+          console.error('sheet source result was not saved', publicSyncError(saveError));
         }
       }
     }
     try {
       await notifySheetBackfillSummaries(backfills);
     } catch (error) {
-      console.error('sheet backfill summary failed', error instanceof Error ? error.name : 'error');
+      console.error('sheet backfill summary failed', publicSyncError(error));
       report.errors.push('تعذر إرسال ملخص المزامنة الأولى');
     }
     try {
       await notifyNewLeads(created);
     } catch (error) {
-      console.error('new lead email failed', error instanceof Error ? error.name : 'error');
+      console.error('new lead email failed', publicSyncError(error));
       report.errors.push('تعذر إرسال بريد العملاء الجدد');
     }
     try {
       await notifyReregistrationBatch(reregistrations);
     } catch (error) {
-      console.error('reregistration email failed', error instanceof Error ? error.name : 'error');
+      console.error('reregistration email failed', publicSyncError(error));
       report.errors.push('تعذر إرسال بريد إعادة التسجيل');
     }
-    return report;
+    return logSync(report);
   } catch (error) {
-    console.error('sheet sync failed', error instanceof Error ? error.name : 'error');
+    const message = publicSyncError(error);
+    console.error('sheet sync failed', message);
     report.ok = false;
-    if (!report.errors.length) report.errors.push('تعذر إكمال المزامنة');
-    return report;
+    if (!report.errors.length) report.errors.push(message || 'تعذر إكمال المزامنة');
+    report.steps.push({step: 'المزامنة', ok: false, detail: message || 'تعذر إكمال المزامنة'});
+    return logSync(report);
   } finally {
     await releaseLock(token);
   }
 }
 
 export function syncAllSheets(): Promise<SheetSyncReport> {
-  if (inflight) return Promise.resolve({...EMPTY_REPORT('المزامنة تعمل بالفعل'), ok: true});
-  inflight = doSync().finally(() => {
-    inflight = null;
-  });
+  if (!inflight) {
+    inflight = doSync().finally(() => {
+      inflight = null;
+    });
+  }
   return inflight;
 }
 
 export function startSheetSyncInterval() {
-  const globalState = globalThis as typeof globalThis & {__sasSheetSync?: boolean};
-  if (globalState.__sasSheetSync) return;
+  const globalState = globalThis as typeof globalThis & {__sasSheetSync?: boolean; __sasSheetSyncAt?: number};
   const interval = sheetsSyncIntervalMs();
   if (!interval) return;
-  globalState.__sasSheetSync = true;
   const tick = () => {
+    globalState.__sasSheetSyncAt = Date.now();
     void syncAllSheets().catch(error => {
-      console.error('sheet sync interval failed', error instanceof Error ? error.name : 'error');
+      console.error('sheet sync interval failed', publicSyncError(error));
     });
   };
+  if (globalState.__sasSheetSync) {
+    if (Date.now() - (globalState.__sasSheetSyncAt || 0) >= interval) tick();
+    return;
+  }
+  globalState.__sasSheetSync = true;
+  globalState.__sasSheetSyncAt = Date.now();
   const starter = setTimeout(tick, 20_000);
   const timer = setInterval(tick, interval);
   starter.unref?.();

@@ -1,5 +1,10 @@
 export type FeatureActor = {userId: string; role: string};
-export type FeatureLead = {assigned_to?: string | null; is_featured?: unknown; created_at?: string | null};
+export type FeatureLead = {
+  assigned_to?: string | null;
+  stage?: string | null;
+  is_featured?: unknown;
+  created_at?: string | null;
+};
 
 export function isFeaturedValue(value: unknown): boolean {
   return value === true || value === 1 || value === '1';
@@ -16,9 +21,26 @@ export function canToggleFeatured(actor: FeatureActor, lead: FeatureLead): boole
   return actor.role === 'sales' && Boolean(actor.userId) && lead.assigned_to === actor.userId;
 }
 
-/** Featured clients first, then the existing newest-registration order. */
-export function compareClients<T extends FeatureLead>(a: T, b: T): number {
+/** Unassigned lead still in «عميل جديد». The badge is this check; assignment clears it. */
+export function isNewUnassignedLead(lead: FeatureLead): boolean {
+  if (String(lead.assigned_to ?? '').trim()) return false;
+  return String(lead.stage ?? '') === 'new';
+}
+
+/**
+ * Featured clients stay first. For admins, unassigned «عميل جديد» leads come
+ * next, then everyone else by newest registration.
+ */
+export function compareClients<T extends FeatureLead>(
+  a: T,
+  b: T,
+  options?: {promoteNewUnassigned?: boolean}
+): number {
   const featuredDelta = Number(isFeaturedValue(b.is_featured)) - Number(isFeaturedValue(a.is_featured));
   if (featuredDelta) return featuredDelta;
+  if (options?.promoteNewUnassigned) {
+    const freshDelta = Number(isNewUnassignedLead(b)) - Number(isNewUnassignedLead(a));
+    if (freshDelta) return freshDelta;
+  }
   return String(b.created_at || '').localeCompare(String(a.created_at || ''));
 }
