@@ -26,7 +26,7 @@
 
 import {planLeadPhoneMigration} from './phone';
 import {retiredStageMoves, stageEnumValues} from './lead-stages';
-import {tiktokSheetSeed} from './sheet-sync-config';
+import {TIKTOK_META_TAB_GID, tiktokSheetSeed} from './sheet-sync-config';
 
 export type LeadSchemaState = {featured: boolean};
 
@@ -502,8 +502,80 @@ async function ensureSheetIndex(executor: SqlExecutor) {
 }
 
 /**
+ * Point the seeded source at the «تيك توك» tab.
+ * A previous seed with an empty gid, or gid 1976004933, read the first tab («meta»).
+ * That row is rewritten in place and its old row keys are dropped so the new tab
+ * is an initial backfill. Any other source still aimed at that first tab is disabled.
+ * When the table is empty, the TikTok tab is inserted. A correct gid is left untouched.
+ */
+async function alignTiktokSheetSource(executor: SqlExecutor) {
+  const seed = tiktokSheetSeed();
+  const now = new Date().toISOString();
+  const rows = rowsOf(await run(executor, 'SELECT id, sheet_id, gid FROM crm_sheet_sources'));
+  const gidOf = (row: Record<string, unknown>) => String(row.gid ?? '').trim();
+  const mine = rows.filter(row => String(row.sheet_id ?? '') === seed.sheetId);
+  const stale = mine.filter(row => {
+    const gid = gidOf(row);
+    return gid === '' || gid === TIKTOK_META_TAB_GID;
+  });
+  const current = mine.find(row => gidOf(row) === seed.gid);
+  if (current) {
+    for (const row of stale) {
+      if (String(row.id ?? '') === String(current.id ?? '')) continue;
+      await run(executor, 'UPDATE crm_sheet_sources SET enabled = 0, updated_at = ? WHERE id = ?', [now, String(row.id ?? '')]);
+    }
+    return;
+  }
+  if (!stale.length) {
+    if (rows.length) return;
+    await run(
+      executor,
+      `INSERT INTO crm_sheet_sources (
+        id, sheet_id, gid, label, campaign, mapping, headers, enabled, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        seed.id,
+        seed.sheetId,
+        seed.gid,
+        seed.label,
+        seed.campaign,
+        JSON.stringify(seed.mapping),
+        JSON.stringify(seed.headers),
+        seed.enabled,
+        now,
+        now,
+      ]
+    );
+    return;
+  }
+  const target = stale.find(row => String(row.id ?? '') === seed.id) || stale[0];
+  const targetId = String(target.id ?? '');
+  await run(
+    executor,
+    `UPDATE crm_sheet_sources
+     SET sheet_id = ?, gid = ?, label = ?, campaign = ?, mapping = ?, headers = ?, enabled = 1, updated_at = ?
+     WHERE id = ?`,
+    [
+      seed.sheetId,
+      seed.gid,
+      seed.label,
+      seed.campaign,
+      JSON.stringify(seed.mapping),
+      JSON.stringify(seed.headers),
+      now,
+      targetId,
+    ]
+  );
+  await run(executor, 'DELETE FROM crm_sheet_rows WHERE source_id = ?', [targetId]);
+  for (const row of stale) {
+    if (String(row.id ?? '') === targetId) continue;
+    await run(executor, 'UPDATE crm_sheet_sources SET enabled = 0, updated_at = ? WHERE id = ?', [now, String(row.id ?? '')]);
+  }
+}
+
+/**
  * Lead-form sheet sources and the keys of rows already imported.
- * The TikTok sheet is seeded once, only when no source exists yet.
+ * The TikTok tab is seeded when no source exists, and an older meta-tab seed is retargeted.
  */
 async function ensureSheetSyncSchema(executor: SqlExecutor) {
   try {
@@ -549,29 +621,7 @@ async function ensureSheetSyncSchema(executor: SqlExecutor) {
   }
   await ensureSheetIndex(executor);
   try {
-    const countRows = rowsOf(await run(executor, 'SELECT COUNT(*) AS n FROM crm_sheet_sources'));
-    const count = Number(countRows[0]?.n ?? countRows[0]?.N ?? 0);
-    if (count > 0) return;
-    const seed = tiktokSheetSeed();
-    const now = new Date().toISOString();
-    await run(
-      executor,
-      `INSERT INTO crm_sheet_sources (
-        id, sheet_id, gid, label, campaign, mapping, headers, enabled, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        seed.id,
-        seed.sheetId,
-        seed.gid,
-        seed.label,
-        seed.campaign,
-        JSON.stringify(seed.mapping),
-        JSON.stringify(seed.headers),
-        seed.enabled,
-        now,
-        now,
-      ]
-    );
+    await alignTiktokSheetSource(executor);
   } catch (error) {
     if (/duplicate|UNIQUE|ER_DUP_ENTRY/i.test(messageOf(error))) return;
     console.error('tiktok sheet seed skipped', error);

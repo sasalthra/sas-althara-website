@@ -6,10 +6,21 @@ import {normalizeLeadPhone} from './phone';
 export const SHEET_FIELDS = [
   'name',
   'phone',
-  'city',
-  'notes',
   'propertyType',
   'budget',
+  'citizen',
+  'supported',
+  'salary',
+  'age',
+  'contactTime',
+  'purchaseTimeline',
+  'leadId',
+  'sheetLeadStatus',
+  'sheetAssignment',
+  'sheetState',
+  'sheetTiktokStatus',
+  'city',
+  'notes',
   'campaign',
   'residency',
   'platform',
@@ -22,10 +33,21 @@ export type SheetMapping = Partial<Record<SheetField, number>>;
 export const sheetFieldLabels: Record<SheetField, string> = {
   name: 'الاسم',
   phone: 'الجوال',
+  propertyType: 'الوحدة / نوع العقار',
+  budget: 'طريقة الشراء',
+  citizen: 'هل انت مواطن',
+  supported: 'هل انت مدعوم',
+  salary: 'الراتب',
+  age: 'العمر',
+  contactTime: 'وقت التواصل',
+  purchaseTimeline: 'الوقت المتوقع للشراء',
+  leadId: 'TikTok Lead ID',
+  sheetLeadStatus: 'Lead status (ملاحظة فقط)',
+  sheetAssignment: 'الاسناد (ملاحظة فقط)',
+  sheetState: 'الحاله (ملاحظة فقط)',
+  sheetTiktokStatus: 'TikTok Lead Status (ملاحظة فقط)',
   city: 'المدينة',
   notes: 'الملاحظات',
-  propertyType: 'نوع العقار',
-  budget: 'الميزانية / طريقة الشراء',
   campaign: 'عمود اسم الحملة',
   residency: 'هل أنت (مواطن / مقيم)',
   platform: 'المنصة',
@@ -35,31 +57,28 @@ export const sheetFieldLabels: Record<SheetField, string> = {
 export const DEFAULT_SHEET_LABEL = 'تيك توك';
 export const TIKTOK_SHEET_SOURCE_ID = 'tiktok-leads-1';
 export const TIKTOK_SHEET_ID = '1_lAoABagOV93EQPi_vNWct4ok3zCWE1plJFfbDzm6Nc';
-export const TIKTOK_SHEET_CAMPAIGN = 'تمويل عقارى 4 نوفمبر';
+/** Tab «تيك توك». The first tab is «meta» and must not be synced. */
+export const TIKTOK_SHEET_GID = '1331680179';
+export const TIKTOK_META_TAB_GID = '1976004933';
+export const TIKTOK_SHEET_CAMPAIGN = '';
 
-/** Header row read from the public CSV export of the owner's lead form sheet. */
+/** Header row of the public «تيك توك» tab (gid 1331680179). */
 export const TIKTOK_SHEET_HEADERS = [
-  'id',
-  'created_time',
-  'ad_id',
-  'ad_name',
-  'adset_id',
-  'adset_name',
-  'campaign_id',
-  'campaign_name',
-  'form_id',
-  'form_name',
-  'is_organic',
-  'platform',
-  'نوع_العقار_الذى_تبحث_عنه',
-  'طريقة_الشراء_التى_تفضلها',
-  'هل_انت_',
-  'full_name',
-  'phone_number',
-  'lead_status',
-  '',
-  '',
-  '',
+  'Lead status',
+  'الاسم',
+  'رقم الجوال',
+  'الوحدة',
+  'طريقة الشراء',
+  'هل انت مواطن',
+  'هل انت مدعوم',
+  'الراتب',
+  'العمر',
+  'وقت التواصل',
+  'الوقت المتوقع للشراء',
+  'TikTok Lead ID',
+  'الاسناد',
+  'الحاله',
+  'TikTok Lead Status',
 ];
 
 /** In-process poll while the Node server is running. 0 disables it. */
@@ -151,19 +170,30 @@ export function sameHeaders(saved: string[], live: string[]) {
 }
 
 const matchers: {key: SheetField; test: (folded: string) => boolean}[] = [
+  {key: 'leadId', test: folded => /tiktok lead id/.test(folded)},
+  {key: 'sheetTiktokStatus', test: folded => /tiktok lead status/.test(folded)},
+  {key: 'sheetLeadStatus', test: folded => /^lead status$/.test(folded)},
   {key: 'phone', test: folded => /phone number|^phone$|^mobile$|جوال|هاتف|موبايل/.test(folded)},
   {
     key: 'name',
     test: folded =>
-      !/campaign name|form name|ad name|adset name/.test(folded) &&
+      !/campaign name|form name|ad name|adset name|lead id|lead status/.test(folded) &&
       (/full name|^name$|الاسم الكامل|^الاسم$|^اسم$|اسم العميل/.test(folded)),
   },
-  {key: 'city', test: folded => /^(city|المدينه|مدينه)$/.test(folded) || folded.includes('مدين')},
-  {key: 'propertyType', test: folded => /نوع العقار|property type/.test(folded)},
-  {key: 'budget', test: folded => /ميزاني|طريقه الشراء|budget|purchase/.test(folded)},
+  {key: 'propertyType', test: folded => /^الوحده$|نوع العقار|property type|^unit$/.test(folded)},
+  {key: 'budget', test: folded => /ميزاني|^طريقه الشراء$|purchase method|^budget$/.test(folded)},
+  {key: 'citizen', test: folded => /هل انت مواطن/.test(folded)},
+  {key: 'supported', test: folded => /هل انت مدعوم/.test(folded)},
+  {key: 'salary', test: folded => /^الراتب$|^salary$/.test(folded)},
+  {key: 'age', test: folded => /^العمر$|^age$/.test(folded)},
+  {key: 'contactTime', test: folded => /وقت التواصل/.test(folded)},
+  {key: 'purchaseTimeline', test: folded => /الوقت المتوقع للشراء/.test(folded)},
+  {key: 'sheetAssignment', test: folded => /^الاسناد$/.test(folded)},
+  {key: 'sheetState', test: folded => /^الحاله$/.test(folded)},
+  {key: 'city', test: folded => /^(city|المدينه|مدينه)$/.test(folded)},
   {key: 'campaign', test: folded => /campaign name|^campaign$|اسم الحمله|^الحمله$/.test(folded)},
   {key: 'formName', test: folded => /form name|اسم النموذج|^النموذج$/.test(folded)},
-  {key: 'residency', test: folded => /هل انت|residency/.test(folded)},
+  {key: 'residency', test: folded => /^هل انت$|residency/.test(folded)},
   {key: 'platform', test: folded => /^(platform|المنصه|منصه)$/.test(folded)},
   {key: 'notes', test: folded => /^(notes|note|الملاحظات|ملاحظات|ملاحظه)$/.test(folded)},
 ];
@@ -199,33 +229,58 @@ export type SheetLeadDraft = {
   stage: 'new';
 };
 
+const noteLines: Array<{key: SheetField; label: string}> = [
+  {key: 'propertyType', label: 'الوحدة'},
+  {key: 'budget', label: 'طريقة الشراء'},
+  {key: 'citizen', label: 'هل انت مواطن'},
+  {key: 'supported', label: 'هل انت مدعوم'},
+  {key: 'salary', label: 'الراتب'},
+  {key: 'age', label: 'العمر'},
+  {key: 'contactTime', label: 'وقت التواصل'},
+  {key: 'purchaseTimeline', label: 'الوقت المتوقع للشراء'},
+  {key: 'sheetLeadStatus', label: 'Lead status'},
+  {key: 'sheetAssignment', label: 'الاسناد'},
+  {key: 'sheetState', label: 'الحاله'},
+  {key: 'sheetTiktokStatus', label: 'TikTok Lead Status'},
+  {key: 'leadId', label: 'TikTok Lead ID'},
+  {key: 'city', label: 'المدينة'},
+  {key: 'residency', label: 'هل أنت'},
+  {key: 'platform', label: 'المنصة'},
+  {key: 'formName', label: 'النموذج'},
+];
+
+function mappedCell(row: string[], mapping: SheetMapping, key: SheetField) {
+  const index = mapping[key];
+  if (index === undefined || index < 0) return '';
+  return String(row[index] ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/** Stable id from the TikTok Lead ID column. Empty when that column is unmapped or blank. */
+export function sheetExternalId(row: string[], mapping: SheetMapping) {
+  return mappedCell(row, mapping, 'leadId').slice(0, 120);
+}
+
+/** A row with neither a name nor a phone is not a lead and is not stored. */
+export function sheetNameAndPhoneBlank(row: string[], mapping: SheetMapping) {
+  return !mappedCell(row, mapping, 'name') && !mappedCell(row, mapping, 'phone');
+}
+
 export function composeSheetLead(
   row: string[],
   source: {label: string; campaign: string},
   mapping: SheetMapping
 ): SheetLeadDraft {
-  const read = (key: SheetField) => {
-    const index = mapping[key];
-    if (index === undefined || index < 0) return '';
-    return String(row[index] ?? '').replace(/\s+/g, ' ').trim();
-  };
+  const read = (key: SheetField) => mappedCell(row, mapping, key);
   const propertyType = tidy(read('propertyType'));
-  const budget = tidy(read('budget'));
-  const city = tidy(read('city'));
-  const residency = tidy(read('residency'));
-  const platform = tidy(read('platform'));
-  const formName = tidy(read('formName'));
   const rowCampaign = tidy(read('campaign'));
   const configured = source.campaign.trim();
   const campaign = (configured || rowCampaign).slice(0, 60);
   const label = (source.label.trim() || DEFAULT_SHEET_LABEL).slice(0, 40);
   const lines = [
-    propertyType ? `نوع العقار: ${propertyType}` : '',
-    budget ? `الميزانية / طريقة الشراء: ${budget}` : '',
-    city ? `المدينة: ${city}` : '',
-    residency ? `هل أنت: ${residency}` : '',
-    platform ? `المنصة: ${platform}` : '',
-    formName ? `النموذج: ${formName}` : '',
+    ...noteLines.map(({key, label: title}) => {
+      const value = tidy(read(key));
+      return value ? `${title}: ${value}` : '';
+    }),
     rowCampaign && rowCampaign !== campaign ? `حملة الإعلان: ${rowCampaign}` : '',
     read('notes'),
   ].filter(Boolean);
@@ -239,6 +294,30 @@ export function composeSheetLead(
     campaign,
     stage: 'new',
   };
+}
+
+export type SheetTab = {gid: string; name: string};
+
+/** Tab names from a public Google htmlview page. Ignores everything except name and gid. */
+export function parseSheetTabList(html: string): SheetTab[] {
+  const tabs: SheetTab[] = [];
+  const seen = new Set<string>();
+  const pattern = /items\.push\(\{name:\s*"((?:\\.|[^"\\])*)"[\s\S]{0,500}?gid:\s*"(\d{1,20})"/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(html)) && tabs.length < 40) {
+    const gid = match[2];
+    if (seen.has(gid)) continue;
+    const name = match[1]
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+      .replace(/[\u0000-\u001f]/g, '')
+      .trim()
+      .slice(0, 80);
+    if (!name) continue;
+    seen.add(gid);
+    tabs.push({gid, name});
+  }
+  return tabs;
 }
 
 export function sheetRowProblem(lead: Pick<SheetLeadDraft, 'name' | 'phone'>) {
@@ -292,7 +371,7 @@ export function tiktokSheetSeed() {
   return {
     id: TIKTOK_SHEET_SOURCE_ID,
     sheetId: TIKTOK_SHEET_ID,
-    gid: '',
+    gid: TIKTOK_SHEET_GID,
     label: DEFAULT_SHEET_LABEL,
     campaign: TIKTOK_SHEET_CAMPAIGN,
     mapping: suggestSheetMapping(TIKTOK_SHEET_HEADERS),

@@ -63,30 +63,67 @@ try {
 
   const headers = config.TIKTOK_SHEET_HEADERS;
   const mapping = config.suggestSheetMapping(headers);
-  assert.equal(headers[mapping.name], 'full_name');
-  assert.equal(headers[mapping.phone], 'phone_number');
-  assert.equal(headers[mapping.propertyType], 'نوع_العقار_الذى_تبحث_عنه');
-  assert.equal(headers[mapping.budget], 'طريقة_الشراء_التى_تفضلها');
-  assert.equal(headers[mapping.residency], 'هل_انت_');
-  assert.equal(headers[mapping.campaign], 'campaign_name');
-  assert.equal(headers[mapping.formName], 'form_name');
-  assert.equal(headers[mapping.platform], 'platform');
+  assert.equal(headers[mapping.name], 'الاسم');
+  assert.equal(headers[mapping.phone], 'رقم الجوال');
+  assert.equal(headers[mapping.propertyType], 'الوحدة');
+  assert.equal(headers[mapping.budget], 'طريقة الشراء');
+  assert.equal(headers[mapping.citizen], 'هل انت مواطن');
+  assert.equal(headers[mapping.supported], 'هل انت مدعوم');
+  assert.equal(headers[mapping.salary], 'الراتب');
+  assert.equal(headers[mapping.age], 'العمر');
+  assert.equal(headers[mapping.contactTime], 'وقت التواصل');
+  assert.equal(headers[mapping.purchaseTimeline], 'الوقت المتوقع للشراء');
+  assert.equal(headers[mapping.leadId], 'TikTok Lead ID');
+  assert.equal(headers[mapping.sheetLeadStatus], 'Lead status');
+  assert.equal(headers[mapping.sheetAssignment], 'الاسناد');
+  assert.equal(headers[mapping.sheetState], 'الحاله');
+  assert.equal(headers[mapping.sheetTiktokStatus], 'TikTok Lead Status');
   assert.equal(mapping.city, undefined);
-  assert.equal(config.sameHeaders(headers, headers.slice(0, -2)), true, 'trailing empty headers do not count as drift');
-  assert.equal(config.sameHeaders(headers, headers.map((header, index) => index === 15 ? 'الاسم' : header)), false);
+  assert.equal(config.sameHeaders(headers, headers.slice(0, -2)), false);
+  assert.equal(config.sameHeaders(headers, headers.map((header, index) => index === 1 ? 'full_name' : header)), false);
 
-  const draft = config.composeSheetLead(
-    ['', '', '', '', '', '', '', 'New Leads campaign', '', 'تمويل عقارى 4 نوفمبر', '', 'ig', 'شقة_تمليك_', 'تمويل', 'مواطن', 'سارة اختبار', 'p:+966551110000', 'CREATED'],
-    {label: 'تيك توك', campaign: 'تمويل عقارى 4 نوفمبر'},
-    mapping
-  );
+  const tiktokRow = [
+    'تم التواصل',
+    'سارة اختبار',
+    'p:+966551110000',
+    'شقة تمليك',
+    'تمويل',
+    'مواطن',
+    'نعم',
+    '15000',
+    '34',
+    'مساء',
+    'خلال شهر',
+    'tt-lead-1',
+    'أحمد',
+    'جديد',
+    'CREATED',
+  ];
+  const draft = config.composeSheetLead(tiktokRow, {label: 'تيك توك', campaign: ''}, mapping);
   assert.equal(draft.phone, '0551110000');
   assert.equal(draft.stage, 'new');
-  assert.equal(draft.source, 'تيك توك — تمويل عقارى 4 نوفمبر');
-  assert.match(draft.notes, /شقة تمليك/);
-  assert.match(draft.notes, /تمويل/);
-  assert.match(draft.notes, /مواطن/);
-  assert.match(draft.propertyOther, /شقة تمليك/);
+  assert.equal(draft.source, 'تيك توك');
+  assert.equal(draft.propertyOther, 'شقة تمليك');
+  assert.match(draft.notes, /الوحدة: شقة تمليك/);
+  assert.match(draft.notes, /طريقة الشراء: تمويل/);
+  assert.match(draft.notes, /هل انت مواطن: مواطن/);
+  assert.match(draft.notes, /هل انت مدعوم: نعم/);
+  assert.match(draft.notes, /الراتب: 15000/);
+  assert.match(draft.notes, /العمر: 34/);
+  assert.match(draft.notes, /وقت التواصل: مساء/);
+  assert.match(draft.notes, /الوقت المتوقع للشراء: خلال شهر/);
+  assert.match(draft.notes, /Lead status: تم التواصل/);
+  assert.match(draft.notes, /الاسناد: أحمد/);
+  assert.match(draft.notes, /الحاله: جديد/);
+  assert.match(draft.notes, /TikTok Lead Status: CREATED/);
+  assert.match(draft.notes, /TikTok Lead ID: tt-lead-1/);
+  assert.equal(config.composeSheetLead(tiktokRow, {label: 'تيك توك', campaign: 'حملة خاصة'}, mapping).source, 'تيك توك — حملة خاصة');
+  assert.equal(config.sheetExternalId(tiktokRow, mapping), 'tt-lead-1');
+  assert.equal(config.sheetNameAndPhoneBlank(['تم التواصل', '', '', '', '', '', '', '', '', '', '', 'tt-empty'], mapping), true);
+  const tabs = config.parseSheetTabList('items.push({name: "meta", pageUrl: "https://docs.google.com/x", gid: "1976004933"});items.push({name: "تيك توك", pageUrl: "https://docs.google.com/x", gid: "1331680179"});');
+  assert.equal(tabs[0].name, 'meta');
+  assert.equal(tabs[1].gid, config.TIKTOK_SHEET_GID);
+  assert.equal(tabs[1].name, 'تيك توك');
   assert.equal(config.sheetRowProblem(draft), '');
   assert.equal(config.sheetRowProblem({name: 'س', phone: ''}), 'الاسم ناقص');
 
@@ -94,6 +131,8 @@ try {
   assert.equal(key, sync.sheetRowKey(2, ['أ', '0551110000']));
   assert.notEqual(key, sync.sheetRowKey(2, ['ب', '0551110000']));
   assert.match(key, /^2:[a-f0-9]{24}$/);
+  assert.equal(sync.sheetRowKey(2, ['أ', '0551110000'], 'tt-lead-1'), 'tt:tt-lead-1');
+  assert.equal(sync.sheetRowKey(9, ['تغيّر'], 'tt-lead-1'), 'tt:tt-lead-1');
   const expectedHash = createHash('sha256').update(['أ', '0551110000'].join('\u001f')).digest('hex').slice(0, 24);
   assert.equal(key, `2:${expectedHash}`);
 
@@ -114,20 +153,38 @@ try {
   mem.prepare(`INSERT INTO crm_users (id, name, email, role, active, created_at) VALUES (?, 'إدارة', 'ops@sas.test', 'admin', 1, '2020-01-01')`).run(owner);
   schema.resetLeadSchemaCache();
   await schema.ensureLeadSchema(sqliteExecutor(mem));
-  const seeded = mem.prepare('SELECT id, sheet_id, label, campaign, enabled, mapping, headers FROM crm_sheet_sources').all();
+  const seeded = mem.prepare('SELECT id, sheet_id, gid, label, campaign, enabled, mapping, headers FROM crm_sheet_sources').all();
   assert.equal(seeded.length, 1);
   assert.equal(seeded[0].id, 'tiktok-leads-1');
   assert.equal(seeded[0].sheet_id, config.TIKTOK_SHEET_ID);
   assert.equal(seeded[0].label, 'تيك توك');
-  assert.equal(seeded[0].campaign, 'تمويل عقارى 4 نوفمبر');
+  assert.equal(seeded[0].campaign, '');
+  assert.equal(seeded[0].gid, config.TIKTOK_SHEET_GID);
   assert.equal(Number(seeded[0].enabled), 1);
   const seededMapping = JSON.parse(seeded[0].mapping);
   const seededHeaders = JSON.parse(seeded[0].headers);
-  assert.equal(seededHeaders[seededMapping.phone], 'phone_number');
-  assert.equal(seededHeaders[seededMapping.name], 'full_name');
+  assert.equal(seededHeaders[seededMapping.phone], 'رقم الجوال');
+  assert.equal(seededHeaders[seededMapping.name], 'الاسم');
+  assert.equal(seededHeaders[seededMapping.leadId], 'TikTok Lead ID');
   schema.resetLeadSchemaCache();
   await schema.ensureLeadSchema(sqliteExecutor(mem));
   assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM crm_sheet_sources').get().n, 1);
+  mem.prepare(`UPDATE crm_sheet_sources SET gid = '', campaign = 'تمويل عقارى 4 نوفمبر', headers = '[]', mapping = '{}' WHERE id = 'tiktok-leads-1'`).run();
+  mem.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('old-key', 'tiktok-leads-1', 'meta-row', NULL, 'imported', '2026-01-01')`).run();
+  mem.prepare(`INSERT INTO crm_sheet_sources (id, sheet_id, gid, label, campaign, mapping, headers, enabled, created_at, updated_at) VALUES ('meta-extra', ?, ?, 'ميتا', '', '{}', '[]', 1, '2026-01-01', '2026-01-01')`).run(config.TIKTOK_SHEET_ID, config.TIKTOK_META_TAB_GID);
+  schema.resetLeadSchemaCache();
+  await schema.ensureLeadSchema(sqliteExecutor(mem));
+  const moved = mem.prepare('SELECT gid, campaign, enabled, label FROM crm_sheet_sources WHERE id = ?').get('tiktok-leads-1');
+  assert.equal(moved.gid, config.TIKTOK_SHEET_GID);
+  assert.equal(moved.campaign, '');
+  assert.equal(moved.label, 'تيك توك');
+  assert.equal(Number(moved.enabled), 1);
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM crm_sheet_rows WHERE source_id = 'tiktok-leads-1'").get().n, 0);
+  assert.equal(Number(mem.prepare("SELECT enabled FROM crm_sheet_sources WHERE id = 'meta-extra'").get().enabled), 0);
+  mem.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('kept', 'tiktok-leads-1', 'tt:keep', NULL, 'imported', '2026-03-01')`).run();
+  schema.resetLeadSchemaCache();
+  await schema.ensureLeadSchema(sqliteExecutor(mem));
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM crm_sheet_rows WHERE source_id = 'tiktok-leads-1'").get().n, 1);
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='crm_sheet_rows'").get().name, 'crm_sheet_rows');
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='crm_sheet_sync_lock'").get().name, 'crm_sheet_sync_lock');
 
@@ -186,6 +243,38 @@ try {
   const again = await sync.importSheetGrid(db, batchSource, batchGrid, owner);
   assert.equal(again.inserted, 0);
   assert.equal(again.unchanged, 6);
+
+  const idHeaders = ['الاسم', 'رقم الجوال', 'TikTok Lead ID', 'Lead status', 'الاسناد'];
+  const idMapping = config.suggestSheetMapping(idHeaders);
+  const idSource = {...source, id: 'tiktok-tab', headers: idHeaders, mapping: idMapping, campaign: ''};
+  const idGrid = [
+    idHeaders,
+    ['', '', 'tt-empty', 'CREATED', 'أحمد'],
+    ['نورة', '0552220001', 'tt-live', 'تم التواصل', 'أحمد'],
+    ['ليلى', 'abc', 'tt-bad', 'جديد', ''],
+  ];
+  const identified = await sync.importSheetGrid(db, idSource, idGrid, owner);
+  assert.equal(identified.inserted, 1);
+  assert.equal(identified.invalid, 1);
+  assert.equal(identified.created[0].source, 'تيك توك');
+  const storedLead = mem.prepare('SELECT stage, assigned_to, source, notes FROM leads WHERE phone = ?').get('0552220001');
+  assert.equal(storedLead.stage, 'new');
+  assert.equal(storedLead.assigned_to, '');
+  assert.equal(storedLead.source, 'تيك توك');
+  assert.match(storedLead.notes, /Lead status: تم التواصل/);
+  assert.match(storedLead.notes, /الاسناد: أحمد/);
+  assert.equal(mem.prepare("SELECT row_key FROM crm_sheet_rows WHERE source_id = 'tiktok-tab' AND status = 'imported'").get().row_key, 'tt:tt-live');
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM crm_sheet_rows WHERE row_key = 'tt:tt-empty'").get().n, 0);
+  const editedId = [
+    idHeaders,
+    ['', '', 'tt-empty', 'CREATED', 'أحمد'],
+    ['نورة معدلة', '0552220001', 'tt-live', 'مؤهل', 'مندوب آخر'],
+    ['ليلى صالحة', '0552220009', 'tt-bad', 'جديد', ''],
+  ];
+  const identifiedAgain = await sync.importSheetGrid(db, idSource, editedId, owner);
+  assert.equal(identifiedAgain.unchanged, 1);
+  assert.equal(identifiedAgain.inserted, 1);
+  assert.equal(mem.prepare("SELECT name FROM leads WHERE phone = '0552220001'").get().name, 'نورة');
   mem.close();
 
   assert.match(readFileSync('instrumentation.ts', 'utf8'), /phase-production-build/);
@@ -196,6 +285,8 @@ try {
   assert.match(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /notifySheetBackfillSummaries/);
   assert.match(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /sourceAlreadySynced/);
   assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /أول مزامنة/);
+  assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /TIKTOK_SHEET_GID/);
+  assert.match(readFileSync('app/api/integrations/sheet-sources/preview/route.ts', 'utf8'), /listSheetTabs/);
   console.log('PASS sheet mapping, row keys, seed, import once, duplicate phone, and cron secret');
 
   const mailDb = new DatabaseSync(':memory:');

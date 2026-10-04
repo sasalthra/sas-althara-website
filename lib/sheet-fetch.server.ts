@@ -2,7 +2,7 @@ import 'server-only';
 import {createSign} from 'node:crypto';
 import {z} from 'zod';
 import {ApiError, body} from './secure-api';
-import {parseCsv} from './sheet-sync-config';
+import {parseCsv, parseSheetTabList, type SheetTab} from './sheet-sync-config';
 
 const MAX_ROWS = 5001;
 const MAX_BYTES = 5_000_000;
@@ -102,6 +102,52 @@ async function fetchPrivateGrid(account: ServiceAccount, sheetId: string, gid: s
     .object({values: z.array(z.array(z.union([z.string(), z.number(), z.boolean()]))).max(MAX_ROWS)})
     .parse(await body(response, MAX_BYTES));
   return result.values.map(row => row.map(cell => String(cell)));
+}
+
+/** Public htmlview tab list, then the service-account metadata when the sheet is private. */
+export async function listSheetTabs(sheetId: string): Promise<SheetTab[]> {
+  if (!/^[a-zA-Z0-9_-]{20,100}$/.test(sheetId)) return [];
+  try {
+    const response = await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/htmlview`, {
+      redirect: 'follow',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15000),
+    });
+    if (response.ok) {
+      const text = (await response.text()).slice(0, 1_000_000);
+      const tabs = parseSheetTabList(text);
+      if (tabs.length) return tabs;
+    }
+  } catch (error) {
+    console.error('public sheet tabs were not listed', error instanceof Error ? error.name : 'error');
+  }
+  const account = readServiceAccount();
+  if (!account) return [];
+  try {
+    const token = await googleToken(account);
+    const meta = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties(sheetId,title)`,
+      {headers: {Authorization: `Bearer ${token}`}, signal: AbortSignal.timeout(20000), redirect: 'error', cache: 'no-store'}
+    );
+    if (!meta.ok) return [];
+    const parsed = z
+      .object({
+        sheets: z
+          .array(z.object({properties: z.object({sheetId: z.number().optional(), title: z.string().optional()}).optional()}))
+          .optional(),
+      })
+      .parse(await body(meta, 500000));
+    return (parsed.sheets || [])
+      .map(sheet => ({
+        gid: String(sheet.properties?.sheetId ?? ''),
+        name: String(sheet.properties?.title || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 80),
+      }))
+      .filter(tab => /^\d{1,20}$/.test(tab.gid) && tab.name)
+      .slice(0, 40);
+  } catch (error) {
+    console.error('private sheet tabs were not listed', error instanceof Error ? error.name : 'error');
+    return [];
+  }
 }
 
 /** Public CSV export first. Private sheets fall back to a Google service account when one is configured. */

@@ -4,6 +4,7 @@ import {
   DEFAULT_SHEET_LABEL,
   SHEET_FIELDS,
   sheetFieldLabels,
+  TIKTOK_SHEET_GID,
   type SheetField,
   type SheetMapping,
 } from '@/lib/sheet-sync-config';
@@ -29,6 +30,8 @@ type SheetSource = {
   lastRun: string;
   lastResult: SourceResult | null;
 };
+
+type SheetTab = {gid: string; name: string};
 
 type Status = {
   sources: SheetSource[];
@@ -64,6 +67,8 @@ export default function SheetSourcesPanel() {
   const [label, setLabel] = useState(DEFAULT_SHEET_LABEL);
   const [campaign, setCampaign] = useState('');
   const [headers, setHeaders] = useState<string[]>([]);
+  const [tabs, setTabs] = useState<SheetTab[]>([]);
+  const [headersGid, setHeadersGid] = useState('');
   const [mapping, setMapping] = useState<SheetMapping>(emptyMapping);
   const [enabled, setEnabled] = useState(true);
   const [message, setMessage] = useState('');
@@ -88,6 +93,7 @@ export default function SheetSourcesPanel() {
     setLabel(source.label || DEFAULT_SHEET_LABEL);
     setCampaign(source.campaign || '');
     setHeaders(Array.isArray(source.headers) ? source.headers : []);
+    setHeadersGid(source.gid || '');
     setMapping(source.mapping || {});
     setEnabled(source.enabled);
     setMessage('');
@@ -100,24 +106,29 @@ export default function SheetSourcesPanel() {
     setLabel(DEFAULT_SHEET_LABEL);
     setCampaign('');
     setHeaders([]);
+    setTabs([]);
+    setHeadersGid('');
     setMapping(emptyMapping());
     setEnabled(true);
   }
 
-  async function readHeaders() {
+  async function readHeaders(nextGid = gid) {
     setBusy(true);
     setMessage('');
     try {
       const response = await fetch('/api/integrations/sheet-sources/preview', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({sheetUrl, gid}),
+        body: JSON.stringify({sheetUrl, gid: nextGid}),
       });
       const data = await response.json();
       if (!response.ok) throw Error(data.error || 'تعذر قراءة العناوين');
+      const readGid = String(data.gid || nextGid || '');
+      setGid(readGid);
+      setHeadersGid(readGid);
       setHeaders(data.headers || []);
       setMapping(data.mapping || {});
-      if (data.gid) setGid(String(data.gid));
+      setTabs(Array.isArray(data.tabs) ? data.tabs : []);
       setMessage('قُرئت العناوين واقتُرح الربط. راجعه ثم احفظ.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'تعذر قراءة العناوين');
@@ -132,6 +143,7 @@ export default function SheetSourcesPanel() {
     setMessage('');
     try {
       if (!headers.length) throw Error('اقرأ العناوين أولاً ثم راجع الربط.');
+      if ((gid || '') !== headersGid) throw Error('اقرأ العناوين لهذه الورقة قبل الحفظ.');
       const response = await fetch('/api/integrations/sheet-sources', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -209,7 +221,7 @@ export default function SheetSourcesPanel() {
         كل صف جديد في الجدول يصبح عميلاً في مرحلة «عميل جديد»، المصدر تسمية المصدر مع اسم الحملة، والجوال بصيغة 05، ومن غير تعيين حتى يوزّعه المدير.
         أول مزامنة لمصدر جديد تُسجّل النشاط فقط، وترسل للإدارة ملخصاً واحداً بعدد الجدد والموجودين، دون بريد إعادة تسجيل.
         بعد ذلك، أكثر من خمس إعادات تسجيل في المزامنة نفسها تُجمع في بريد واحد للإدارة وبريد لكل مندوب بعملائه فقط.
-        جدول تيك توك العام مضاف مسبقاً إن كانت القائمة فارغة عند أول تشغيل.
+        الورقة المزروعة هي «تيك توك» برقم {TIKTOK_SHEET_GID}، بلا اسم حملة حتى يكتبه المدير. ورقة meta لا تُزامَن.
       </p>
       <p>
         {status && status.intervalMs > 0
@@ -226,14 +238,14 @@ export default function SheetSourcesPanel() {
             <article key={source.id} style={{border: '1px solid #d1d5db', padding: '12px 14px'}}>
               <strong>{source.label || DEFAULT_SHEET_LABEL}</strong>
               {source.campaign ? ` — ${source.campaign}` : ''}
-              <p>المعرف: {source.sheetId}{source.gid ? ` — الورقة ${source.gid}` : ''}</p>
+              <p>المعرف: {source.sheetId}{source.gid ? ` — الورقة ${source.gid}` : ' — الورقة الأولى'}</p>
               <p>الحالة: {source.enabled ? 'مفعّل' : 'متوقف'}</p>
               <p>آخر مزامنة: {riyadh(source.lastRun)} — {summarize(source.lastResult)}</p>
               {source.lastResult?.errors?.length ? <p>{source.lastResult.errors.slice(0, 3).join('؛ ')}</p> : null}
               <p>
                 <button type="button" disabled={busy} onClick={() => fill(source)}>تعديل الربط</button>{' '}
                 <button type="button" disabled={busy} onClick={() => void remove(source.id)}>حذف</button>{' '}
-                <a href={`https://docs.google.com/spreadsheets/d/${source.sheetId}/edit`} target="_blank" rel="noreferrer">فتح الجدول</a>
+                <a href={`https://docs.google.com/spreadsheets/d/${source.sheetId}/edit${source.gid ? `#gid=${source.gid}` : ''}`} target="_blank" rel="noreferrer">فتح الجدول</a>
               </p>
             </article>
           ))}
@@ -242,9 +254,24 @@ export default function SheetSourcesPanel() {
       <form className="fields" onSubmit={event => void save(event)}>
         <h3>{editing ? 'تعديل مصدر' : 'إضافة مصدر'}</h3>
         <label>رابط الجدول أو معرفه<input required value={sheetUrl} onChange={event => setSheetUrl(event.target.value)} placeholder="https://docs.google.com/spreadsheets/d/…/edit" maxLength={500}/></label>
-        <label>رقم الورقة gid (اختياري)<input value={gid} onChange={event => setGid(event.target.value.replace(/\D/g, '').slice(0, 20))} inputMode="numeric" placeholder="0"/></label>
+        <label>الورقة
+          <select
+            value={tabs.some(tab => tab.gid === gid) ? gid : ''}
+            onChange={event => {
+              const next = event.target.value;
+              setGid(next);
+              setHeaders([]);
+              setHeadersGid('');
+              if (sheetUrl.trim() && next) void readHeaders(next);
+            }}
+          >
+            <option value="">{gid && !tabs.some(tab => tab.gid === gid) ? `gid ${gid}` : 'اختر الورقة بعد قراءة العناوين، أو اكتب رقمها'}</option>
+            {tabs.map(tab => <option key={tab.gid} value={tab.gid}>{tab.name} — {tab.gid}</option>)}
+          </select>
+        </label>
+        <label>رقم الورقة gid<input value={gid} onChange={event => setGid(event.target.value.replace(/\D/g, '').slice(0, 20))} inputMode="numeric" placeholder={TIKTOK_SHEET_GID}/></label>
         <label>تسمية المصدر<input required value={label} onChange={event => setLabel(event.target.value)} maxLength={40}/></label>
-        <label>اسم الحملة<input value={campaign} onChange={event => setCampaign(event.target.value)} maxLength={60} placeholder="تمويل عقارى 4 نوفمبر"/></label>
+        <label>اسم الحملة (اختياري)<input value={campaign} onChange={event => setCampaign(event.target.value)} maxLength={60} placeholder="يُترك فارغاً ليبقى المصدر «تيك توك»"/></label>
         <p>
           <button type="button" disabled={busy || !sheetUrl.trim()} onClick={() => void readHeaders()}>قراءة العناوين</button>
         </p>
@@ -265,7 +292,7 @@ export default function SheetSourcesPanel() {
           </label>
         ))}
         <label><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)}/> تفعيل المزامنة التلقائية لهذا المصدر</label>
-        <p>الاسم والجوال مطلوبان. عمود الحملة يُذكر في الملاحظات، ويُستخدم كاسم الحملة فقط إذا تُرك حقل اسم الحملة فارغاً. الصف الذي عولج لا يُستورد مرة أخرى ما لم يتغير محتواه.</p>
+        <p>الاسم والجوال مطلوبان. صف بلا اسم وبلا جوال يُتخطى. إن وُجد TikTok Lead ID فهو مفتاح الصف ولا يُعاد استيراده. أعمدة الحالة والإسناد تُنسخ في الملاحظات فقط؛ العميل الجديد يبقى «عميل جديد» وغير معيّن. اسم الحملة يُضاف إلى المصدر فقط إذا كُتب هنا.</p>
         <button className="primary" disabled={busy || !headers.length}>حفظ المصدر</button>
         {editing ? <button type="button" disabled={busy} onClick={resetForm}>مصدر جديد</button> : null}
       </form>

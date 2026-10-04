@@ -3,6 +3,8 @@ import {
   composeSheetLead,
   isBlankSheetRow,
   sameHeaders,
+  sheetExternalId,
+  sheetNameAndPhoneBlank,
   sheetRowProblem,
   type SheetMapping,
 } from './sheet-sync-config';
@@ -60,7 +62,9 @@ const EMPTY: SheetImportResult = {
   reregistrations: [],
 };
 
-export function sheetRowKey(rowNumber: number, cells: string[]) {
+export function sheetRowKey(rowNumber: number, cells: string[], externalId = '') {
+  const id = externalId.trim().slice(0, 120);
+  if (id) return `tt:${id}`;
   const hash = createHash('sha256')
     .update(cells.map(cell => String(cell ?? '')).join('\u001f'))
     .digest('hex')
@@ -96,13 +100,17 @@ export async function importSheetGrid(
     const cells = (grid[index] || []).map(cell => String(cell ?? ''));
     const rowNumber = index + 1;
     if (isBlankSheetRow(cells)) continue;
-    const key = sheetRowKey(rowNumber, cells);
-    if (known.has(key)) {
+    const externalId = sheetExternalId(cells, source.mapping);
+    const stableKey = externalId ? sheetRowKey(rowNumber, cells, externalId) : '';
+    const hashKey = sheetRowKey(rowNumber, cells);
+    if ((stableKey && known.has(stableKey)) || known.has(hashKey)) {
       result.unchanged += 1;
       continue;
     }
+    if (sheetNameAndPhoneBlank(cells, source.mapping)) continue;
     const draft = composeSheetLead(cells, source, source.mapping);
     const problem = sheetRowProblem(draft);
+    const key = problem ? hashKey : stableKey || hashKey;
     if (problem) {
       result.invalid += 1;
       if (result.errors.length < 30) result.errors.push(`صف ${rowNumber}: ${problem}`);
