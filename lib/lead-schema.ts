@@ -18,10 +18,15 @@
  * ai_settings / ai_usage are created the same way so provider-key save does not
  * depend on a manual migration. crm_users.last_login_at is added once and left
  * null until a real sign-in writes it.
+ * crm_sheet_sources / crm_sheet_rows / crm_sheet_sync_lock are created the same
+ * way. The public TikTok lead sheet is inserted only while the source table is
+ * empty, so disabling that row is kept and a second process start does not
+ * duplicate it.
  */
 
 import {planLeadPhoneMigration} from './phone';
 import {retiredStageMoves, stageEnumValues} from './lead-stages';
+import {tiktokSheetSeed} from './sheet-sync-config';
 
 export type LeadSchemaState = {featured: boolean};
 
@@ -481,7 +486,104 @@ async function ensureLastLogin(executor: SqlExecutor) {
   await ensureColumn(executor, 'crm_users', 'last_login_at', 'VARCHAR(24) NULL');
 }
 
+async function ensureSheetIndex(executor: SqlExecutor) {
+  try {
+    await run(executor, 'CREATE UNIQUE INDEX IF NOT EXISTS crm_sheet_rows_source_key ON crm_sheet_rows (source_id, row_key)');
+  } catch (error) {
+    if (/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(error))) return;
+    try {
+      await run(executor, 'ALTER TABLE crm_sheet_rows ADD UNIQUE INDEX crm_sheet_rows_source_key (source_id, row_key)');
+    } catch (fallback) {
+      if (!/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(fallback))) {
+        console.error('sheet row index was not added', fallback);
+      }
+    }
+  }
+}
+
+/**
+ * Lead-form sheet sources and the keys of rows already imported.
+ * The TikTok sheet is seeded once, only when no source exists yet.
+ */
+async function ensureSheetSyncSchema(executor: SqlExecutor) {
+  try {
+    await run(
+      executor,
+      `CREATE TABLE IF NOT EXISTS crm_sheet_sources (
+        id TEXT PRIMARY KEY,
+        sheet_id TEXT NOT NULL,
+        gid TEXT NULL,
+        label TEXT NOT NULL,
+        campaign TEXT NOT NULL,
+        mapping TEXT NOT NULL,
+        headers TEXT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        last_run TEXT NULL,
+        last_result TEXT NULL,
+        created_at TEXT NULL,
+        updated_at TEXT NULL
+      )`
+    );
+    await run(
+      executor,
+      `CREATE TABLE IF NOT EXISTS crm_sheet_rows (
+        id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL,
+        row_key TEXT NOT NULL,
+        lead_id TEXT NULL,
+        status TEXT NULL,
+        created_at TEXT NULL
+      )`
+    );
+    await run(
+      executor,
+      `CREATE TABLE IF NOT EXISTS crm_sheet_sync_lock (
+        id TEXT PRIMARY KEY,
+        locked_until TEXT NOT NULL,
+        token TEXT NOT NULL
+      )`
+    );
+  } catch (error) {
+    console.error('sheet sync tables were not created', error);
+    return;
+  }
+  await ensureSheetIndex(executor);
+  try {
+    const countRows = rowsOf(await run(executor, 'SELECT COUNT(*) AS n FROM crm_sheet_sources'));
+    const count = Number(countRows[0]?.n ?? countRows[0]?.N ?? 0);
+    if (count > 0) return;
+    const seed = tiktokSheetSeed();
+    const now = new Date().toISOString();
+    await run(
+      executor,
+      `INSERT INTO crm_sheet_sources (
+        id, sheet_id, gid, label, campaign, mapping, headers, enabled, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        seed.id,
+        seed.sheetId,
+        seed.gid,
+        seed.label,
+        seed.campaign,
+        JSON.stringify(seed.mapping),
+        JSON.stringify(seed.headers),
+        seed.enabled,
+        now,
+        now,
+      ]
+    );
+  } catch (error) {
+    if (/duplicate|UNIQUE|ER_DUP_ENTRY/i.test(messageOf(error))) return;
+    console.error('tiktok sheet seed skipped', error);
+  }
+}
+
 async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
+  try {
+    await ensureSheetSyncSchema(executor);
+  } catch (error) {
+    console.error('sheet sync schema check failed', error);
+  }
   try {
     await ensureTelegramSchema(executor);
   } catch (error) {

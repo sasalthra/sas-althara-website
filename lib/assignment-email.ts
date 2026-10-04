@@ -243,3 +243,102 @@ export function reregistrationEmail(input: ReregistrationMailInput) {
   );
   return {subject, text, html};
 }
+
+export type NewLeadMailInput = {
+  name: string;
+  phone: string;
+  source: string;
+  when: string;
+  url: string;
+  distributeUrl: string;
+};
+
+function leadNoticeRows(input: NewLeadMailInput) {
+  return [
+    ['الاسم', input.name.trim() || 'عميل'],
+    ['الجوال', input.phone.trim()],
+    ['المصدر / الحملة', input.source.trim()],
+    ['الوقت', input.when.trim()],
+  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+}
+
+function greyTable(rows: Array<[string, string]>) {
+  const body = rows
+    .map(([label, value]) => `<tr><th style="text-align:right;padding:8px 10px;border:1px solid #d1d5db;color:#111;font-weight:400;white-space:nowrap">${escapeHtml(label)}</th><td style="padding:8px 10px;border:1px solid #d1d5db;color:#111">${escapeHtml(value).replace(/\n/g, '<br/>')}</td></tr>`)
+    .join('');
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:12px 0;background:#fff;border:1px solid #d1d5db;color:#111">${body}</table>`;
+}
+
+function leadLinks(input: Pick<NewLeadMailInput, 'url' | 'distributeUrl'>) {
+  return `<p><a href="${escapeHtml(input.url)}" style="color:#3F1A44">فتح صفحة العميل</a></p><p style="color:#111">${escapeHtml(input.url)}</p><p><a href="${escapeHtml(input.distributeUrl)}" style="color:#3F1A44">توزيع العملاء</a></p><p style="color:#111">${escapeHtml(input.distributeUrl)}</p>`;
+}
+
+export function newLeadEmail(input: NewLeadMailInput) {
+  const subject = 'عميل جديد سجل — بحاجة للتوزيع';
+  const rows = leadNoticeRows(input);
+  const text = [
+    'عميل جديد سجل ويحتاج التوزيع على أحد مندوبي المبيعات.',
+    '',
+    ...rows.map(([label, value]) => `${label}: ${value}`),
+    '',
+    `صفحة العميل: ${input.url}`,
+    `التوزيع: ${input.distributeUrl}`,
+  ].join('\n');
+  const html = wrapHtml(
+    subject,
+    `<p style="color:#111">عميل جديد سجل ويحتاج التوزيع على أحد مندوبي المبيعات.</p>${greyTable(rows)}${leadLinks(input)}`
+  );
+  return {subject, text, html};
+}
+
+export function newLeadDigestEmail(inputs: NewLeadMailInput[]) {
+  const count = inputs.length;
+  const subject = 'عملاء جدد سجلوا — بحاجة للتوزيع';
+  const intro = `سجّل ${count} عملاء جدد دفعة واحدة ويحتاجون التوزيع.`;
+  const blocks = inputs.map((input, index) => {
+    const rows = leadNoticeRows(input);
+    return [`عميل ${index + 1}`, ...rows.map(([label, value]) => `${label}: ${value}`), `صفحة العميل: ${input.url}`].join('\n');
+  });
+  const text = [intro, '', ...blocks, '', `التوزيع: ${inputs[0]?.distributeUrl || ''}`].join('\n\n');
+  const html = wrapHtml(
+    subject,
+    `<p style="color:#111">${escapeHtml(intro)}</p>${inputs.map(input => greyTable(leadNoticeRows(input))).join('')}${inputs[0] ? leadLinks(inputs[0]) : ''}`
+  );
+  return {subject, text, html};
+}
+
+export function reregistrationDigestEmail(inputs: ReregistrationMailInput[]) {
+  const count = inputs.length;
+  const subject = `إعادة تسجيل ${count} عملاء`;
+  const intro = `أعاد ${count} عملاء التسجيل. لم يُنشأ عميل جديد، وأُضيفت التفاصيل إلى سجل كل واحد منهم.`;
+  const blocks = inputs.map((input, index) =>
+    [
+      `عميل ${index + 1}`,
+      `الاسم: ${input.name}`,
+      `الجوال: ${input.phone}`,
+      `المصدر: ${input.sourceLabel}`,
+      input.campaign ? `الحملة: ${input.campaign}` : '',
+      `صفحة العميل: ${input.url}`,
+    ]
+      .filter(Boolean)
+      .join('\n')
+  );
+  const text = [intro, '', ...blocks].join('\n\n');
+  const html = wrapHtml(
+    subject,
+    `<p style="color:#111">${escapeHtml(intro)}</p>${inputs
+      .map(input =>
+        greyTable(
+          [
+            ['الاسم', input.name],
+            ['الجوال', input.phone],
+            ['المصدر', input.sourceLabel],
+            ['الحملة', input.campaign?.trim() || ''],
+            ['الوقت', input.when],
+          ].filter((entry): entry is [string, string] => Boolean(entry[1]))
+        )
+      )
+      .join('')}${inputs[0] ? `<p><a href="${escapeHtml(inputs[0].url)}" style="color:#3F1A44">فتح صفحة العميل</a></p>` : ''}`
+  );
+  return {subject, text, html};
+}
