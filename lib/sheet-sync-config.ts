@@ -185,19 +185,32 @@ export function sameHeaders(saved: string[], live: string[]) {
   return left.every((header, index) => header === right[index]);
 }
 
-/** Operational error text safe to store and show. No tokens, keys, or mobiles. */
+/** Operational error text safe to store and show. No tokens, keys, SQL, or mobiles. */
 export function publicSyncError(error: unknown) {
-  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const err = error as {code?: unknown; errno?: unknown; sqlMessage?: unknown; message?: unknown};
+  const code = typeof err?.code === 'string' && /^[A-Z0-9_]{2,48}$/.test(err.code)
+    ? err.code
+    : Number.isInteger(err?.errno)
+      ? `ERRNO_${err.errno}`
+      : '';
+  const raw = typeof err?.sqlMessage === 'string' && err.sqlMessage.trim()
+    ? err.sqlMessage
+    : error instanceof Error
+      ? error.message
+      : String(error ?? '');
   const text = raw
     .replace(/-----BEGIN[\s\S]*?-----END[^-]*-----/g, '[redacted]')
     .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
     .replace(/private_key["']?\s*[:=]\s*["'][^"']+["']/gi, 'private_key=[redacted]')
+    .replace(/\b(password|secret|app_encryption_key)\b\s*[:=]\s*\S+/gi, '$1=[redacted]')
+    .replace(/mysql:\/\/\S+/gi, 'mysql://[redacted]')
     .replace(/\+?966\d{8,12}/g, '+966••••')
     .replace(/05\d{8}/g, '05••••••••')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 500);
-  return text || 'خطأ غير معروف';
+    .slice(0, 240);
+  const safe = text || 'خطأ غير معروف';
+  return code ? `${code}: ${safe}` : safe;
 }
 
 const matchers: {key: SheetField; test: (folded: string) => boolean}[] = [

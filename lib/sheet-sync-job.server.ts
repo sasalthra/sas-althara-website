@@ -1,5 +1,6 @@
 import 'server-only';
 import {crmDb} from './crm-db';
+import {seedTiktokSheetSourceIfEmpty} from './lead-schema';
 import {notifyNewLeads, notifyReregistrationBatch, notifySheetBackfillSummaries, type SheetBackfillNotice} from './assignment-notify';
 import {cronAuthorized} from './cron-auth';
 import {readSheetGrid} from './sheet-fetch.server';
@@ -24,6 +25,7 @@ export type SheetSyncReport = {
   errorMessage: string;
   errors: string[];
   steps: SheetSyncStep[];
+  seeded: boolean;
   at: string;
 };
 
@@ -42,6 +44,7 @@ const EMPTY_REPORT = (reason = ''): SheetSyncReport => ({
   errorMessage: reason,
   errors: reason ? [reason] : [],
   steps: [],
+  seeded: false,
   at: new Date().toISOString(),
 });
 
@@ -176,6 +179,16 @@ async function doSync(): Promise<SheetSyncReport> {
     report.steps.push({step: 'قاعدة البيانات', ok: false, detail: report.reason});
     return logSync(report);
   }
+  let seeded = false;
+  try {
+    seeded = await seedTiktokSheetSourceIfEmpty();
+  } catch (error) {
+    const message = publicSyncError(error);
+    console.error('tiktok sheet seed failed', message);
+    const report = EMPTY_REPORT(message);
+    report.steps.push({step: 'المصادر', ok: false, detail: message});
+    return logSync(report);
+  }
   let token = '';
   try {
     token = await acquireLock();
@@ -201,6 +214,8 @@ async function doSync(): Promise<SheetSyncReport> {
   report.reason = '';
   report.errors = [];
   report.errorMessage = '';
+  report.seeded = seeded;
+  if (seeded) report.steps.push({step: 'المصادر', ok: true, detail: 'أُضيفت ورقة تيك توك لأن القائمة كانت فارغة'});
   try {
     const owner = await ownerId();
     if (!owner) {

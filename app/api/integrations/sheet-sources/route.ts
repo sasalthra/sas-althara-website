@@ -1,6 +1,8 @@
 import {crmDb} from '@/lib/crm-db';
+import {ensureSheetSchema} from '@/lib/lead-schema';
 import {actor, ApiError, body, endpoint, reply} from '@/lib/secure-api';
 import {serviceAccountConfigured} from '@/lib/sheet-fetch.server';
+import {sheetSourceKey} from '@/lib/sheet-keys';
 import {parseSheetRef, sheetSourceInputSchema, sheetsSyncIntervalMs} from '@/lib/sheet-sync-config';
 
 export const runtime = 'nodejs';
@@ -28,6 +30,7 @@ function countOf(value: unknown, fallback = 0) {
 export async function GET() {
   return endpoint(async () => {
     await actor(undefined, ['admin']);
+    await ensureSheetSchema();
     const rows = await crmDb()
       .prepare(
         `SELECT id, sheet_id, gid, label, campaign, mapping, headers, enabled, last_run, last_result,
@@ -90,6 +93,7 @@ export async function POST(req: Request) {
       ? await crmDb().prepare('SELECT id FROM crm_sheet_sources WHERE id = ?').bind(id).first<{id: string}>()
       : null;
     if (input.id && !existing?.id) throw new ApiError(404, 'المصدر غير موجود');
+    await ensureSheetSchema();
     const payload = [
       ref.sheetId,
       gid,
@@ -99,25 +103,33 @@ export async function POST(req: Request) {
       JSON.stringify(input.headers),
       input.enabled ? 1 : 0,
       now,
+      sheetSourceKey(ref.sheetId, gid),
     ];
-    if (existing?.id) {
-      await crmDb()
-        .prepare(
-          `UPDATE crm_sheet_sources
-           SET sheet_id = ?, gid = ?, label = ?, campaign = ?, mapping = ?, headers = ?, enabled = ?, updated_at = ?
-           WHERE id = ?`
-        )
-        .bind(...payload, id)
-        .run();
-    } else {
-      await crmDb()
-        .prepare(
-          `INSERT INTO crm_sheet_sources (
-            sheet_id, gid, label, campaign, mapping, headers, enabled, updated_at, id, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(...payload, id, now)
-        .run();
+    try {
+      if (existing?.id) {
+        await crmDb()
+          .prepare(
+            `UPDATE crm_sheet_sources
+             SET sheet_id = ?, gid = ?, label = ?, campaign = ?, mapping = ?, headers = ?, enabled = ?, updated_at = ?, sheet_key = ?
+             WHERE id = ?`
+          )
+          .bind(...payload, id)
+          .run();
+      } else {
+        await crmDb()
+          .prepare(
+            `INSERT INTO crm_sheet_sources (
+              sheet_id, gid, label, campaign, mapping, headers, enabled, updated_at, sheet_key, id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(...payload, id, now)
+          .run();
+      }
+    } catch (error) {
+      if (/duplicate|UNIQUE|ER_DUP_ENTRY/i.test(error instanceof Error ? error.message : String(error))) {
+        throw new ApiError(409, 'هذا الجدول مضاف مسبقاً');
+      }
+      throw error;
     }
     try {
       await crmDb()
@@ -136,6 +148,7 @@ export async function DELETE(req: Request) {
     const user = await actor(req, ['admin']);
     const id = new URL(req.url).searchParams.get('id') || '';
     if (!/^[a-zA-Z0-9_-]{1,40}$/.test(id)) throw new ApiError(400, 'معرف المصدر غير صالح');
+    await ensureSheetSchema();
     await crmDb().prepare('DELETE FROM crm_sheet_sources WHERE id = ?').bind(id).run();
     try {
       await crmDb()

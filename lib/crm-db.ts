@@ -1,5 +1,5 @@
 import mysql, {type Pool, type RowDataPacket, type ResultSetHeader} from 'mysql2/promise';
-import {ensureLeadSchema} from './lead-schema';
+import {ensureLeadSchema, ensureSheetSchema} from './lead-schema';
 let pool: Pool | undefined;
 function database() {
   if (!pool) {
@@ -31,15 +31,19 @@ function bootSheetSync() {
     });
 }
 
+async function ready(sql: string) {
+  await ensureLeadSchema();
+  if (/\bcrm_sheet_/.test(sql)) await ensureSheetSchema();
+}
 export function crmDb(executor: Pick<Pool, 'execute'> = database()) {
   bootSheetSync();
   return {prepare(sql: string) {
     let values: (string | number | null)[] = [];
     return {
       bind(...args: (string | number | null)[]) { values = args; return this; },
-      async all() {await ensureLeadSchema(); const [rows] = await executor.execute<RowDataPacket[]>(sql, values); return {results: rows};},
-      async first<T>() {await ensureLeadSchema(); const [rows] = await executor.execute<RowDataPacket[]>(sql, values); return (rows[0] as T) || null;},
-      async run() {await ensureLeadSchema(); const [result] = await executor.execute<ResultSetHeader>(sql, values); return {meta: {changes: result.affectedRows}};},
+      async all() {await ready(sql); const [rows] = await executor.execute<RowDataPacket[]>(sql, values); return {results: rows};},
+      async first<T>() {await ready(sql); const [rows] = await executor.execute<RowDataPacket[]>(sql, values); return (rows[0] as T) || null;},
+      async run() {await ready(sql); const [result] = await executor.execute<ResultSetHeader>(sql, values); return {meta: {changes: result.affectedRows}};},
     };
   }};
 }
