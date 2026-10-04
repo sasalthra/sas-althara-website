@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {sheetRowKeyHash} from './sheet-keys';
 import {
   composeSheetLead,
   isBlankSheetRow,
@@ -219,9 +220,9 @@ async function remember(db: LeadDb, sourceId: string, rowKey: string, leadId: st
   try {
     await db
       .prepare(
-        'INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO crm_sheet_rows (id, source_id, row_key, row_key_hash, lead_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
       )
-      .bind(crypto.randomUUID(), sourceId, rowKey, leadId || null, status, now)
+      .bind(crypto.randomUUID(), sourceId, rowKey, sheetRowKeyHash(sourceId, rowKey), leadId || null, status, now)
       .run();
   } catch (error) {
     if (/duplicate|UNIQUE|ER_DUP_ENTRY/i.test(error instanceof Error ? error.message : String(error))) return;

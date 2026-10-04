@@ -19,16 +19,20 @@
  * depend on a manual migration. crm_users.last_login_at is added once and left
  * null until a real sign-in writes it.
  * crm_sheet_sources / crm_sheet_rows / crm_sheet_sync_lock are created the same
- * way. The public TikTok lead sheet is inserted whenever that sheet id and gid
+ * way, with DDL that MySQL 5.7+, MySQL 8, and MariaDB 10.4 accept. TEXT cannot
+ * be a primary key there (ER_BLOB_KEY_WITHOUT_LENGTH), JSON and a long utf8mb4
+ * unique key are avoided, and the row/sheet uniqueness is a SHA-256 column.
+ * The public TikTok lead sheet is inserted whenever that sheet id and gid
  * are missing, even if other sources already exist. A wrong gid on the seeded
  * row is rewritten. Disabling a row that already points at the right gid is
- * kept, and a second process start does not duplicate it. last_run_at,
- * rows_read, created, existing, skipped, and error_message are added the same
- * once-per-process way.
+ * kept, and a second process start does not duplicate it. A failed create is
+ * not cached, so the next read or write tries again. last_run_at, rows_read,
+ * created, existing, skipped, and error_message are added the same way.
  */
 
 import {planLeadPhoneMigration} from './phone';
 import {retiredStageMoves, stageEnumValues} from './lead-stages';
+import {sheetSourceKey} from './sheet-keys';
 import {TIKTOK_META_TAB_GID, tiktokSheetSeed} from './sheet-sync-config';
 
 export type LeadSchemaState = {featured: boolean};
@@ -39,9 +43,11 @@ export type SqlExecutor = {
 };
 
 let cached: Promise<LeadSchemaState> | null = null;
+let sheetReady: Promise<void> | null = null;
 
 export function resetLeadSchemaCache() {
   cached = null;
+  sheetReady = null;
 }
 
 export function ensureLeadSchema(executor?: SqlExecutor): Promise<LeadSchemaState> {
@@ -489,28 +495,78 @@ async function ensureLastLogin(executor: SqlExecutor) {
   await ensureColumn(executor, 'crm_users', 'last_login_at', 'VARCHAR(24) NULL');
 }
 
-async function ensureSheetIndex(executor: SqlExecutor) {
+/**
+ * Keys stay inside the 767-byte utf8mb4 limit (MySQL 5.7 without large prefixes):
+ * sheet_key is CHAR(64); (source_id VARCHAR(40), row_key_hash CHAR(64)) is 104
+ * characters. The stored row_key itself is not indexed. MySQL has no
+ * CREATE INDEX IF NOT EXISTS, so the ALTER form is the fallback.
+ */
+export const SHEET_SOURCES_DDL = `CREATE TABLE IF NOT EXISTS crm_sheet_sources (
+  id VARCHAR(40) NOT NULL PRIMARY KEY,
+  sheet_id VARCHAR(100) NOT NULL,
+  gid VARCHAR(20) NOT NULL DEFAULT '',
+  label VARCHAR(40) NOT NULL,
+  campaign VARCHAR(60) NOT NULL,
+  mapping LONGTEXT NOT NULL,
+  headers LONGTEXT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_run VARCHAR(40) NULL,
+  last_result LONGTEXT NULL,
+  last_run_at VARCHAR(40) NULL,
+  rows_read INTEGER NULL,
+  \`created\` INTEGER NULL,
+  existing INTEGER NULL,
+  skipped INTEGER NULL,
+  error_message LONGTEXT NULL,
+  created_at VARCHAR(40) NULL,
+  updated_at VARCHAR(40) NULL,
+  sheet_key CHAR(64) NULL
+)`;
+
+export const SHEET_ROWS_DDL = `CREATE TABLE IF NOT EXISTS crm_sheet_rows (
+  id VARCHAR(40) NOT NULL PRIMARY KEY,
+  source_id VARCHAR(40) NOT NULL,
+  row_key VARCHAR(255) NOT NULL,
+  row_key_hash CHAR(64) NULL,
+  lead_id VARCHAR(40) NULL,
+  status VARCHAR(20) NULL,
+  created_at VARCHAR(40) NULL
+)`;
+
+export const SHEET_LOCK_DDL = `CREATE TABLE IF NOT EXISTS crm_sheet_sync_lock (
+  id VARCHAR(40) NOT NULL PRIMARY KEY,
+  locked_until VARCHAR(40) NOT NULL,
+  token VARCHAR(40) NOT NULL
+)`;
+
+export const SHEET_ROW_INDEX_DDL = 'CREATE UNIQUE INDEX IF NOT EXISTS crm_sheet_rows_source_key ON crm_sheet_rows (source_id, row_key_hash)';
+export const SHEET_ROW_INDEX_ALTER = 'ALTER TABLE crm_sheet_rows ADD UNIQUE INDEX crm_sheet_rows_source_key (source_id, row_key_hash)';
+export const SHEET_SOURCE_INDEX_DDL = 'CREATE UNIQUE INDEX IF NOT EXISTS crm_sheet_sources_sheet_key ON crm_sheet_sources (sheet_key)';
+export const SHEET_SOURCE_INDEX_ALTER = 'ALTER TABLE crm_sheet_sources ADD UNIQUE INDEX crm_sheet_sources_sheet_key (sheet_key)';
+
+async function ensureUniqueIndex(executor: SqlExecutor, createSql: string, alterSql: string) {
   try {
-    await run(executor, 'CREATE UNIQUE INDEX IF NOT EXISTS crm_sheet_rows_source_key ON crm_sheet_rows (source_id, row_key)');
+    await run(executor, createSql);
   } catch (error) {
     if (/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(error))) return;
     try {
-      await run(executor, 'ALTER TABLE crm_sheet_rows ADD UNIQUE INDEX crm_sheet_rows_source_key (source_id, row_key)');
+      await run(executor, alterSql);
     } catch (fallback) {
-      if (!/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(fallback))) {
-        console.error('sheet row index was not added', fallback);
-      }
+      if (/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(fallback))) return;
+      console.error('sheet index was not added', fallback);
+      throw fallback;
     }
   }
 }
 
 const SHEET_SOURCE_STATS: [string, string][] = [
-  ['last_run_at', 'TEXT NULL'],
+  ['last_run_at', 'VARCHAR(40) NULL'],
   ['rows_read', 'INTEGER NULL'],
   ['created', 'INTEGER NULL'],
   ['existing', 'INTEGER NULL'],
   ['skipped', 'INTEGER NULL'],
-  ['error_message', 'TEXT NULL'],
+  ['error_message', 'LONGTEXT NULL'],
+  ['sheet_key', 'CHAR(64) NULL'],
 ];
 
 async function ensureSheetSourceStats(executor: SqlExecutor) {
@@ -552,7 +608,7 @@ async function alignTiktokSheetSource(executor: SqlExecutor) {
     await run(
       executor,
       `UPDATE crm_sheet_sources
-       SET sheet_id = ?, gid = ?, label = ?, campaign = ?, mapping = ?, headers = ?, enabled = 1, updated_at = ?
+       SET sheet_id = ?, gid = ?, label = ?, campaign = ?, mapping = ?, headers = ?, enabled = 1, updated_at = ?, sheet_key = ?
        WHERE id = ?`,
       [
         seed.sheetId,
@@ -562,6 +618,7 @@ async function alignTiktokSheetSource(executor: SqlExecutor) {
         JSON.stringify(seed.mapping),
         JSON.stringify(seed.headers),
         now,
+        sheetSourceKey(seed.sheetId, seed.gid),
         targetId,
       ]
     );
@@ -586,11 +643,17 @@ async function alignTiktokSheetSource(executor: SqlExecutor) {
     await retarget(idOf(target));
     return;
   }
+  await insertTiktokSeed(executor);
+}
+
+async function insertTiktokSeed(executor: SqlExecutor) {
+  const seed = tiktokSheetSeed();
+  const now = new Date().toISOString();
   await run(
     executor,
     `INSERT INTO crm_sheet_sources (
-      id, sheet_id, gid, label, campaign, mapping, headers, enabled, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, sheet_id, gid, label, campaign, mapping, headers, enabled, created_at, updated_at, sheet_key
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       seed.id,
       seed.sheetId,
@@ -602,8 +665,22 @@ async function alignTiktokSheetSource(executor: SqlExecutor) {
       seed.enabled,
       now,
       now,
+      sheetSourceKey(seed.sheetId, seed.gid),
     ]
   );
+}
+
+async function backfillSheetKeys(executor: SqlExecutor) {
+  const rows = rowsOf(await run(executor, 'SELECT id, sheet_id, gid, sheet_key FROM crm_sheet_sources'));
+  for (const row of rows) {
+    if (String(row.sheet_key ?? '').trim()) continue;
+    const id = String(row.id ?? '');
+    if (!id) continue;
+    await run(executor, 'UPDATE crm_sheet_sources SET sheet_key = ? WHERE id = ?', [
+      sheetSourceKey(String(row.sheet_id ?? ''), String(row.gid ?? '')),
+      id,
+    ]);
+  }
 }
 
 /**
@@ -612,70 +689,66 @@ async function alignTiktokSheetSource(executor: SqlExecutor) {
  * An older or mismatched gid on the seeded row is retargeted.
  */
 async function ensureSheetSyncSchema(executor: SqlExecutor) {
-  try {
-    await run(
-      executor,
-      `CREATE TABLE IF NOT EXISTS crm_sheet_sources (
-        id TEXT PRIMARY KEY,
-        sheet_id TEXT NOT NULL,
-        gid TEXT NULL,
-        label TEXT NOT NULL,
-        campaign TEXT NOT NULL,
-        mapping TEXT NOT NULL,
-        headers TEXT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        last_run TEXT NULL,
-        last_result TEXT NULL,
-        last_run_at TEXT NULL,
-        rows_read INTEGER NULL,
-        created INTEGER NULL,
-        existing INTEGER NULL,
-        skipped INTEGER NULL,
-        error_message TEXT NULL,
-        created_at TEXT NULL,
-        updated_at TEXT NULL
-      )`
-    );
-    await run(
-      executor,
-      `CREATE TABLE IF NOT EXISTS crm_sheet_rows (
-        id TEXT PRIMARY KEY,
-        source_id TEXT NOT NULL,
-        row_key TEXT NOT NULL,
-        lead_id TEXT NULL,
-        status TEXT NULL,
-        created_at TEXT NULL
-      )`
-    );
-    await run(
-      executor,
-      `CREATE TABLE IF NOT EXISTS crm_sheet_sync_lock (
-        id TEXT PRIMARY KEY,
-        locked_until TEXT NOT NULL,
-        token TEXT NOT NULL
-      )`
-    );
-  } catch (error) {
-    console.error('sheet sync tables were not created', error);
-    return;
+  for (const sql of [SHEET_SOURCES_DDL, SHEET_ROWS_DDL, SHEET_LOCK_DDL]) {
+    try {
+      await run(executor, sql);
+    } catch (error) {
+      console.error('sheet sync table was not created', error);
+      throw error;
+    }
   }
-  await ensureSheetIndex(executor);
+  await ensureSheetSourceStats(executor);
+  await ensureColumn(executor, 'crm_sheet_rows', 'row_key_hash', 'CHAR(64) NULL');
   try {
-    await ensureSheetSourceStats(executor);
+    await backfillSheetKeys(executor);
   } catch (error) {
-    console.error('sheet source stats columns were not added', error);
+    console.error('sheet source keys were not filled', error);
+    throw error;
   }
+  await ensureUniqueIndex(executor, SHEET_ROW_INDEX_DDL, SHEET_ROW_INDEX_ALTER);
+  await ensureUniqueIndex(executor, SHEET_SOURCE_INDEX_DDL, SHEET_SOURCE_INDEX_ALTER);
   try {
     await alignTiktokSheetSource(executor);
   } catch (error) {
     if (/duplicate|UNIQUE|ER_DUP_ENTRY/i.test(messageOf(error))) return;
     console.error('tiktok sheet seed skipped', error);
+    throw error;
+  }
+}
+
+/** Creates the sheet tables. A failure is not cached, so the next call tries again. */
+export function ensureSheetSchema(executor?: SqlExecutor): Promise<void> {
+  if (sheetReady) return sheetReady;
+  let pending: Promise<void>;
+  pending = (async () => {
+    const ex = executor ?? (await defaultExecutor());
+    await ensureSheetSyncSchema(ex);
+  })();
+  sheetReady = pending;
+  return pending.catch(error => {
+    if (sheetReady === pending) sheetReady = null;
+    throw error;
+  });
+}
+
+/** Inserts the TikTok sheet only when the source table has no rows. */
+export async function seedTiktokSheetSourceIfEmpty(executor?: SqlExecutor) {
+  const ex = executor ?? (await defaultExecutor());
+  await ensureSheetSchema(ex);
+  const rows = rowsOf(await run(ex, 'SELECT id FROM crm_sheet_sources LIMIT 1'));
+  if (rows.length) return false;
+  try {
+    await insertTiktokSeed(ex);
+    return true;
+  } catch (error) {
+    if (/duplicate|UNIQUE|ER_DUP_ENTRY/i.test(messageOf(error))) return false;
+    throw error;
   }
 }
 
 async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
   try {
-    await ensureSheetSyncSchema(executor);
+    await ensureSheetSchema(executor);
   } catch (error) {
     console.error('sheet sync schema check failed', error);
   }

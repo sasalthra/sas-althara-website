@@ -197,7 +197,7 @@ try {
     b.onResolve({filter: /[\\/]crm-db$/}, () => ({path: 'db', namespace: 'test'}));
     b.onLoad({filter: /.*/, namespace: 'test'}, args => ({loader: 'js', contents: args.path === 'auth'
       ? 'export async function getCrmUser(){return globalThis.assistantUser}'
-      : `export function crmDb(){return {prepare(sql){let args=[];return {bind(...v){args=v;return this},async all(){if(sql.includes('lead_activity'))return {results:[]};if(sql.includes('FROM crm_users'))return {results:globalThis.assistantUsers||[]};if(sql.includes('site_properties'))return {results:[]};if(sql.includes('FROM leads'))return {results:globalThis.assistantLeads||[]};return {results:[]}},async first(){if(sql.includes('SUM('))throw Error('no spend column');if(sql.includes('ai_settings'))return globalThis.assistantConfig;if(sql.includes('ai_usage'))return {requests:1};return null},async run(){globalThis.assistantWrites.push({sql,args});return {meta:{changes:1}}}}}}}; export async function crmTransaction(fn){return fn(crmDb())}`}));
+      : `export function crmDb(){return {prepare(sql){let args=[];return {bind(...v){args=v;return this},async all(){if(sql.includes('lead_activity'))return {results:[]};if(sql.includes('FROM crm_users'))return {results:globalThis.assistantUsers||[]};if(sql.includes('site_properties'))return {results:[]};if(sql.includes('FROM leads'))return {results:globalThis.assistantLeads||[]};return {results:[]}},async first(){if(sql.includes('SUM('))throw Error('no spend column');if(sql.includes('ai_settings'))return globalThis.assistantConfig;if(sql.includes('ai_usage'))return {requests:1};return null},async run(){if(globalThis.assistantDbError&&String(sql).includes('ai_settings'))throw globalThis.assistantDbError;globalThis.assistantWrites.push({sql,args});return {meta:{changes:1}}}}}}}; export async function crmTransaction(fn){return fn(crmDb())}`}));
   }};
   process.env.NEXTAUTH_URL = 'https://sas.test';
   globalThis.assistantLeads = scriptedLeads;
@@ -297,6 +297,31 @@ try {
   assert.equal(secretWrite.args.includes('test-provider-key-not-real'), false);
   delete process.env.APP_ENCRYPTION_KEY;
   console.log('PASS provider save names a missing encryption key and still stores ciphertext');
+
+  process.env.APP_ENCRYPTION_KEY = Buffer.alloc(32, 4).toString('base64');
+  globalThis.assistantUser = {userId: 'admin-user', role: 'admin', name: 'إدارة'};
+  globalThis.assistantDbError = Object.assign(new Error("Table 'synthetic.ai_settings' doesn't exist"), {
+    code: 'ER_NO_SUCH_TABLE',
+    errno: 1146,
+    sqlMessage: "Table 'synthetic.ai_settings' doesn't exist",
+    sql: 'INSERT INTO ai_settings secret',
+  });
+  const dbFail = await settings.POST(request({provider: 'openai', model: 'sas_althra_ai', apiKey: 'test-provider-key-not-real'}));
+  const dbBody = await dbFail.json();
+  assert.equal(dbFail.status, 503);
+  assert.match(dbBody.error, /ER_NO_SUCH_TABLE/);
+  assert.match(dbBody.error, /ai_settings/);
+  assert.equal(dbBody.error.includes('لم يتم تأكيد الحفظ'), false);
+  assert.equal(dbBody.error.includes('secret'), false);
+  globalThis.assistantUser = {userId: 'sales-user', role: 'sales', name: 'مندوب'};
+  const hidden = await settings.POST(request({provider: 'openai', model: 'sas_althra_ai', apiKey: 'test-provider-key-not-real'}));
+  const hiddenBody = await hidden.json();
+  assert.equal(hidden.status, 403);
+  assert.equal(hiddenBody.error.includes('ER_NO_SUCH_TABLE'), false);
+  globalThis.assistantDbError = null;
+  globalThis.assistantUser = {userId: 'admin-user', role: 'admin', name: 'إدارة'};
+  delete process.env.APP_ENCRYPTION_KEY;
+  console.log('PASS provider save shows the database code to an admin only');
 
   const envKey = 'sk-env-test-key-not-real';
   const warnings = [];

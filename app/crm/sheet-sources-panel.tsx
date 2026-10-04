@@ -76,7 +76,7 @@ function summarize(source: SheetSource) {
 function healthLine(source: SheetSource) {
   const when = source.lastRunAt || source.lastRun;
   const label = source.label || DEFAULT_SHEET_LABEL;
-  if (!when && !source.errorMessage) return `${label}: لم تُسجَّل مزامنة بعد.`;
+  if (!when && !source.errorMessage) return `${label}: لم تتم أي مزامنة بعد`;
   const error = source.errorMessage ? ` الخطأ: ${source.errorMessage}` : ' لا يوجد خطأ.';
   return `${label}: آخر تشغيل ${riyadh(when)} — قُرئ ${source.rowsRead ?? 0}، جديد ${source.created ?? 0}، موجود ${source.existing ?? 0}، متخطى ${source.skipped ?? 0}.${error}`;
 }
@@ -206,15 +206,38 @@ export default function SheetSourcesPanel() {
       const nextSteps = Array.isArray(data.steps) ? data.steps as SyncStep[] : [];
       setSteps(nextSteps);
       if (data.skipped && data.reason) {
-        setMessage(data.reason);
+        setMessage(`${data.seeded ? 'أُضيفت ورقة تيك توك. ' : ''}${data.reason}`);
         return;
       }
       const errorText = data.errorMessage || (Array.isArray(data.errors) ? data.errors.filter(Boolean)[0] : '');
+      const seededNote = data.seeded ? 'أُضيفت ورقة تيك توك. ' : '';
       setMessage(
-        `آخر مزامنة: قُرئ ${data.rowsRead ?? 0}، جديد ${data.created ?? data.inserted ?? 0}، موجود ${data.existing ?? data.duplicates ?? 0}، متخطى ${data.skippedRows ?? 0}${errorText ? `. ${errorText}` : ''}`
+        `${seededNote}آخر مزامنة: قُرئ ${data.rowsRead ?? 0}، جديد ${data.created ?? data.inserted ?? 0}، موجود ${data.existing ?? data.duplicates ?? 0}، متخطى ${data.skippedRows ?? 0}${errorText ? `. ${errorText}` : ''}`
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'تعذرت المزامنة');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function diagnose() {
+    setBusy(true);
+    setMessage('');
+    try {
+      const response = await fetch('/api/integrations/sheet-sources/diagnose', {method: 'POST'});
+      const data = await response.json();
+      if (!response.ok) throw Error(data.error || 'تعذر فحص قاعدة البيانات');
+      const tables = data.tables || {};
+      const names = ['crm_sheet_sources', 'crm_sheet_rows', 'crm_sheet_sync_lock'];
+      const list = names.map(name => `${name}: ${tables[name] ? 'موجود' : 'غير موجود'}`).join('، ');
+      const probe = data.insert === 'rolled-back' && !data.persisted
+        ? 'تم إدراج صف تجريبي ثم التراجع عنه'
+        : `الإدراج التجريبي: ${data.insert || 'غير معروف'}${data.persisted ? '، وبقي الصف بعد التراجع' : ''}`;
+      setMessage(`إصدار قاعدة البيانات: ${data.version || 'غير معروف'}. ${list}. ${probe}.`);
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'تعذر فحص قاعدة البيانات');
     } finally {
       setBusy(false);
     }
@@ -230,7 +253,7 @@ export default function SheetSourcesPanel() {
       if (!response.ok) throw Error(data.error || 'تعذر الحذف');
       if (editing === id) resetForm();
       await load();
-      setMessage('حُذف المصدر. إن لم يبقَ أي مصدر، يُعاد جدول تيك توك المبدئي بعد إعادة تشغيل التطبيق.');
+      setMessage('حُذف المصدر. إن لم يبقَ أي مصدر، «مزامنة الآن» يعيد ورقة تيك توك ثم يسحبها.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'تعذر الحذف');
     } finally {
@@ -253,13 +276,14 @@ export default function SheetSourcesPanel() {
         {status && status.intervalMs > 0
           ? `المزامنة التلقائية تعمل كل ${minutes} دقائق تقريباً ما دام تطبيق Node يعمل، وتبدأ بعد نحو 20 ثانية من التشغيل.`
           : 'المزامنة داخل عملية Node متوقفة. يعتمد السحب على كرون الاستضافة فقط.'}
-        {' '}مفتاح الجدولة: {status ? (status.cronReady ? 'مضبوط' : 'غير مضبوط') : '…'}
-        {' '}— حساب خدمة للجداول الخاصة: {status ? (status.serviceAccount ? 'مضبوط' : 'غير مضبوط، والجداول العامة تُقرأ بدون حساب') : '…'}.
+        {' '}مفتاح الجدولة: {status ? (status.cronReady ? 'مضبوط' : 'غير مضبوط') : 'لم تُحمَّل الحالة'}
+        {' '}— حساب خدمة للجداول الخاصة: {status ? (status.serviceAccount ? 'مضبوط' : 'غير مضبوط، والجداول العامة تُقرأ بدون حساب') : 'لم تُحمَّل الحالة'}.
       </p>
       <p data-sheet-health role="status">
-        صحة المزامنة: {!status ? '…' : status.sources.length ? status.sources.map(healthLine).join(' ') : 'لا يوجد مصدر بعد.'}
+        صحة المزامنة: {!status ? (message || 'لم تتم أي مزامنة بعد') : status.sources.length ? status.sources.map(healthLine).join(' ') : 'لم تتم أي مزامنة بعد'}
       </p>
-      <button type="button" className="primary" disabled={busy} onClick={() => void syncNow()}>مزامنة الآن</button>
+      <button type="button" className="primary" disabled={busy} onClick={() => void syncNow()}>مزامنة الآن</button>{' '}
+      <button type="button" disabled={busy} onClick={() => void diagnose()}>فحص قاعدة البيانات</button>
       <p role="status">{message}</p>
       {steps.length ? (
         <ol>
@@ -287,7 +311,7 @@ export default function SheetSourcesPanel() {
             </article>
           ))}
         </div>
-      ) : <p>لا توجد مصادر بعد. أضف رابط الجدول أدناه، أو أعد تشغيل التطبيق ليظهر جدول تيك توك المبدئي.</p>}
+      ) : <p>لا توجد مصادر بعد. أضف رابط الجدول أدناه، أو اضغط «مزامنة الآن» ليُضاف جدول تيك توك ثم يُسحب.</p>}
       <form className="fields" onSubmit={event => void save(event)}>
         <h3>{editing ? 'تعديل مصدر' : 'إضافة مصدر'}</h3>
         <label>رابط الجدول أو معرفه<input required value={sheetUrl} onChange={event => setSheetUrl(event.target.value)} placeholder="https://docs.google.com/spreadsheets/d/…/edit" maxLength={500}/></label>

@@ -182,7 +182,7 @@ try {
   await page.locator('[name=jobTitle]').fill('لن يحفظ');
   await page.locator('.hr-check input').check();
   await page.getByRole('button', { name: 'حفظ الملف والدوام', exact: true }).click();
-  await page.getByRole('status').filter({ hasText: 'لم يتم تأكيد الحفظ' }).waitFor();
+  await page.getByRole('status').filter({ hasText: 'Synthetic audit unavailable' }).waitFor();
   assert.equal(traffic.at(-1).status, 503);
   assert.equal(profile().job_title, 'مسمى محدث', 'audit failure rolls back profile update');
   failAudit = false;
@@ -199,7 +199,7 @@ try {
   assert.equal(profile().job_title, 'حفظ مع فشل القراءة');
   assert.equal(traffic.at(-1).status, 503);
   await page.reload();
-  await page.getByRole('alert').filter({ hasText: 'لم يتم تأكيد الحفظ' }).waitFor();
+  await page.getByRole('alert').filter({ hasText: 'end_date' }).waitFor();
   assert.equal(await page.locator('.hr-employee-form').count(), 0, 'failed GET is not empty successful state');
   sql.exec('ALTER TABLE hr_requests ADD COLUMN end_date TEXT');
   await page.getByRole('button', { name: 'تحديث البيانات', exact: true }).click();

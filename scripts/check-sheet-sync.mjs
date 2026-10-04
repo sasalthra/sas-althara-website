@@ -167,9 +167,21 @@ try {
   assert.equal(seededHeaders[seededMapping.name], 'الاسم');
   assert.equal(seededHeaders[seededMapping.leadId], 'TikTok Lead ID');
   const statColumns = mem.prepare('PRAGMA table_info(crm_sheet_sources)').all().map(row => row.name);
-  for (const name of ['last_run_at', 'rows_read', 'created', 'existing', 'skipped', 'error_message']) {
+  for (const name of ['last_run_at', 'rows_read', 'created', 'existing', 'skipped', 'error_message', 'sheet_key']) {
     assert.equal(statColumns.includes(name), true, name);
   }
+  const sourceDdl = mem.prepare("SELECT sql FROM sqlite_master WHERE name='crm_sheet_sources'").get().sql;
+  const rowDdl = mem.prepare("SELECT sql FROM sqlite_master WHERE name='crm_sheet_rows'").get().sql;
+  const rowIndex = mem.prepare("SELECT sql FROM sqlite_master WHERE name='crm_sheet_rows_source_key'").get().sql;
+  assert.match(sourceDdl, /VARCHAR\(40\)/);
+  assert.match(sourceDdl, /LONGTEXT/);
+  assert.match(sourceDdl, /sheet_key/);
+  assert.doesNotMatch(sourceDdl, /TEXT PRIMARY KEY/i);
+  assert.match(rowDdl, /row_key_hash/);
+  assert.doesNotMatch(rowDdl, /TEXT PRIMARY KEY/i);
+  assert.match(rowIndex, /row_key_hash/);
+  assert.doesNotMatch(rowIndex, /row_key\)/);
+  assert.match(mem.prepare("SELECT sheet_key FROM crm_sheet_sources WHERE id='tiktok-leads-1'").get().sheet_key, /^[a-f0-9]{64}$/);
   schema.resetLeadSchemaCache();
   await schema.ensureLeadSchema(sqliteExecutor(mem));
   assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM crm_sheet_sources').get().n, 1);
@@ -208,6 +220,60 @@ try {
   assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM crm_sheet_rows WHERE source_id = 'tiktok-leads-1'").get().n, 0);
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='crm_sheet_rows'").get().name, 'crm_sheet_rows');
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='crm_sheet_sync_lock'").get().name, 'crm_sheet_sync_lock');
+  const portable = [schema.SHEET_SOURCES_DDL, schema.SHEET_ROWS_DDL, schema.SHEET_LOCK_DDL, schema.SHEET_ROW_INDEX_DDL, schema.SHEET_SOURCE_INDEX_DDL].join('\n');
+  assert.doesNotMatch(portable, /TEXT\s+PRIMARY\s+KEY/i);
+  assert.doesNotMatch(portable, /\bJSON\b/);
+  assert.doesNotMatch(portable, /\bDATETIME\b/i);
+  assert.doesNotMatch(portable, /CURRENT_TIMESTAMP/i);
+  assert.doesNotMatch(portable, /FOREIGN\s+KEY/i);
+  assert.match(schema.SHEET_SOURCES_DDL, /mapping LONGTEXT/);
+  assert.match(schema.SHEET_SOURCES_DDL, /sheet_key CHAR\(64\)/);
+  assert.match(schema.SHEET_ROWS_DDL, /source_id VARCHAR\(40\)/);
+  assert.match(schema.SHEET_ROWS_DDL, /row_key VARCHAR\(255\)/);
+  assert.match(schema.SHEET_ROWS_DDL, /row_key_hash CHAR\(64\)/);
+  assert.match(schema.SHEET_ROW_INDEX_DDL, /\(source_id, row_key_hash\)/);
+  assert.doesNotMatch(schema.SHEET_ROW_INDEX_DDL, /row_key\)/);
+  assert.ok(40 + 64 < 191);
+  assert.ok((40 + 64) * 4 < 767);
+  schema.resetLeadSchemaCache();
+  const mysqlCalls = [];
+  let creates = 0;
+  const mysqlish = {async execute(sql, values = []) {
+    const text = String(sql).trim();
+    mysqlCalls.push({sql: text, values});
+    if (/TEXT\s+PRIMARY\s+KEY/i.test(text)) {
+      const error = new Error("BLOB/TEXT column 'id' used in key specification without a key length");
+      error.code = 'ER_BLOB_KEY_WITHOUT_LENGTH';
+      error.errno = 1170;
+      error.sqlMessage = error.message;
+      throw error;
+    }
+    if (/\bJSON\b/.test(text) || /\bDATETIME\b/i.test(text) || /CURRENT_TIMESTAMP/i.test(text)) {
+      throw Object.assign(new Error('unsupported column type'), {code: 'ER_PARSE_ERROR'});
+    }
+    if (text.startsWith('CREATE TABLE IF NOT EXISTS crm_sheet_sources') && creates++ === 0) {
+      const error = new Error("BLOB/TEXT column 'id' used in key specification without a key length");
+      error.code = 'ER_BLOB_KEY_WITHOUT_LENGTH';
+      error.errno = 1170;
+      error.sqlMessage = error.message;
+      throw error;
+    }
+    if (/CREATE\s+UNIQUE\s+INDEX\s+IF\s+NOT\s+EXISTS/i.test(text)) {
+      throw Object.assign(new Error('You have an error in your SQL syntax'), {code: 'ER_PARSE_ERROR', errno: 1064});
+    }
+    if (text.startsWith('SHOW')) return [[]];
+    if (text.startsWith('SELECT')) return [[]];
+    return [{affectedRows: 0}];
+  }};
+  await assert.rejects(() => schema.ensureSheetSchema(mysqlish), /key specification/);
+  await schema.ensureSheetSchema(mysqlish);
+  assert.ok(mysqlCalls.some(call => call.sql.startsWith('CREATE TABLE IF NOT EXISTS crm_sheet_sources') && /VARCHAR\(40\)/.test(call.sql)));
+  assert.ok(mysqlCalls.some(call => call.sql === schema.SHEET_ROW_INDEX_ALTER));
+  assert.ok(mysqlCalls.some(call => call.sql === schema.SHEET_SOURCE_INDEX_ALTER));
+  assert.ok(mysqlCalls.some(call => call.sql.startsWith('INSERT INTO crm_sheet_sources') && call.values.includes(config.TIKTOK_SHEET_GID)));
+  assert.equal(mysqlCalls.some(call => /ON crm_sheet_rows \(source_id, row_key\)/.test(call.sql)), false);
+  schema.resetLeadSchemaCache();
+  console.log('PASS sheet DDL is portable and a failed create is retried');
 
   const source = {
     id: 'sheet-test',
@@ -553,8 +619,8 @@ try {
   jobDb.exec(`CREATE TABLE leads(id TEXT PRIMARY KEY, owner TEXT, created_by TEXT, assigned_to TEXT, field_assigned_to TEXT, name TEXT, phone TEXT, property_id TEXT, property_other TEXT, source TEXT, stage TEXT, notes TEXT, follow_up TEXT, created_at TEXT, updated_at TEXT, is_featured INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE crm_users(id TEXT PRIMARY KEY, name TEXT, email TEXT, role TEXT, active INTEGER, created_at TEXT, phone TEXT, last_login_at TEXT);
-    CREATE TABLE crm_sheet_sources(id TEXT PRIMARY KEY, sheet_id TEXT NOT NULL, gid TEXT, label TEXT NOT NULL, campaign TEXT NOT NULL, mapping TEXT NOT NULL, headers TEXT, enabled INTEGER NOT NULL DEFAULT 1, last_run TEXT, last_result TEXT, created_at TEXT, updated_at TEXT);
-    CREATE TABLE crm_sheet_rows(id TEXT PRIMARY KEY, source_id TEXT NOT NULL, row_key TEXT NOT NULL, lead_id TEXT, status TEXT, created_at TEXT);
+    CREATE TABLE crm_sheet_sources(id TEXT PRIMARY KEY, sheet_id TEXT NOT NULL, gid TEXT, label TEXT NOT NULL, campaign TEXT NOT NULL, mapping TEXT NOT NULL, headers TEXT, enabled INTEGER NOT NULL DEFAULT 1, last_run TEXT, last_result TEXT, created_at TEXT, updated_at TEXT, sheet_key TEXT);
+    CREATE TABLE crm_sheet_rows(id TEXT PRIMARY KEY, source_id TEXT NOT NULL, row_key TEXT NOT NULL, row_key_hash TEXT, lead_id TEXT, status TEXT, created_at TEXT);
     CREATE UNIQUE INDEX crm_sheet_rows_source_key ON crm_sheet_rows (source_id, row_key);
     CREATE TABLE crm_sheet_sync_lock(id TEXT PRIMARY KEY, locked_until TEXT NOT NULL, token TEXT NOT NULL);`);
   jobDb.prepare(`INSERT INTO crm_users (id, name, email, role, active, created_at) VALUES ('admin-1', 'إدارة', 'ops@sas.test', 'admin', 1, '2020-01-01')`).run();
@@ -686,6 +752,130 @@ try {
   assert.equal(globalThis.sentMail.some(msg => msg.subject === 'إعادة تسجيل 6 عملاء'), false);
   jobDb.close();
   console.log('PASS first sheet sync is a count summary, and a later run batches re-registration mail');
+
+  const saveDb = new DatabaseSync(':memory:');
+  globalThis.sheetSaveDb = saveDb;
+  globalThis.sheetSaveUser = {userId: 'admin-1', role: 'admin', name: 'إدارة'};
+  globalThis.sheetSaveBoom = false;
+  const runSql = async (sql, values = []) => {
+    const text = String(sql).trim();
+    if (/^SELECT\s+VERSION\(\)/i.test(text)) return [[{version: '10.4.28-MariaDB'}]];
+    if (text.startsWith('SHOW')) throw Error('near SHOW: syntax error');
+    if (globalThis.sheetSaveBoom && values.some(value => String(value).includes('diag-not-real'))) {
+      const error = new Error("Table 'synthetic.crm_sheet_sources' doesn't exist");
+      error.code = 'ER_NO_SUCH_TABLE';
+      error.errno = 1146;
+      error.sqlMessage = error.message;
+      error.sql = 'INSERT secret-should-not-leak';
+      throw error;
+    }
+    if (globalThis.sheetSaveBoom && /INSERT INTO crm_sheet_sources/i.test(text) && values.some(value => value === 'failfailfailfailfailfailfail12')) {
+      const error = new Error("Table 'synthetic.crm_sheet_sources' doesn't exist");
+      error.code = 'ER_NO_SUCH_TABLE';
+      error.errno = 1146;
+      error.sqlMessage = error.message;
+      error.sql = 'INSERT secret-should-not-leak';
+      throw error;
+    }
+    if (text.startsWith('SELECT')) return [saveDb.prepare(text).all(...values)];
+    return [{affectedRows: Number(saveDb.prepare(text).run(...values).changes || 0)}];
+  };
+  const connection = {
+    async beginTransaction() { saveDb.exec('BEGIN'); },
+    async commit() { saveDb.exec('COMMIT'); },
+    async rollback() { saveDb.exec('ROLLBACK'); },
+    execute: runSql,
+    query: runSql,
+    release() {},
+  };
+  globalThis.sheetSavePool = {execute: runSql, query: runSql, async getConnection() { return connection; }};
+  Object.assign(process.env, {DB_HOST: 'synthetic', DB_USER: 'synthetic', DB_PASSWORD: 'synthetic', DB_NAME: 'synthetic', NEXTAUTH_URL: 'https://sas.test'});
+  await build({
+    entryPoints: ['app/api/integrations/sheet-sources/route.ts', 'app/api/integrations/sheet-sources/diagnose/route.ts'],
+    outdir: output,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    outExtension: {'.js': '.cjs'},
+    plugins: [{name: 'save-boundary', setup(b) {
+      b.onResolve({filter: /^server-only$/}, () => ({path: 'guard', namespace: 'save'}));
+      b.onResolve({filter: /^mysql2\/promise$/}, () => ({path: 'mysql', namespace: 'save'}));
+      b.onResolve({filter: /[\\/]admin$/}, () => ({path: 'admin', namespace: 'save'}));
+      b.onLoad({filter: /.*/, namespace: 'save'}, args => {
+        if (args.path === 'guard') return {loader: 'js', contents: ''};
+        if (args.path === 'mysql') return {loader: 'js', contents: 'export default {createPool(){return globalThis.sheetSavePool}}'};
+        return {loader: 'js', contents: 'export async function getCrmUser(){return globalThis.sheetSaveUser}'};
+      });
+    }}],
+  });
+  const saveRoute = require(join(output, 'route.cjs'));
+  const diagnoseRoute = require(join(output, 'diagnose/route.cjs'));
+  const postSource = body => new Request('https://sas.test/api/integrations/sheet-sources', {
+    method: 'POST',
+    headers: {origin: 'https://sas.test', 'content-type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  const sourceBody = {
+    sheetUrl: 'abcdefghijklmnopqrstuvwxyz12',
+    gid: '5',
+    label: 'اختبار',
+    campaign: '',
+    mapping: {name: 0, phone: 1},
+    headers: ['الاسم', 'رقم الجوال'],
+    enabled: true,
+  };
+  const saved = await saveRoute.POST(postSource(sourceBody));
+  const savedBody = await saved.json();
+  assert.equal(saved.status, 200, savedBody.error);
+  const savedRow = saveDb.prepare('SELECT sheet_id, gid, label, sheet_key FROM crm_sheet_sources WHERE id = ?').get(savedBody.id);
+  assert.equal(savedRow.sheet_id, 'abcdefghijklmnopqrstuvwxyz12');
+  assert.equal(savedRow.gid, '5');
+  assert.equal(savedRow.label, 'اختبار');
+  assert.match(savedRow.sheet_key, /^[a-f0-9]{64}$/);
+  assert.equal(saveDb.prepare("SELECT gid FROM crm_sheet_sources WHERE id = 'tiktok-leads-1'").get().gid, config.TIKTOK_SHEET_GID);
+  globalThis.sheetSaveUser = {userId: 'sales-1', role: 'sales', name: 'مندوب'};
+  globalThis.sheetSaveBoom = true;
+  const hidden = await saveRoute.POST(postSource({...sourceBody, sheetUrl: 'bbbbbbbbbbbbbbbbbbbbbbbbbb'}));
+  const hiddenBody = await hidden.json();
+  assert.equal(hidden.status, 403);
+  assert.equal(String(hiddenBody.error).includes('ER_NO_SUCH_TABLE'), false);
+  globalThis.sheetSaveUser = {userId: 'admin-1', role: 'admin', name: 'إدارة'};
+  const failed = await saveRoute.POST(postSource({...sourceBody, sheetUrl: 'failfailfailfailfailfailfail12'}));
+  const failedBody = await failed.json();
+  assert.equal(failed.status, 503);
+  assert.match(failedBody.error, /ER_NO_SUCH_TABLE/);
+  assert.match(failedBody.error, /crm_sheet_sources/);
+  assert.equal(failedBody.error.includes('لم يتم تأكيد الحفظ'), false);
+  assert.equal(failedBody.error.includes('secret-should-not-leak'), false);
+  globalThis.sheetSaveBoom = false;
+  const listed = await (await saveRoute.GET()).json();
+  assert.equal(listed.sources.some(source => source.id === 'tiktok-leads-1' && source.gid === config.TIKTOK_SHEET_GID), true);
+  const before = saveDb.prepare('SELECT COUNT(*) AS n FROM crm_sheet_sources').get().n;
+  const diagnosed = await diagnoseRoute.POST(new Request('https://sas.test/api/integrations/sheet-sources/diagnose', {
+    method: 'POST',
+    headers: {origin: 'https://sas.test'},
+  }));
+  const diagnosedBody = await diagnosed.json();
+  assert.equal(diagnosed.status, 200, diagnosedBody.error);
+  assert.equal(diagnosedBody.ok, true);
+  assert.equal(diagnosedBody.version, '10.4.28-MariaDB');
+  assert.equal(diagnosedBody.tables.crm_sheet_sources, true);
+  assert.equal(diagnosedBody.tables.crm_sheet_rows, true);
+  assert.equal(diagnosedBody.tables.crm_sheet_sync_lock, true);
+  assert.equal(diagnosedBody.insert, 'rolled-back');
+  assert.equal(diagnosedBody.persisted, false);
+  assert.equal(saveDb.prepare('SELECT COUNT(*) AS n FROM crm_sheet_sources').get().n, before);
+  globalThis.sheetSaveBoom = true;
+  const broken = await (await diagnoseRoute.POST(new Request('https://sas.test/api/integrations/sheet-sources/diagnose', {
+    method: 'POST',
+    headers: {origin: 'https://sas.test'},
+  }))).json();
+  assert.equal(broken.ok, false);
+  assert.match(broken.insert, /ER_NO_SUCH_TABLE/);
+  assert.equal(broken.insert.includes('secret-should-not-leak'), false);
+  assert.equal(saveDb.prepare('SELECT COUNT(*) AS n FROM crm_sheet_sources').get().n, before);
+  saveDb.close();
+  console.log('PASS sheet source save returns the database code and the diagnostic insert rolls back');
 } finally {
   rmSync(output, {recursive: true, force: true});
 }
