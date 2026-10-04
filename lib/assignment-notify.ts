@@ -8,9 +8,14 @@ import {
   fieldDispatchEmail,
   groupClientsByAssignee,
   normalizeEmail,
+  newLeadDigestEmail,
+  newLeadEmail,
+  reregistrationDigestEmail,
   reregistrationEmail,
+  sheetBackfillSummaryEmail,
   type AssignmentClient,
   type AssignmentEmployee,
+  type NewLeadMailInput,
 } from './assignment-email';
 import {leadSourceLabel, riyadhStamp} from './lead-reregistration';
 import {stageLabel} from './lead-stages';
@@ -184,5 +189,141 @@ export async function notifyReregistration(input: {
     await sendMail({to: adminTo, ...mail});
   } catch (error) {
     console.error('Reregistration email failed:', error);
+  }
+}
+
+export type NewLeadNotice = {
+  id: string;
+  name: string;
+  phone: string;
+  source: string;
+};
+
+function leadBase() {
+  return (process.env.NEXTAUTH_URL || '').replace(/\/$/, '');
+}
+
+function stampLead(lead: NewLeadNotice, when: string): NewLeadMailInput {
+  const base = leadBase();
+  return {
+    name: lead.name,
+    phone: lead.phone,
+    source: lead.source,
+    when,
+    url: `${base}/crm/leads/${lead.id}`,
+    distributeUrl: `${base}/crm?tab=leads`,
+  };
+}
+
+/** One email per new lead, or a single digest when a sync brings in more than five. */
+export async function notifyNewLeads(leads: NewLeadNotice[]) {
+  const fresh = leads.filter(lead => lead.id && lead.phone);
+  if (!fresh.length) return;
+  try {
+    const people = await loadPeople([]);
+    const adminTo = adminRecipientEmails(people);
+    if (!adminTo.length) {
+      console.warn('New lead admin email skipped; no admin recipients');
+      return;
+    }
+    const when = riyadhStamp();
+    const stamped = fresh.map(lead => stampLead(lead, when));
+    if (stamped.length > 5) {
+      await sendMail({to: adminTo, ...newLeadDigestEmail(stamped)});
+      return;
+    }
+    for (const lead of stamped) {
+      await sendMail({to: adminTo, ...newLeadEmail(lead)});
+    }
+  } catch (error) {
+    console.error('New lead email failed:', error);
+  }
+}
+
+export async function notifyNewLead(lead: NewLeadNotice) {
+  await notifyNewLeads([lead]);
+}
+
+export type SheetBackfillNotice = {
+  label: string;
+  campaign: string;
+  inserted: number;
+  duplicates: number;
+};
+
+/** Admins only. Replaces per-lead and re-registration mail for a source's first sync. */
+export async function notifySheetBackfillSummaries(items: SheetBackfillNotice[]) {
+  const fresh = items.filter(item => item.inserted > 0 || item.duplicates > 0);
+  if (!fresh.length) return;
+  const people = await loadPeople([]);
+  const adminTo = adminRecipientEmails(people);
+  if (!adminTo.length) {
+    console.warn('Sheet backfill summary skipped; no admin recipients');
+    return;
+  }
+  const when = riyadhStamp();
+  const url = `${leadBase()}/crm?tab=leads`;
+  for (const item of fresh) {
+    try {
+      await sendMail({to: adminTo, ...sheetBackfillSummaryEmail({...item, when, url})});
+    } catch (error) {
+      console.error('Sheet backfill summary failed:', error);
+    }
+  }
+}
+
+export async function notifyReregistrationBatch(
+  items: Array<{
+    lead: {id: string; name: string; phone: string; stage: string; assigned_to?: string | null};
+    source: string;
+    submittedName?: string | null;
+    submittedNotes?: string | null;
+    campaign?: string | null;
+  }>
+) {
+  if (!items.length) return;
+  if (items.length <= 5) {
+    for (const item of items) {
+      try {
+        await notifyReregistration(item);
+      } catch (error) {
+        console.error('Reregistration email failed:', error);
+      }
+    }
+    return;
+  }
+  try {
+    const people = await loadPeople(items.map(item => item.lead.assigned_to || ''));
+    const adminTo = adminRecipientEmails(people);
+    const when = riyadhStamp();
+    const base = leadBase();
+    const stamped = items.map(item => ({
+      name: item.lead.name,
+      phone: item.lead.phone,
+      stageLabel: stageLabel(item.lead.stage || ''),
+      sourceLabel: leadSourceLabel(item.source),
+      campaign: item.campaign,
+      submittedName: item.submittedName,
+      submittedNotes: item.submittedNotes,
+      url: `${base}/crm/leads/${item.lead.id}`,
+      when,
+    }));
+    if (adminTo.length) await sendMail({to: adminTo, ...reregistrationDigestEmail(stamped)});
+    const byRep = new Map<string, typeof stamped>();
+    items.forEach((item, index) => {
+      const assignedTo = item.lead.assigned_to?.trim() || '';
+      if (!assignedTo) return;
+      const list = byRep.get(assignedTo) || [];
+      list.push(stamped[index]);
+      byRep.set(assignedTo, list);
+    });
+    for (const [id, list] of byRep) {
+      const assignee = people.find(person => person.id === id);
+      const email = normalizeEmail(assignee?.email);
+      if (!email || !list.length) continue;
+      await sendMail({to: email, ...reregistrationDigestEmail(list)});
+    }
+  } catch (error) {
+    console.error('Reregistration digest failed:', error);
   }
 }

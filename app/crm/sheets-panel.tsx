@@ -2,6 +2,7 @@
 import {useState} from 'react';
 import {importFields,type Mapping} from '@/lib/lead-import';
 import {sheetConfigSchema,type SheetConfig} from '@/lib/sheets-policy';
+import SheetSourcesPanel from './sheet-sources-panel';
 
 type Status={config:SheetConfig|null;lastRun?:string;lastResult?:unknown;credentialsReady:boolean;schedulerReady:boolean};
 export default function SheetsPanel(){
@@ -30,7 +31,7 @@ export default function SheetsPanel(){
    if(!r.ok)throw Error(d.error);await load();setMessage('حُفظت الإعدادات وتمت قراءتها مجدداً. يلزم تفعيل الجدولة على الاستضافة لتعمل تلقائياً.');
   }catch(e){setMessage(e instanceof Error?e.message:'تعذر تنفيذ الطلب');}finally{setBusy(false);}
  }
- return <section dir="rtl" className="panel space-y-4"><h2>إعدادات Google Sheets</h2>
+ return <><SheetSourcesPanel/><section dir="rtl" className="panel space-y-4"><h2>إعدادات Google Sheets</h2>
   <p>استيراد عملاء جدد فقط، وليس مزامنة تعديلات أو حذف. ملف المعاملات المرجعي ليس مصدر العملاء تلقائياً. يلزم حساب خدمة بصلاحية قراءة ومصدر معتمد وجدولة على الاستضافة.</p>
   <button disabled={busy} onClick={()=>void perform('load')}>تحميل الإعدادات والحالة</button><p role="status">{message}</p>
   {status&&<div><p>وصول الخادم: {status.credentialsReady?'مضبوط — لم يُختبر الاتصال':'غير مضبوط'}؛ مفتاح الجدولة: {status.schedulerReady?'مضبوط — لا يثبت تشغيل المجدول':'غير مضبوط'}.</p><p>آخر تشغيل: {status.lastRun||'لم يسجل تشغيل'}</p><pre className="whitespace-pre-wrap">{status.lastResult?typeof status.lastResult==='string'?status.lastResult:JSON.stringify(status.lastResult,null,2):''}</pre></div>}
@@ -45,5 +46,5 @@ export default function SheetsPanel(){
    <button disabled={busy||!confirmed}>حفظ إعدادات المصدر</button>
   </form>
   <button disabled={busy||!status?.config?.enabled} onClick={()=>void perform('sync')}>تشغيل المصدر المحفوظ الآن مع تأكيد</button>
- </section>;
+ </section></>;
 }

@@ -231,6 +231,15 @@ try {
   assert.equal(created.duplicate, false);
   assert.equal(sql.prepare('SELECT phone, source FROM leads WHERE id=?').get(created.id).phone, '0552223344');
   assert.equal(sql.prepare('SELECT source FROM leads WHERE id=?').get(created.id).source, 'contact');
+  assert.equal(globalThis.sentMail.length, 1);
+  assert.match(globalThis.sentMail[0].subject, /عميل جديد سجل — بحاجة للتوزيع/);
+  assert.match(globalThis.sentMail[0].text, /0552223344/);
+  assert.match(globalThis.sentMail[0].text, /عميل الموقع/);
+  assert.match(globalThis.sentMail[0].text, /نموذج التواصل/);
+  assert.match(globalThis.sentMail[0].html, /#3F1A44/);
+  assert.match(globalThis.sentMail[0].html, /#d1d5db/);
+  assert.match(globalThis.sentMail[0].html, /color:#111/);
+  assert.equal(globalThis.sentMail[0].to.includes('ops@sas.test'), true);
 
   sql.prepare('UPDATE leads SET assigned_to=? WHERE id=?').run(sales, created.id);
   globalThis.sentMail = [];

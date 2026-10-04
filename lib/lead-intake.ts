@@ -1,5 +1,5 @@
 import {timingSafeEqual} from 'node:crypto';
-import {notifyReregistration} from './assignment-notify';
+import {notifyNewLead, notifyReregistration} from './assignment-notify';
 import {crmDb} from './crm-db';
 import {extractInboundLead, type InboundLead} from './inbound-lead';
 import {findLeadByNormalizedPhone, leadSourceLabel, noteReregistration} from './lead-reregistration';
@@ -149,6 +149,16 @@ export async function acceptInboundLead(body: unknown, fallbackSource: string): 
         })
       )
       .run();
+    try {
+      await notifyNewLead({
+        id,
+        name: lead.name,
+        phone,
+        source: [leadSourceLabel(lead.source), campaign].filter(Boolean).join(' — '),
+      });
+    } catch (error) {
+      console.error('new lead email failed', error);
+    }
     return {ok: true, id, duplicate: false};
   } catch (error) {
     console.error('inbound lead create failed', error);
