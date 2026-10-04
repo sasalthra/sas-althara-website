@@ -12,6 +12,7 @@ import {
   newLeadEmail,
   reregistrationDigestEmail,
   reregistrationEmail,
+  sheetBackfillSummaryEmail,
   type AssignmentClient,
   type AssignmentEmployee,
   type NewLeadMailInput,
@@ -241,6 +242,34 @@ export async function notifyNewLeads(leads: NewLeadNotice[]) {
 
 export async function notifyNewLead(lead: NewLeadNotice) {
   await notifyNewLeads([lead]);
+}
+
+export type SheetBackfillNotice = {
+  label: string;
+  campaign: string;
+  inserted: number;
+  duplicates: number;
+};
+
+/** Admins only. Replaces per-lead and re-registration mail for a source's first sync. */
+export async function notifySheetBackfillSummaries(items: SheetBackfillNotice[]) {
+  const fresh = items.filter(item => item.inserted > 0 || item.duplicates > 0);
+  if (!fresh.length) return;
+  const people = await loadPeople([]);
+  const adminTo = adminRecipientEmails(people);
+  if (!adminTo.length) {
+    console.warn('Sheet backfill summary skipped; no admin recipients');
+    return;
+  }
+  const when = riyadhStamp();
+  const url = `${leadBase()}/crm?tab=leads`;
+  for (const item of fresh) {
+    try {
+      await sendMail({to: adminTo, ...sheetBackfillSummaryEmail({...item, when, url})});
+    } catch (error) {
+      console.error('Sheet backfill summary failed:', error);
+    }
+  }
 }
 
 export async function notifyReregistrationBatch(

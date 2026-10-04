@@ -193,6 +193,9 @@ try {
   assert.match(readFileSync('app/api/cron/sheets-sync/route.ts', 'utf8'), /assertCron/);
   assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /مزامنة الآن/);
   assert.match(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /180_000|sheetsSyncIntervalMs/);
+  assert.match(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /notifySheetBackfillSummaries/);
+  assert.match(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /sourceAlreadySynced/);
+  assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /أول مزامنة/);
   console.log('PASS sheet mapping, row keys, seed, import once, duplicate phone, and cron secret');
 
   const mailDb = new DatabaseSync(':memory:');
@@ -260,13 +263,221 @@ try {
   assert.match(globalThis.sentMail[0].text, /دفعة 5/);
   assert.match(globalThis.sentMail[0].html, /#3F1A44/);
 
+  function addresses(msg) {
+    return (Array.isArray(msg.to) ? msg.to : [msg.to]).map(value => String(value));
+  }
+  function reregItem(id, name, phone, assigned) {
+    return {
+      lead: {id, name, phone, stage: 'contacted', assigned_to: assigned},
+      source: 'تيك توك — حملة',
+      submittedName: name,
+      campaign: 'حملة',
+    };
+  }
+  mailDb.prepare(`INSERT INTO crm_users (id, name, email, role, active, created_at) VALUES ('rep-a', 'مندوب أ', 'repa@sas.test', 'sales', 1, '2020-01-02')`).run();
+  mailDb.prepare(`INSERT INTO crm_users (id, name, email, role, active, created_at) VALUES ('rep-b', 'مندوب ب', 'repb@sas.test', 'sales', 1, '2020-01-03')`).run();
+
+  globalThis.sentMail = [];
+  const fiveRe = Array.from({length: 5}, (_, index) => reregItem(`r${index}`, `فردي ${index}`, `055400000${index}`, ''));
+  await notify.notifyReregistrationBatch(fiveRe);
+  assert.equal(globalThis.sentMail.length, 5);
+  assert.equal(globalThis.sentMail.every(msg => msg.subject.startsWith('إعادة تسجيل عميل —')), true);
+
+  globalThis.sentMail = [];
+  const sixRe = [
+    reregItem('a1', 'مندوب أ١', '0551110001', 'rep-a'),
+    reregItem('a2', 'مندوب أ٢', '0551110002', 'rep-a'),
+    reregItem('a3', 'مندوب أ٣', '0551110003', 'rep-a'),
+    reregItem('b1', 'مندوب ب١', '0551110004', 'rep-b'),
+    reregItem('b2', 'مندوب ب٢', '0551110005', 'rep-b'),
+    reregItem('u1', 'بلا تعيين', '0551110006', ''),
+  ];
+  await notify.notifyReregistrationBatch(sixRe);
+  assert.equal(globalThis.sentMail.length, 3);
+  const adminDigest = globalThis.sentMail.find(msg => msg.subject === 'إعادة تسجيل 6 عملاء');
+  const repAMail = globalThis.sentMail.find(msg => msg.to === 'repa@sas.test');
+  const repBMail = globalThis.sentMail.find(msg => msg.to === 'repb@sas.test');
+  assert.ok(adminDigest);
+  assert.equal(addresses(adminDigest).includes('ops@sas.test'), true);
+  assert.equal(addresses(adminDigest).includes('repa@sas.test'), false);
+  assert.match(adminDigest.text, /مندوب أ١/);
+  assert.match(adminDigest.text, /مندوب ب٢/);
+  assert.match(adminDigest.text, /بلا تعيين/);
+  assert.equal(repAMail.subject, 'إعادة تسجيل 3 عملاء');
+  assert.match(repAMail.text, /مندوب أ١/);
+  assert.match(repAMail.text, /0551110003/);
+  assert.doesNotMatch(repAMail.text, /مندوب ب١/);
+  assert.doesNotMatch(repAMail.text, /بلا تعيين/);
+  assert.equal(repBMail.subject, 'إعادة تسجيل 2 عملاء');
+  assert.match(repBMail.text, /مندوب ب١/);
+  assert.doesNotMatch(repBMail.text, /مندوب أ١/);
+  assert.match(repAMail.html, /#3F1A44/);
+  assert.match(repAMail.html, /#d1d5db/);
+
+  globalThis.sentMail = [];
+  await notify.notifySheetBackfillSummaries([{label: 'تيك توك', campaign: 'تمويل عقارى 4 نوفمبر', inserted: 2, duplicates: 3}]);
+  assert.equal(globalThis.sentMail.length, 1);
+  assert.equal(globalThis.sentMail[0].subject, 'ملخص أول مزامنة — 2 جدد، 3 موجودون');
+  assert.match(globalThis.sentMail[0].text, /عملاء جدد: 2/);
+  assert.match(globalThis.sentMail[0].text, /موجودون مسبقاً: 3/);
+  assert.match(globalThis.sentMail[0].text, /تيك توك/);
+  assert.match(globalThis.sentMail[0].text, /تمويل عقارى 4 نوفمبر/);
+  assert.match(globalThis.sentMail[0].text, /https:\/\/sas\.test\/crm\?tab=leads/);
+  assert.match(globalThis.sentMail[0].html, /#3F1A44/);
+  assert.match(globalThis.sentMail[0].html, /color:#111/);
+  assert.equal(addresses(globalThis.sentMail[0]).includes('ops@sas.test'), true);
+  assert.equal(addresses(globalThis.sentMail[0]).includes('repa@sas.test'), false);
+  globalThis.sentMail = [];
+  await notify.notifySheetBackfillSummaries([{label: 'فارغ', campaign: '', inserted: 0, duplicates: 0}]);
+  assert.equal(globalThis.sentMail.length, 0);
+
   globalThis.sentMail = [];
   globalThis.mailThrows = true;
   await notify.notifyNewLeads([{id: 'x', name: 'لن يُرسل', phone: '0551999999', source: 'تيك توك'}]);
+  await notify.notifySheetBackfillSummaries([{label: 'تيك توك', campaign: 'ح', inserted: 1, duplicates: 4}]);
+  await notify.notifyReregistrationBatch(sixRe);
   assert.equal(globalThis.sentMail.length, 0);
   globalThis.mailThrows = false;
   mailDb.close();
-  console.log('PASS new-lead mail, five separate emails, and one digest above five');
+  console.log('PASS new-lead mail, re-registration digest above five, and backfill summary');
+
+  const jobDb = new DatabaseSync(':memory:');
+  jobDb.exec(`CREATE TABLE leads(id TEXT PRIMARY KEY, owner TEXT, created_by TEXT, assigned_to TEXT, field_assigned_to TEXT, name TEXT, phone TEXT, property_id TEXT, property_other TEXT, source TEXT, stage TEXT, notes TEXT, follow_up TEXT, created_at TEXT, updated_at TEXT, is_featured INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE crm_users(id TEXT PRIMARY KEY, name TEXT, email TEXT, role TEXT, active INTEGER, created_at TEXT, phone TEXT, last_login_at TEXT);
+    CREATE TABLE crm_sheet_sources(id TEXT PRIMARY KEY, sheet_id TEXT NOT NULL, gid TEXT, label TEXT NOT NULL, campaign TEXT NOT NULL, mapping TEXT NOT NULL, headers TEXT, enabled INTEGER NOT NULL DEFAULT 1, last_run TEXT, last_result TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE crm_sheet_rows(id TEXT PRIMARY KEY, source_id TEXT NOT NULL, row_key TEXT NOT NULL, lead_id TEXT, status TEXT, created_at TEXT);
+    CREATE UNIQUE INDEX crm_sheet_rows_source_key ON crm_sheet_rows (source_id, row_key);
+    CREATE TABLE crm_sheet_sync_lock(id TEXT PRIMARY KEY, locked_until TEXT NOT NULL, token TEXT NOT NULL);`);
+  jobDb.prepare(`INSERT INTO crm_users (id, name, email, role, active, created_at) VALUES ('admin-1', 'إدارة', 'ops@sas.test', 'admin', 1, '2020-01-01')`).run();
+  jobDb.prepare(`INSERT INTO crm_users (id, name, email, role, active, created_at) VALUES ('rep-a', 'مندوب أ', 'repa@sas.test', 'sales', 1, '2020-01-02')`).run();
+  jobDb.prepare(`INSERT INTO crm_users (id, name, email, role, active, created_at) VALUES ('rep-b', 'مندوب ب', 'repb@sas.test', 'sales', 1, '2020-01-03')`).run();
+  const addLead = (id, name, phone, assigned) => {
+    jobDb.prepare(`INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, phone, property_id, property_other, source, stage, notes, follow_up, created_at, updated_at) VALUES (?, 'admin-1', 'admin-1', ?, '', ?, ?, 'other', '', 'سابق', 'contacted', '', '', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`).run(id, assigned, name, phone);
+  };
+  addLead('lead-a1', 'مندوب أ١', '0551110001', 'rep-a');
+  addLead('lead-a2', 'مندوب أ٢', '0551110002', 'rep-a');
+  addLead('lead-a3', 'مندوب أ٣', '0551110003', 'rep-a');
+  addLead('lead-b1', 'مندوب ب١', '0551110004', 'rep-b');
+  addLead('lead-b2', 'مندوب ب٢', '0551110005', 'rep-b');
+  addLead('lead-u1', 'بلا تعيين', '0551110006', '');
+  addLead('lead-silent', 'قديم صامت', '0551110007', 'rep-b');
+  addLead('lead-silent-a', 'صامت أ', '0551110008', 'rep-a');
+  addLead('lead-silent-b', 'صامت ب', '0551110009', '');
+  const jobHeaders = ['full_name', 'phone_number'];
+  const jobMapping = JSON.stringify(config.suggestSheetMapping(jobHeaders));
+  const headerJson = JSON.stringify(jobHeaders);
+  const addSource = (id, sheetId, label, campaign, storedHeaders, storedMapping, createdAt) => {
+    jobDb.prepare(`INSERT INTO crm_sheet_sources (id, sheet_id, gid, label, campaign, mapping, headers, enabled, created_at, updated_at) VALUES (?, ?, '', ?, ?, ?, ?, 1, ?, ?)`).run(id, sheetId, label, campaign, storedMapping, storedHeaders, createdAt, createdAt);
+  };
+  addSource('backfill-src', 'sheet-backfill', 'تيك توك', 'حملة الخلفية', headerJson, jobMapping, '2026-02-01T00:00:00.000Z');
+  addSource('later-src', 'sheet-later', 'لاحق', 'حملة لاحقة', headerJson, jobMapping, '2026-02-02T00:00:00.000Z');
+  addSource('drift-src', 'sheet-drift', 'مصدر منحرف', 'حملة منحرفة', JSON.stringify(['اسم', 'جوال']), JSON.stringify({name: 0, phone: 1}), '2026-02-03T00:00:00.000Z');
+  jobDb.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('sentinel', 'later-src', 'sentinel', NULL, 'imported', '2026-02-02T00:00:00.000Z')`).run();
+  const backfillGrid = [
+    jobHeaders,
+    ['نورة جديدة', 'p:+966552220001'],
+    ['ليلى جديدة', '0552220002'],
+    ['قديم صامت', '0551110007'],
+    ['صامت أ', '0551110008'],
+    ['صامت ب', '0551110009'],
+  ];
+  const laterGrid = [
+    jobHeaders,
+    ['مندوب أ١', '0551110001'],
+    ['مندوب أ٢', '0551110002'],
+    ['مندوب أ٣', '0551110003'],
+    ['مندوب ب١', '0551110004'],
+    ['مندوب ب٢', '0551110005'],
+    ['بلا تعيين', '0551110006'],
+  ];
+  globalThis.sheetGrids = {
+    'sheet-backfill': backfillGrid,
+    'sheet-later': laterGrid,
+    'sheet-drift': [jobHeaders, ['شخص منحرف', '0553330001']],
+  };
+  globalThis.sheetPool = sqliteExecutor(jobDb);
+  globalThis.sentMail = [];
+  globalThis.mailThrows = false;
+  process.env.WEBSITE_LEAD_OWNER_ID = 'admin-1';
+  await build({
+    entryPoints: ['lib/sheet-sync-job.server.ts'],
+    outfile: join(output, 'job.cjs'),
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    plugins: [{name: 'job-boundary', setup(b) {
+      b.onResolve({filter: /^server-only$/}, () => ({path: 'guard', namespace: 'job'}));
+      b.onResolve({filter: /^mysql2\/promise$/}, () => ({path: 'mysql', namespace: 'job'}));
+      b.onResolve({filter: /[\\/]mail$/}, () => ({path: 'mail', namespace: 'job'}));
+      b.onResolve({filter: /[\\/]admin$/}, () => ({path: 'admin', namespace: 'job'}));
+      b.onResolve({filter: /sheet-fetch\.server/}, () => ({path: 'sheet-fetch', namespace: 'job'}));
+      b.onLoad({filter: /.*/, namespace: 'job'}, args => {
+        if (args.path === 'guard') return {loader: 'js', contents: ''};
+        if (args.path === 'mysql') return {loader: 'js', contents: 'export default {createPool(){return globalThis.sheetPool}}'};
+        if (args.path === 'mail') return {loader: 'js', contents: 'export async function sendMail(msg){if(globalThis.mailThrows)throw Error("smtp down");globalThis.sentMail.push(msg);return true}'};
+        if (args.path === 'admin') return {loader: 'js', contents: 'export async function getCrmUser(){return null}'};
+        return {loader: 'js', contents: 'export async function readSheetGrid(sheetId){const grid=globalThis.sheetGrids[sheetId]; if(!grid) throw Error("missing grid"); return grid.map(row=>row.slice());}'};
+      });
+    }}],
+  });
+  const job = require(join(output, 'job.cjs'));
+  const firstRun = await job.syncAllSheets();
+  assert.equal(firstRun.inserted, 2);
+  assert.equal(firstRun.duplicates, 9);
+  assert.equal(firstRun.ok, false);
+  assert.match(firstRun.errors.join('\n'), /عناوين/);
+  assert.equal(jobDb.prepare('SELECT COUNT(*) AS n FROM leads').get().n, 11);
+  assert.equal(jobDb.prepare("SELECT COUNT(*) AS n FROM lead_activity WHERE action='reregistered'").get().n, 9);
+  assert.match(jobDb.prepare("SELECT details FROM lead_activity WHERE lead_id='lead-silent' AND action='reregistered'").get().details, /قديم صامت/);
+  assert.equal(jobDb.prepare("SELECT COUNT(*) AS n FROM crm_sheet_rows WHERE source_id='drift-src'").get().n, 0);
+  assert.equal(globalThis.sentMail.length, 4);
+  const summary = globalThis.sentMail.find(msg => msg.subject.startsWith('ملخص أول مزامنة'));
+  const laterAdmin = globalThis.sentMail.find(msg => msg.subject === 'إعادة تسجيل 6 عملاء');
+  const laterRepA = globalThis.sentMail.find(msg => msg.to === 'repa@sas.test');
+  const laterRepB = globalThis.sentMail.find(msg => msg.to === 'repb@sas.test');
+  assert.equal(summary.subject, 'ملخص أول مزامنة — 2 جدد، 3 موجودون');
+  assert.match(summary.text, /عملاء جدد: 2/);
+  assert.match(summary.text, /موجودون مسبقاً: 3/);
+  assert.match(summary.text, /حملة الخلفية/);
+  assert.doesNotMatch(summary.text, /نورة جديدة/);
+  assert.doesNotMatch(summary.text, /قديم صامت/);
+  assert.equal(addresses(summary).includes('repa@sas.test'), false);
+  assert.match(laterAdmin.text, /مندوب أ١/);
+  assert.match(laterAdmin.text, /بلا تعيين/);
+  assert.doesNotMatch(laterAdmin.text, /قديم صامت/);
+  assert.doesNotMatch(laterAdmin.text, /نورة جديدة/);
+  assert.equal(laterRepA.subject, 'إعادة تسجيل 3 عملاء');
+  assert.doesNotMatch(laterRepA.text, /صامت أ/);
+  assert.doesNotMatch(laterRepA.text, /قديم صامت/);
+  assert.equal(laterRepB.subject, 'إعادة تسجيل 2 عملاء');
+  assert.doesNotMatch(laterRepB.text, /قديم صامت/);
+  assert.equal(globalThis.sentMail.some(msg => msg.subject.startsWith('عميل جديد سجل')), false);
+  assert.equal(globalThis.sentMail.some(msg => msg.subject.startsWith('إعادة تسجيل عميل —')), false);
+
+  globalThis.sheetGrids['sheet-backfill'] = [
+    jobHeaders,
+    ['نورة معدلة', 'p:+966552220001'],
+    ['ليلى جديدة', '0552220002'],
+    ['قديم صامت', '0551110007'],
+    ['صامت أ', '0551110008'],
+    ['صامت ب', '0551110009'],
+    ['هند جديدة', '0552220003'],
+  ];
+  globalThis.sentMail = [];
+  const secondRun = await job.syncAllSheets();
+  assert.equal(secondRun.inserted, 1);
+  assert.equal(secondRun.duplicates, 1);
+  assert.equal(jobDb.prepare('SELECT COUNT(*) AS n FROM leads').get().n, 12);
+  const nora = jobDb.prepare("SELECT id FROM leads WHERE phone='0552220001'").get();
+  assert.match(jobDb.prepare("SELECT details FROM lead_activity WHERE lead_id=? AND action='reregistered'").get(nora.id).details, /نورة معدلة/);
+  assert.equal(globalThis.sentMail.length, 2);
+  assert.equal(globalThis.sentMail.some(msg => msg.subject === 'عميل جديد سجل — بحاجة للتوزيع' && msg.text.includes('هند جديدة') && msg.text.includes('0552220003')), true);
+  assert.equal(globalThis.sentMail.some(msg => msg.subject === 'إعادة تسجيل عميل — نورة جديدة'), true);
+  assert.equal(globalThis.sentMail.some(msg => msg.subject.startsWith('ملخص أول مزامنة')), false);
+  assert.equal(globalThis.sentMail.some(msg => msg.subject === 'إعادة تسجيل 6 عملاء'), false);
+  jobDb.close();
+  console.log('PASS first sheet sync is a count summary, and a later run batches re-registration mail');
 } finally {
   rmSync(output, {recursive: true, force: true});
 }

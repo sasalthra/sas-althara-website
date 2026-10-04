@@ -1,6 +1,6 @@
 import 'server-only';
 import {crmDb} from './crm-db';
-import {notifyNewLeads, notifyReregistrationBatch} from './assignment-notify';
+import {notifyNewLeads, notifyReregistrationBatch, notifySheetBackfillSummaries, type SheetBackfillNotice} from './assignment-notify';
 import {cronAuthorized} from './cron-auth';
 import {readSheetGrid} from './sheet-fetch.server';
 import {importSheetGrid, type SheetCreatedLead, type SheetImportResult, type SheetReregistration, type StoredSheetSource} from './sheet-sync';
@@ -96,6 +96,15 @@ async function releaseLock(token: string) {
   }
 }
 
+/** A source is on its initial backfill until any row key has been stored. */
+async function sourceAlreadySynced(sourceId: string) {
+  const row = await crmDb()
+    .prepare('SELECT id FROM crm_sheet_rows WHERE source_id = ? LIMIT 1')
+    .bind(sourceId)
+    .first<{id: string}>();
+  return Boolean(row?.id);
+}
+
 async function saveSourceResult(sourceId: string, result: SheetImportResult | {error: string}) {
   const summary =
     'inserted' in result
@@ -128,6 +137,7 @@ async function doSync(): Promise<SheetSyncReport> {
   if (!token) return {...EMPTY_REPORT('المزامنة تعمل بالفعل'), ok: true};
   const created: SheetCreatedLead[] = [];
   const reregistrations: SheetReregistration[] = [];
+  const backfills: SheetBackfillNotice[] = [];
   const report = EMPTY_REPORT();
   report.ok = true;
   report.skipped = false;
@@ -143,6 +153,7 @@ async function doSync(): Promise<SheetSyncReport> {
     const sources = (await loadSources()).filter(source => source.enabled && source.id && source.sheetId);
     for (const source of sources) {
       try {
+        const backfill = !(await sourceAlreadySynced(source.id));
         const grid = await readSheetGrid(source.sheetId, source.gid);
         const result = await importSheetGrid(crmDb(), source, grid, owner);
         await saveSourceResult(source.id, result);
@@ -150,8 +161,19 @@ async function doSync(): Promise<SheetSyncReport> {
         report.duplicates += result.duplicates;
         report.invalid += result.invalid;
         report.unchanged += result.unchanged;
-        created.push(...result.created);
-        reregistrations.push(...result.reregistrations);
+        if (backfill) {
+          if (!result.error && result.inserted + result.duplicates + result.invalid > 0) {
+            backfills.push({
+              label: source.label,
+              campaign: source.campaign,
+              inserted: result.inserted,
+              duplicates: result.duplicates,
+            });
+          }
+        } else {
+          created.push(...result.created);
+          reregistrations.push(...result.reregistrations);
+        }
         if (result.error) {
           report.ok = false;
           report.errors.push(result.error);
@@ -167,6 +189,12 @@ async function doSync(): Promise<SheetSyncReport> {
           console.error('sheet source result was not saved', saveError instanceof Error ? saveError.name : 'error');
         }
       }
+    }
+    try {
+      await notifySheetBackfillSummaries(backfills);
+    } catch (error) {
+      console.error('sheet backfill summary failed', error instanceof Error ? error.name : 'error');
+      report.errors.push('تعذر إرسال ملخص المزامنة الأولى');
     }
     try {
       await notifyNewLeads(created);

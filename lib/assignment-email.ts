@@ -342,3 +342,38 @@ export function reregistrationDigestEmail(inputs: ReregistrationMailInput[]) {
   );
   return {subject, text, html};
 }
+
+export type SheetBackfillMailInput = {
+  label: string;
+  campaign: string;
+  inserted: number;
+  duplicates: number;
+  when: string;
+  url: string;
+};
+
+/** One admin note for the first import of a sheet source. Counts only — no per-client mail. */
+export function sheetBackfillSummaryEmail(input: SheetBackfillMailInput) {
+  const label = input.label.trim() || 'نموذج الإعلانات';
+  const subject = `ملخص أول مزامنة — ${input.inserted} جدد، ${input.duplicates} موجودون`;
+  const rows: Array<[string, string]> = [
+    ['المصدر', label],
+    ['الحملة', input.campaign.trim()],
+    ['عملاء جدد', String(input.inserted)],
+    ['موجودون مسبقاً', String(input.duplicates)],
+    ['الوقت', input.when.trim()],
+  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+  const intro = `اكتملت المزامنة الأولى لمصدر «${label}». أُضيف ${input.inserted} عملاء جدد، و${input.duplicates} أرقام كانت موجودة مسبقاً. سُجّل النشاط في سجل كل عميل موجود، ولم يُرسل بريد إعادة تسجيل لهذه الدفعة.`;
+  const text = [
+    intro,
+    '',
+    ...rows.map(([name, value]) => `${name}: ${value}`),
+    '',
+    `التوزيع: ${input.url}`,
+  ].join('\n');
+  const html = wrapHtml(
+    'ملخص أول مزامنة',
+    `<p style="color:#111">${escapeHtml(intro)}</p>${greyTable(rows)}<p><a href="${escapeHtml(input.url)}" style="color:#3F1A44">توزيع العملاء</a></p><p style="color:#111">${escapeHtml(input.url)}</p>`
+  );
+  return {subject, text, html};
+}
