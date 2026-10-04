@@ -18,6 +18,8 @@ type SourceResult = {
   errors?: string[];
 };
 
+type SyncStep = {step: string; ok: boolean; detail: string};
+
 type SheetSource = {
   id: string;
   sheetId: string;
@@ -29,6 +31,12 @@ type SheetSource = {
   enabled: boolean;
   lastRun: string;
   lastResult: SourceResult | null;
+  lastRunAt?: string;
+  rowsRead?: number;
+  created?: number;
+  existing?: number;
+  skipped?: number;
+  errorMessage?: string;
 };
 
 type SheetTab = {gid: string; name: string};
@@ -53,10 +61,24 @@ function riyadh(value: string) {
   }
 }
 
-function summarize(result: SourceResult | null) {
-  if (!result) return 'لا توجد نتيجة';
-  if (result.error) return result.error;
-  return `جديد ${result.inserted ?? 0}، مكرر ${result.duplicates ?? 0}، غير صالح ${result.invalid ?? 0}، بلا تغيير ${result.unchanged ?? 0}`;
+function summarize(source: SheetSource) {
+  const result = source.lastResult;
+  const error = source.errorMessage || result?.error || '';
+  const created = source.created ?? result?.inserted ?? 0;
+  const existing = source.existing ?? result?.duplicates ?? 0;
+  const skipped = source.skipped ?? 0;
+  const rowsRead = source.rowsRead ?? 0;
+  if (!source.lastRunAt && !source.lastRun && !error) return 'لا توجد نتيجة';
+  const counts = `قُرئ ${rowsRead}، جديد ${created}، موجود ${existing}، متخطى ${skipped}`;
+  return error ? `${counts}. ${error}` : counts;
+}
+
+function healthLine(source: SheetSource) {
+  const when = source.lastRunAt || source.lastRun;
+  const label = source.label || DEFAULT_SHEET_LABEL;
+  if (!when && !source.errorMessage) return `${label}: لم تُسجَّل مزامنة بعد.`;
+  const error = source.errorMessage ? ` الخطأ: ${source.errorMessage}` : ' لا يوجد خطأ.';
+  return `${label}: آخر تشغيل ${riyadh(when)} — قُرئ ${source.rowsRead ?? 0}، جديد ${source.created ?? 0}، موجود ${source.existing ?? 0}، متخطى ${source.skipped ?? 0}.${error}`;
 }
 
 export default function SheetSourcesPanel() {
@@ -72,6 +94,7 @@ export default function SheetSourcesPanel() {
   const [mapping, setMapping] = useState<SheetMapping>(emptyMapping);
   const [enabled, setEnabled] = useState(true);
   const [message, setMessage] = useState('');
+  const [steps, setSteps] = useState<SyncStep[]>([]);
   const [busy, setBusy] = useState(false);
 
   async function load() {
@@ -174,18 +197,21 @@ export default function SheetSourcesPanel() {
     if (!window.confirm('ستُستورد الصفوف الجديدة فقط إلى عملاء غير معيّنين. هل تريد المزامنة الآن؟')) return;
     setBusy(true);
     setMessage('');
+    setSteps([]);
     try {
       const response = await fetch('/api/integrations/sheet-sources/sync', {method: 'POST'});
       const data = await response.json();
-      if (!response.ok) throw Error(data.error || 'تعذرت المزامنة');
+      if (!response.ok) throw Error(data.error || data.errorMessage || 'تعذرت المزامنة');
       await load();
+      const nextSteps = Array.isArray(data.steps) ? data.steps as SyncStep[] : [];
+      setSteps(nextSteps);
       if (data.skipped && data.reason) {
         setMessage(data.reason);
         return;
       }
-      const errors = Array.isArray(data.errors) ? data.errors.filter(Boolean) : [];
+      const errorText = data.errorMessage || (Array.isArray(data.errors) ? data.errors.filter(Boolean)[0] : '');
       setMessage(
-        `آخر مزامنة: جديد ${data.inserted ?? 0}، مكرر ${data.duplicates ?? 0}، غير صالح ${data.invalid ?? 0}، بلا تغيير ${data.unchanged ?? 0}${errors.length ? `. ${errors[0]}` : ''}`
+        `آخر مزامنة: قُرئ ${data.rowsRead ?? 0}، جديد ${data.created ?? data.inserted ?? 0}، موجود ${data.existing ?? data.duplicates ?? 0}، متخطى ${data.skippedRows ?? 0}${errorText ? `. ${errorText}` : ''}`
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'تعذرت المزامنة');
@@ -230,8 +256,18 @@ export default function SheetSourcesPanel() {
         {' '}مفتاح الجدولة: {status ? (status.cronReady ? 'مضبوط' : 'غير مضبوط') : '…'}
         {' '}— حساب خدمة للجداول الخاصة: {status ? (status.serviceAccount ? 'مضبوط' : 'غير مضبوط، والجداول العامة تُقرأ بدون حساب') : '…'}.
       </p>
+      <p data-sheet-health role="status">
+        صحة المزامنة: {!status ? '…' : status.sources.length ? status.sources.map(healthLine).join(' ') : 'لا يوجد مصدر بعد.'}
+      </p>
       <button type="button" className="primary" disabled={busy} onClick={() => void syncNow()}>مزامنة الآن</button>
       <p role="status">{message}</p>
+      {steps.length ? (
+        <ol>
+          {steps.map((step, index) => (
+            <li key={`${step.step}-${index}`}>{step.ok ? 'تم' : 'فشل'} — {step.step}: {step.detail}</li>
+          ))}
+        </ol>
+      ) : null}
       {status?.sources?.length ? (
         <div className="space-y-3">
           {status.sources.map(source => (
@@ -240,7 +276,8 @@ export default function SheetSourcesPanel() {
               {source.campaign ? ` — ${source.campaign}` : ''}
               <p>المعرف: {source.sheetId}{source.gid ? ` — الورقة ${source.gid}` : ' — الورقة الأولى'}</p>
               <p>الحالة: {source.enabled ? 'مفعّل' : 'متوقف'}</p>
-              <p>آخر مزامنة: {riyadh(source.lastRun)} — {summarize(source.lastResult)}</p>
+              <p>آخر مزامنة: {riyadh(source.lastRunAt || source.lastRun)} — {summarize(source)}</p>
+              {source.errorMessage ? <p role="alert">{source.errorMessage}</p> : null}
               {source.lastResult?.errors?.length ? <p>{source.lastResult.errors.slice(0, 3).join('؛ ')}</p> : null}
               <p>
                 <button type="button" disabled={busy} onClick={() => fill(source)}>تعديل الربط</button>{' '}

@@ -16,7 +16,23 @@ function database() {
 export function crmPool() {
   return database();
 }
+function bootSheetSync() {
+  if (process.env.NEXT_RUNTIME === 'edge') return;
+  if (process.env.NEXT_PHASE === 'phase-production-build' || process.env.npm_lifecycle_event === 'build') return;
+  if ((process.env.npm_lifecycle_event || '').startsWith('test')) return;
+  const state = globalThis as typeof globalThis & {__sasSheetBoot?: Promise<void>};
+  if (state.__sasSheetBoot) return;
+  state.__sasSheetBoot = import('./sheet-sync-job.server')
+    .then(mod => {
+      mod.startSheetSyncInterval();
+    })
+    .catch(error => {
+      console.error('sheet sync did not start on request', error instanceof Error ? error.message : 'error');
+    });
+}
+
 export function crmDb(executor: Pick<Pool, 'execute'> = database()) {
+  bootSheetSync();
   return {prepare(sql: string) {
     let values: (string | number | null)[] = [];
     return {

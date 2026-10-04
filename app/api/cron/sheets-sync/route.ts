@@ -7,6 +7,7 @@ export const dynamic = 'force-dynamic';
 async function run(req: Request) {
   return endpoint(async () => {
     assertCron(req);
+    // Always wait for the in-process run. Do not answer before the sync finishes.
     return reply(await syncAllSheets());
   });
 }

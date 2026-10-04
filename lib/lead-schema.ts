@@ -19,9 +19,12 @@
  * depend on a manual migration. crm_users.last_login_at is added once and left
  * null until a real sign-in writes it.
  * crm_sheet_sources / crm_sheet_rows / crm_sheet_sync_lock are created the same
- * way. The public TikTok lead sheet is inserted only while the source table is
- * empty, so disabling that row is kept and a second process start does not
- * duplicate it.
+ * way. The public TikTok lead sheet is inserted whenever that sheet id and gid
+ * are missing, even if other sources already exist. A wrong gid on the seeded
+ * row is rewritten. Disabling a row that already points at the right gid is
+ * kept, and a second process start does not duplicate it. last_run_at,
+ * rows_read, created, existing, skipped, and error_message are added the same
+ * once-per-process way.
  */
 
 import {planLeadPhoneMigration} from './phone';
@@ -501,81 +504,112 @@ async function ensureSheetIndex(executor: SqlExecutor) {
   }
 }
 
+const SHEET_SOURCE_STATS: [string, string][] = [
+  ['last_run_at', 'TEXT NULL'],
+  ['rows_read', 'INTEGER NULL'],
+  ['created', 'INTEGER NULL'],
+  ['existing', 'INTEGER NULL'],
+  ['skipped', 'INTEGER NULL'],
+  ['error_message', 'TEXT NULL'],
+];
+
+async function ensureSheetSourceStats(executor: SqlExecutor) {
+  for (const [column, definition] of SHEET_SOURCE_STATS) {
+    await ensureColumn(executor, 'crm_sheet_sources', column, definition);
+  }
+}
+
 /**
  * Point the seeded source at the «تيك توك» tab.
- * A previous seed with an empty gid, or gid 1976004933, read the first tab («meta»).
- * That row is rewritten in place and its old row keys are dropped so the new tab
- * is an initial backfill. Any other source still aimed at that first tab is disabled.
- * When the table is empty, the TikTok tab is inserted. A correct gid is left untouched.
+ * A previous seed with an empty gid, gid 1976004933, or any other gid read the
+ * wrong tab. That canonical row is rewritten in place and its old row keys are
+ * dropped so the next sync is an initial backfill. Any other source still aimed
+ * at the meta tab is disabled. The TikTok tab is inserted even when the sources
+ * table already has unrelated rows. A row that already has the correct gid is
+ * left untouched, including when an admin has disabled it.
  */
 async function alignTiktokSheetSource(executor: SqlExecutor) {
   const seed = tiktokSheetSeed();
   const now = new Date().toISOString();
   const rows = rowsOf(await run(executor, 'SELECT id, sheet_id, gid FROM crm_sheet_sources'));
   const gidOf = (row: Record<string, unknown>) => String(row.gid ?? '').trim();
+  const idOf = (row: Record<string, unknown>) => String(row.id ?? '');
   const mine = rows.filter(row => String(row.sheet_id ?? '') === seed.sheetId);
-  const stale = mine.filter(row => {
-    const gid = gidOf(row);
-    return gid === '' || gid === TIKTOK_META_TAB_GID;
-  });
+  const canonical = rows.find(row => idOf(row) === seed.id);
   const current = mine.find(row => gidOf(row) === seed.gid);
-  if (current) {
-    for (const row of stale) {
-      if (String(row.id ?? '') === String(current.id ?? '')) continue;
-      await run(executor, 'UPDATE crm_sheet_sources SET enabled = 0, updated_at = ? WHERE id = ?', [now, String(row.id ?? '')]);
+
+  const disableMeta = async (exceptId: string) => {
+    for (const row of mine) {
+      const id = idOf(row);
+      if (!id || id === exceptId) continue;
+      const gid = gidOf(row);
+      if (gid !== '' && gid !== TIKTOK_META_TAB_GID) continue;
+      await run(executor, 'UPDATE crm_sheet_sources SET enabled = 0, updated_at = ? WHERE id = ?', [now, id]);
     }
-    return;
-  }
-  if (!stale.length) {
-    if (rows.length) return;
+  };
+
+  const retarget = async (targetId: string) => {
     await run(
       executor,
-      `INSERT INTO crm_sheet_sources (
-        id, sheet_id, gid, label, campaign, mapping, headers, enabled, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `UPDATE crm_sheet_sources
+       SET sheet_id = ?, gid = ?, label = ?, campaign = ?, mapping = ?, headers = ?, enabled = 1, updated_at = ?
+       WHERE id = ?`,
       [
-        seed.id,
         seed.sheetId,
         seed.gid,
         seed.label,
         seed.campaign,
         JSON.stringify(seed.mapping),
         JSON.stringify(seed.headers),
-        seed.enabled,
         now,
-        now,
+        targetId,
       ]
     );
+    await run(executor, 'DELETE FROM crm_sheet_rows WHERE source_id = ?', [targetId]);
+    await disableMeta(targetId);
+  };
+
+  if (canonical && gidOf(canonical) !== seed.gid) {
+    await retarget(seed.id);
     return;
   }
-  const target = stale.find(row => String(row.id ?? '') === seed.id) || stale[0];
-  const targetId = String(target.id ?? '');
+  if (current) {
+    await disableMeta(idOf(current));
+    return;
+  }
+  const stale = mine.filter(row => {
+    const gid = gidOf(row);
+    return gid === '' || gid === TIKTOK_META_TAB_GID;
+  });
+  if (stale.length) {
+    const target = stale.find(row => idOf(row) === seed.id) || stale[0];
+    await retarget(idOf(target));
+    return;
+  }
   await run(
     executor,
-    `UPDATE crm_sheet_sources
-     SET sheet_id = ?, gid = ?, label = ?, campaign = ?, mapping = ?, headers = ?, enabled = 1, updated_at = ?
-     WHERE id = ?`,
+    `INSERT INTO crm_sheet_sources (
+      id, sheet_id, gid, label, campaign, mapping, headers, enabled, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
+      seed.id,
       seed.sheetId,
       seed.gid,
       seed.label,
       seed.campaign,
       JSON.stringify(seed.mapping),
       JSON.stringify(seed.headers),
+      seed.enabled,
       now,
-      targetId,
+      now,
     ]
   );
-  await run(executor, 'DELETE FROM crm_sheet_rows WHERE source_id = ?', [targetId]);
-  for (const row of stale) {
-    if (String(row.id ?? '') === targetId) continue;
-    await run(executor, 'UPDATE crm_sheet_sources SET enabled = 0, updated_at = ? WHERE id = ?', [now, String(row.id ?? '')]);
-  }
 }
 
 /**
  * Lead-form sheet sources and the keys of rows already imported.
- * The TikTok tab is seeded when no source exists, and an older meta-tab seed is retargeted.
+ * The TikTok tab is seeded when that sheet is missing, even if other sources exist.
+ * An older or mismatched gid on the seeded row is retargeted.
  */
 async function ensureSheetSyncSchema(executor: SqlExecutor) {
   try {
@@ -592,6 +626,12 @@ async function ensureSheetSyncSchema(executor: SqlExecutor) {
         enabled INTEGER NOT NULL DEFAULT 1,
         last_run TEXT NULL,
         last_result TEXT NULL,
+        last_run_at TEXT NULL,
+        rows_read INTEGER NULL,
+        created INTEGER NULL,
+        existing INTEGER NULL,
+        skipped INTEGER NULL,
+        error_message TEXT NULL,
         created_at TEXT NULL,
         updated_at TEXT NULL
       )`
@@ -620,6 +660,11 @@ async function ensureSheetSyncSchema(executor: SqlExecutor) {
     return;
   }
   await ensureSheetIndex(executor);
+  try {
+    await ensureSheetSourceStats(executor);
+  } catch (error) {
+    console.error('sheet source stats columns were not added', error);
+  }
   try {
     await alignTiktokSheetSource(executor);
   } catch (error) {

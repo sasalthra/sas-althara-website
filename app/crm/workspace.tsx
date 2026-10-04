@@ -26,7 +26,8 @@ import LeadForm, {
   Lead,
 } from '@/app/lead-form';
 import {formatRiyadhDate, riyadhDayKey} from '@/lib/lead-dates';
-import {canToggleFeatured, compareClients, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
+import {canToggleFeatured, compareClients, featuredControlsEnabled, isFeaturedValue, isNewUnassignedLead} from '@/lib/lead-featured';
+import NewLeadBadge from '@/components/new-lead-badge';
 import {displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import {displayLeadPhone, leadPhoneMatchesQuery} from '@/lib/phone';
 
@@ -168,6 +169,8 @@ export default function CRM({
 
   const [duplicateOnly, setDuplicateOnly] = useState(false);
 
+  const [newOnly, setNewOnly] = useState(false);
+
   const [open, setOpen] =
     useState(false);
 
@@ -290,6 +293,10 @@ export default function CRM({
         return false;
       }
 
+      if (role === 'admin' && newOnly && !isNewUnassignedLead(lead)) {
+        return false;
+      }
+
       const property =
         data.find(
           property =>
@@ -311,10 +318,12 @@ export default function CRM({
       return searchable
         .toLowerCase()
         .includes(queryText.toLowerCase()) || leadPhoneMatchesQuery(phoneShown, queryText);
-    }).sort(compareClients);
+    }).sort((a, b) => compareClients(a, b, {promoteNewUnassigned: role === 'admin'}));
 
   const followUps =
     leads.filter(needsFollowUp).length;
+
+  const newUnassignedCount = leads.filter(isNewUnassignedLead).length;
 
   return (
     <>
@@ -383,6 +392,18 @@ export default function CRM({
                     ))}
                   </select>
                 </label>
+
+                {role === 'admin' ? (
+                  <button
+                    type="button"
+                    className="w-full rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-right text-black lg:w-auto"
+                    style={newOnly ? {background: '#3F1A44', color: '#fff', borderColor: '#3F1A44'} : undefined}
+                    aria-pressed={newOnly}
+                    onClick={() => setNewOnly(value => !value)}
+                  >
+                    جدد غير مسندين <strong>{loading ? '—' : newUnassignedCount}</strong>
+                  </button>
+                ) : null}
 
                 {canReviewDuplicates ? (
                   <div className="w-full rounded-lg border border-[#d1d5db] bg-white p-3 text-black lg:w-[280px]">
@@ -553,6 +574,7 @@ export default function CRM({
                                     >
                                       {lead.name}
                                     </a>
+                                    <NewLeadBadge lead={lead} />
                                   </div>
                                   {featured && (
                                     <span className="mt-1 inline-flex rounded-full bg-[#3F1A44] px-1.5 py-0.5 text-[10px] font-semibold text-white">

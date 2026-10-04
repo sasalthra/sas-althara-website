@@ -19,17 +19,33 @@ function enabledFlag(value: unknown) {
   return value === 1 || value === true || value === '1';
 }
 
+function countOf(value: unknown, fallback = 0) {
+  if (value === null || value === undefined || value === '') return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
 export async function GET() {
   return endpoint(async () => {
     await actor(undefined, ['admin']);
     const rows = await crmDb()
       .prepare(
-        `SELECT id, sheet_id, gid, label, campaign, mapping, headers, enabled, last_run, last_result
+        `SELECT id, sheet_id, gid, label, campaign, mapping, headers, enabled, last_run, last_result,
+                last_run_at, rows_read, \`created\`, existing, skipped, error_message
          FROM crm_sheet_sources ORDER BY created_at ASC, id ASC`
       )
       .all();
     return reply({
-      sources: rows.results.map(row => ({
+      sources: rows.results.map(row => {
+        const lastResult = parsed(row.last_result) as {
+          rowsRead?: unknown;
+          inserted?: unknown;
+          duplicates?: unknown;
+          skippedRows?: unknown;
+          error?: unknown;
+        } | null;
+        const savedError = row.error_message ? String(row.error_message) : '';
+        return {
         id: String(row.id || ''),
         sheetId: String(row.sheet_id || ''),
         gid: String(row.gid || ''),
@@ -39,8 +55,15 @@ export async function GET() {
         headers: parsed(row.headers) || [],
         enabled: enabledFlag(row.enabled),
         lastRun: row.last_run ? String(row.last_run) : '',
-        lastResult: parsed(row.last_result),
-      })),
+        lastResult,
+        lastRunAt: row.last_run_at ? String(row.last_run_at) : (row.last_run ? String(row.last_run) : ''),
+        rowsRead: countOf(row.rows_read, countOf(lastResult?.rowsRead, 0)),
+        created: countOf(row.created, countOf(lastResult?.inserted, 0)),
+        existing: countOf(row.existing, countOf(lastResult?.duplicates, 0)),
+        skipped: countOf(row.skipped, countOf(lastResult?.skippedRows, 0)),
+        errorMessage: savedError || String(lastResult?.error || ''),
+      };
+      }),
       intervalMs: sheetsSyncIntervalMs(),
       cronReady: (process.env.CRON_SECRET || '').trim().length >= 32,
       serviceAccount: serviceAccountConfigured(),

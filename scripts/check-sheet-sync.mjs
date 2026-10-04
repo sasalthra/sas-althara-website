@@ -166,6 +166,10 @@ try {
   assert.equal(seededHeaders[seededMapping.phone], 'رقم الجوال');
   assert.equal(seededHeaders[seededMapping.name], 'الاسم');
   assert.equal(seededHeaders[seededMapping.leadId], 'TikTok Lead ID');
+  const statColumns = mem.prepare('PRAGMA table_info(crm_sheet_sources)').all().map(row => row.name);
+  for (const name of ['last_run_at', 'rows_read', 'created', 'existing', 'skipped', 'error_message']) {
+    assert.equal(statColumns.includes(name), true, name);
+  }
   schema.resetLeadSchemaCache();
   await schema.ensureLeadSchema(sqliteExecutor(mem));
   assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM crm_sheet_sources').get().n, 1);
@@ -185,6 +189,23 @@ try {
   schema.resetLeadSchemaCache();
   await schema.ensureLeadSchema(sqliteExecutor(mem));
   assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM crm_sheet_rows WHERE source_id = 'tiktok-leads-1'").get().n, 1);
+  mem.prepare('DELETE FROM crm_sheet_sources').run();
+  mem.prepare('DELETE FROM crm_sheet_rows').run();
+  mem.prepare(`INSERT INTO crm_sheet_sources (id, sheet_id, gid, label, campaign, mapping, headers, enabled, created_at, updated_at) VALUES ('other-src', 'abcdefghijklmnopqrstuvwxyz12', '9', 'آخر', '', '{}', '[]', 1, '2026-01-01', '2026-01-01')`).run();
+  schema.resetLeadSchemaCache();
+  await schema.ensureLeadSchema(sqliteExecutor(mem));
+  const withOther = mem.prepare('SELECT id, gid, enabled FROM crm_sheet_sources').all();
+  const seededAgain = withOther.find(row => row.id === 'tiktok-leads-1');
+  assert.ok(seededAgain);
+  assert.equal(seededAgain.gid, config.TIKTOK_SHEET_GID);
+  assert.equal(Number(seededAgain.enabled), 1);
+  assert.equal(Number(withOther.find(row => row.id === 'other-src').enabled), 1);
+  mem.prepare(`UPDATE crm_sheet_sources SET gid = '42' WHERE id = 'tiktok-leads-1'`).run();
+  mem.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('wrong-gid', 'tiktok-leads-1', 'tt:stale', NULL, 'imported', '2026-04-01')`).run();
+  schema.resetLeadSchemaCache();
+  await schema.ensureLeadSchema(sqliteExecutor(mem));
+  assert.equal(mem.prepare("SELECT gid FROM crm_sheet_sources WHERE id = 'tiktok-leads-1'").get().gid, config.TIKTOK_SHEET_GID);
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM crm_sheet_rows WHERE source_id = 'tiktok-leads-1'").get().n, 0);
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='crm_sheet_rows'").get().name, 'crm_sheet_rows');
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='crm_sheet_sync_lock'").get().name, 'crm_sheet_sync_lock');
 
@@ -275,10 +296,106 @@ try {
   assert.equal(identifiedAgain.unchanged, 1);
   assert.equal(identifiedAgain.inserted, 1);
   assert.equal(mem.prepare("SELECT name FROM leads WHERE phone = '0552220001'").get().name, 'نورة');
+
+  const fixtureCsv = readFileSync('scripts/fixtures/tiktok-leads-sample.csv', 'utf8');
+  assert.equal(fixtureCsv.includes('سارة اختبار'), true);
+  assert.equal(/\+966\s*5\d{8}/.test(fixtureCsv) || fixtureCsv.includes('+966 55 000 0001'), true);
+  assert.equal(fixtureCsv.includes('tt-sample'), true);
+  const fixtureGrid = config.parseCsv(fixtureCsv);
+  assert.deepEqual(fixtureGrid[0], config.TIKTOK_SHEET_HEADERS);
+  assert.equal(fixtureGrid.length, 4);
+  const messyHeader = fixtureGrid[0].map((header, index) => {
+    if (index === 0) return `\uFEFF${header}`;
+    if (index === 1) return `${header}\u200B`;
+    if (index === 3) return 'الوحده';
+    if (index === 13) return 'الحالة';
+    return header;
+  });
+  assert.equal(config.sameHeaders(config.TIKTOK_SHEET_HEADERS, [...messyHeader, 'عمود إضافي']), true);
+  const fixtureSource = {
+    id: 'fixture-tiktok',
+    sheetId: config.TIKTOK_SHEET_ID,
+    gid: config.TIKTOK_SHEET_GID,
+    label: 'تيك توك',
+    campaign: '',
+    mapping: config.suggestSheetMapping(config.TIKTOK_SHEET_HEADERS),
+    headers: config.TIKTOK_SHEET_HEADERS,
+    enabled: true,
+  };
+  const beforeFixture = mem.prepare('SELECT COUNT(*) AS n FROM leads').get().n;
+  const fixtureImport = await sync.importSheetGrid(db, fixtureSource, [messyHeader, ...fixtureGrid.slice(1)], owner);
+  assert.equal(fixtureImport.inserted, 2);
+  assert.equal(fixtureImport.duplicates, 1);
+  assert.equal(fixtureImport.error, '');
+  assert.equal(fixtureImport.rowsRead, 3);
+  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM leads').get().n, beforeFixture + 2);
+  const firstPhone = mem.prepare("SELECT name, phone, stage, assigned_to, source FROM leads WHERE phone = '0550000001'").all();
+  assert.equal(firstPhone.length, 1);
+  assert.equal(firstPhone[0].name, 'سارة اختبار');
+  assert.equal(firstPhone[0].stage, 'new');
+  assert.equal(firstPhone[0].assigned_to, '');
+  assert.equal(firstPhone[0].source, 'تيك توك');
+  const secondPhone = mem.prepare("SELECT phone, stage, assigned_to FROM leads WHERE phone = '0550000002'").get();
+  assert.equal(secondPhone.phone, '0550000002');
+  assert.equal(secondPhone.stage, 'new');
+  assert.equal(secondPhone.assigned_to, '');
+  mem.prepare(`INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, phone, property_id, property_other, source, stage, notes, follow_up, created_at, updated_at) VALUES ('already-9', ?, ?, 'rep-existing', '', 'عميل سابق', '0550000009', 'other', '', 'سابق', 'contacted', '', '', '2026-01-01', '2026-01-01')`).run(owner, owner);
+  const existingGrid = [
+    config.TIKTOK_SHEET_HEADERS,
+    ['جديد', 'اسم مكرر', '+966 55 000 0009', 'شقة', 'تمويل', 'نعم', 'لا', '10000', '29', 'مساء', 'شهر', 'tt-sample-existing', '', 'جديد', 'CREATED'],
+  ];
+  const existingImport = await sync.importSheetGrid(db, {...fixtureSource, id: 'fixture-existing'}, existingGrid, owner);
+  assert.equal(existingImport.inserted, 0);
+  assert.equal(existingImport.duplicates, 1);
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM leads WHERE phone = '0550000009'").get().n, 1);
+  mem.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('orphan-key', 'fixture-orphan', 'tt:tt-sample-orphan', NULL, 'imported', '2026-01-01')`).run();
+  const orphanGrid = [
+    config.TIKTOK_SHEET_HEADERS,
+    ['جديد', 'عميل يتيم', '+966 55 000 0008', 'فيلا', 'كاش', 'نعم', 'نعم', '18000', '36', 'صباح', 'شهرين', 'tt-sample-orphan', '', 'جديد', 'CREATED'],
+  ];
+  const orphanImport = await sync.importSheetGrid(db, {...fixtureSource, id: 'fixture-orphan'}, orphanGrid, owner);
+  assert.equal(orphanImport.inserted, 1);
+  assert.equal(mem.prepare("SELECT name, assigned_to, stage FROM leads WHERE phone = '0550000008'").get().name, 'عميل يتيم');
+  assert.equal(mem.prepare("SELECT lead_id FROM crm_sheet_rows WHERE source_id = 'fixture-orphan' AND row_key = 'tt:tt-sample-orphan'").get().lead_id.length > 10, true);
+  const boom = {prepare(sql) {
+    const inner = db.prepare(sql);
+    return {bind(...args) {
+      return {
+        async all() { return inner.bind(...args).all(); },
+        async first() { return inner.bind(...args).first(); },
+        async run() {
+          if (/^INSERT INTO leads\b/i.test(String(sql).trim())) throw Error("Unknown column 'source' in 'field list'");
+          return inner.bind(...args).run();
+        },
+      };
+    }};
+  }};
+  const boomGrid = [
+    config.TIKTOK_SHEET_HEADERS,
+    ['جديد', 'لن يُحفظ', '+966 55 000 0007', 'شقة', 'كاش', 'نعم', 'لا', '9000', '28', 'مساء', 'شهر', 'tt-sample-boom', '', 'جديد', 'CREATED'],
+  ];
+  const boomImport = await sync.importSheetGrid(boom, {...fixtureSource, id: 'fixture-boom'}, boomGrid, owner);
+  assert.equal(boomImport.ok, false);
+  assert.equal(boomImport.inserted, 0);
+  assert.match(boomImport.error, /Unknown column 'source'/);
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM leads WHERE phone = '0550000007'").get().n, 0);
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM crm_sheet_rows WHERE source_id = 'fixture-boom' AND status = 'imported'").get().n, 0);
   mem.close();
 
   assert.match(readFileSync('instrumentation.ts', 'utf8'), /phase-production-build/);
   assert.match(readFileSync('instrumentation.ts', 'utf8'), /startSheetSyncInterval/);
+  assert.match(readFileSync('instrumentation.ts', 'utf8'), /NEXT_RUNTIME !== 'nodejs'/);
+  assert.match(readFileSync('lib/crm-db.ts', 'utf8'), /startSheetSyncInterval/);
+  assert.match(readFileSync('lib/sheet-fetch.server.ts', 'utf8'), /User-Agent/);
+  assert.match(readFileSync('lib/sheet-fetch.server.ts', 'utf8'), /redirect: 'follow'/);
+  assert.match(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /last_run_at/);
+  assert.match(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /error_message/);
+  assert.doesNotMatch(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /if \(inflight\) return Promise\.resolve/);
+  assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /صحة المزامنة/);
+  assert.match(readFileSync('app/crm/workspace.tsx', 'utf8'), /جدد غير مسندين/);
+  assert.match(readFileSync('app/globals.css', 'utf8'), /new-lead-badge/);
+  assert.match(readFileSync('app/globals.css', 'utf8'), /prefers-reduced-motion/);
+  assert.match(readFileSync('components/new-lead-badge.tsx', 'utf8'), /NEW/);
   assert.match(readFileSync('app/api/cron/sheets-sync/route.ts', 'utf8'), /assertCron/);
   assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /مزامنة الآن/);
   assert.match(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /180_000|sheetsSyncIntervalMs/);

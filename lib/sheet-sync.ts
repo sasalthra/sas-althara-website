@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {
   composeSheetLead,
   isBlankSheetRow,
+  publicSyncError,
   sameHeaders,
   sheetExternalId,
   sheetNameAndPhoneBlank,
@@ -45,6 +46,8 @@ export type SheetImportResult = {
   duplicates: number;
   invalid: number;
   unchanged: number;
+  rowsRead: number;
+  skippedRows: number;
   errors: string[];
   created: SheetCreatedLead[];
   reregistrations: SheetReregistration[];
@@ -57,6 +60,8 @@ const EMPTY: SheetImportResult = {
   duplicates: 0,
   invalid: 0,
   unchanged: 0,
+  rowsRead: 0,
+  skippedRows: 0,
   errors: [],
   created: [],
   reregistrations: [],
@@ -83,12 +88,29 @@ export async function importSheetGrid(
   ownerId: string
 ): Promise<SheetImportResult> {
   const header = (grid[0] || []).map(cell => String(cell ?? ''));
+  const dataRows = Math.max(0, grid.length - 1);
   if (source.headers.length && !sameHeaders(source.headers, header)) {
-    return emptyResult('تغيرت عناوين الجدول؛ أوقفت المزامنة حتى يُراجع الربط');
+    const failed = emptyResult('تغيرت عناوين الجدول؛ أوقفت المزامنة حتى يُراجع الربط');
+    failed.rowsRead = dataRows;
+    failed.skippedRows = dataRows;
+    return failed;
   }
   if (source.mapping.name === undefined || source.mapping.phone === undefined) {
-    return emptyResult('ربط الاسم أو الجوال ناقص');
+    const failed = emptyResult('ربط الاسم أو الجوال ناقص');
+    failed.rowsRead = dataRows;
+    failed.skippedRows = dataRows;
+    return failed;
   }
+  // A previous run must not block new leads by marking a row imported with no lead id.
+  await db
+    .prepare(
+      `DELETE FROM crm_sheet_rows
+       WHERE source_id = ?
+         AND (lead_id IS NULL OR lead_id = '')
+         AND status IN ('imported', 'processed', 'seen')`
+    )
+    .bind(source.id)
+    .run();
   const known = new Set(
     (await db.prepare('SELECT row_key FROM crm_sheet_rows WHERE source_id = ?').bind(source.id).all()).results.map(row =>
       String(row.row_key ?? '')
@@ -99,20 +121,29 @@ export async function importSheetGrid(
   for (let index = 1; index < grid.length; index++) {
     const cells = (grid[index] || []).map(cell => String(cell ?? ''));
     const rowNumber = index + 1;
-    if (isBlankSheetRow(cells)) continue;
+    result.rowsRead += 1;
+    if (isBlankSheetRow(cells)) {
+      result.skippedRows += 1;
+      continue;
+    }
     const externalId = sheetExternalId(cells, source.mapping);
     const stableKey = externalId ? sheetRowKey(rowNumber, cells, externalId) : '';
     const hashKey = sheetRowKey(rowNumber, cells);
     if ((stableKey && known.has(stableKey)) || known.has(hashKey)) {
       result.unchanged += 1;
+      result.skippedRows += 1;
       continue;
     }
-    if (sheetNameAndPhoneBlank(cells, source.mapping)) continue;
+    if (sheetNameAndPhoneBlank(cells, source.mapping)) {
+      result.skippedRows += 1;
+      continue;
+    }
     const draft = composeSheetLead(cells, source, source.mapping);
     const problem = sheetRowProblem(draft);
     const key = problem ? hashKey : stableKey || hashKey;
     if (problem) {
       result.invalid += 1;
+      result.skippedRows += 1;
       if (result.errors.length < 30) result.errors.push(`صف ${rowNumber}: ${problem}`);
       await remember(db, source.id, key, '', 'invalid', now);
       known.add(key);
@@ -173,8 +204,12 @@ export async function importSheetGrid(
         campaign: draft.campaign,
       });
     } catch (error) {
-      console.error('sheet row was not imported', error instanceof Error ? error.name : 'error');
-      if (result.errors.length < 30) result.errors.push(`صف ${rowNumber}: تعذر الحفظ`);
+      const message = publicSyncError(error);
+      console.error('sheet row was not imported', message);
+      result.ok = false;
+      result.skippedRows += 1;
+      if (!result.error) result.error = message;
+      if (result.errors.length < 30) result.errors.push(`صف ${rowNumber}: ${message}`);
     }
   }
   return result;
