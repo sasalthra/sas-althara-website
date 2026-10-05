@@ -13,8 +13,12 @@
  * telegram_media_group_id are added the same once-per-process way. The repair
  * never drops data and a failure here does not block the leads schema.
  * Existing lead phones are rewritten to the Saudi local form 05XXXXXXXX once
- * per process. Shared numbers are kept (nothing is merged or deleted) and each
- * of those leads gets one phone_duplicate activity note.
+ * per process. A newer lead created by the sheet sync is then deleted when an
+ * earlier lead has the same normalized phone (see lib/sheet-duplicate-cleanup.ts).
+ * The marker is leads.created_via = google_sheet, a created activity whose
+ * via is google_sheet, or a crm_sheet_rows link with status imported. Source
+ * text alone is not a marker. Other shared numbers are kept, and each of those
+ * remaining leads gets one phone_duplicate activity note.
  * ai_settings / ai_usage are created the same way so provider-key save does not
  * depend on a manual migration. crm_users.last_login_at is added once and left
  * null until a real sign-in writes it.
@@ -33,6 +37,7 @@
 import {planLeadPhoneMigration} from './phone';
 import {retiredStageMoves, stageEnumValues} from './lead-stages';
 import {sheetSourceKey} from './sheet-keys';
+import {cleanupSheetSyncDuplicates, type SqlRunner} from './sheet-duplicate-cleanup';
 import {TIKTOK_META_TAB_GID, tiktokSheetSeed} from './sheet-sync-config';
 
 export type LeadSchemaState = {featured: boolean};
@@ -379,10 +384,23 @@ async function ensureTelegramSchema(executor: SqlExecutor) {
   }
 }
 
+function runnerFromExecutor(executor: SqlExecutor): SqlRunner {
+  return {
+    async all(sql, values = []) {
+      return rowsOf(await run(executor, sql, values));
+    },
+    async run(sql, values = []) {
+      await run(executor, sql, values);
+    },
+  };
+}
+
 /**
  * One pass per process cache. A missing phone column or a locked account is
- * logged and skipped. A second process run sees stored 05 numbers and existing
- * phone_duplicate notes, so it does not write them again.
+ * logged and skipped. Phones are rewritten first, then newer sheet-sync
+ * duplicates are deleted, then any numbers that are still shared get one
+ * phone_duplicate note. A second process run sees stored 05 numbers and
+ * existing notes, so it does not write them again.
  */
 async function normalizeExistingLeadPhones(executor: SqlExecutor) {
   let rows: Record<string, unknown>[] = [];
@@ -404,6 +422,27 @@ async function normalizeExistingLeadPhones(executor: SqlExecutor) {
       console.error('lead phone was not normalized', error);
     }
   }
+  try {
+    await cleanupSheetSyncDuplicates(runnerFromExecutor(executor));
+  } catch (error) {
+    console.error('sheet duplicate cleanup failed', error);
+  }
+  await noteSharedLeadPhones(executor);
+}
+
+async function noteSharedLeadPhones(executor: SqlExecutor) {
+  let rows: Record<string, unknown>[] = [];
+  try {
+    rows = rowsOf(await run(executor, 'SELECT id, phone FROM leads'));
+  } catch (error) {
+    console.error('duplicate phone notes were not checked', error);
+    return;
+  }
+  const plan = planLeadPhoneMigration(
+    rows
+      .map(row => ({id: String(row.id ?? ''), phone: String(row.phone ?? '')}))
+      .filter(row => row.id)
+  );
   if (!plan.duplicateNotes.length) return;
   let noted = new Set<string>();
   try {
@@ -537,6 +576,14 @@ export const SHEET_LOCK_DDL = `CREATE TABLE IF NOT EXISTS crm_sheet_sync_lock (
   id VARCHAR(40) NOT NULL PRIMARY KEY,
   locked_until VARCHAR(40) NOT NULL,
   token VARCHAR(40) NOT NULL
+)`;
+
+export const SHEET_CLEANUP_DDL = `CREATE TABLE IF NOT EXISTS crm_sheet_cleanup (
+  id VARCHAR(40) NOT NULL PRIMARY KEY,
+  deleted_count INTEGER NOT NULL DEFAULT 0,
+  total_deleted INTEGER NOT NULL DEFAULT 0,
+  rows_marked INTEGER NOT NULL DEFAULT 0,
+  ran_at VARCHAR(40) NULL
 )`;
 
 export const SHEET_ROW_INDEX_DDL = 'CREATE UNIQUE INDEX IF NOT EXISTS crm_sheet_rows_source_key ON crm_sheet_rows (source_id, row_key_hash)';
@@ -689,7 +736,7 @@ async function backfillSheetKeys(executor: SqlExecutor) {
  * An older or mismatched gid on the seeded row is retargeted.
  */
 async function ensureSheetSyncSchema(executor: SqlExecutor) {
-  for (const sql of [SHEET_SOURCES_DDL, SHEET_ROWS_DDL, SHEET_LOCK_DDL]) {
+  for (const sql of [SHEET_SOURCES_DDL, SHEET_ROWS_DDL, SHEET_LOCK_DDL, SHEET_CLEANUP_DDL]) {
     try {
       await run(executor, sql);
     } catch (error) {
@@ -776,12 +823,17 @@ async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
   const existing = await hasFeaturedColumn(executor);
   if (existing === null) {
     await repairStages(executor);
-    try {
-      await normalizeExistingLeadPhones(executor);
-    } catch (error) {
-      console.error('lead phone normalization failed', error);
-    }
-    return {featured: false};
+  try {
+    await ensureColumn(executor, 'leads', 'created_via', 'VARCHAR(40) NULL');
+  } catch (error) {
+    console.error('leads.created_via was not added', error);
+  }
+  try {
+    await normalizeExistingLeadPhones(executor);
+  } catch (error) {
+    console.error('lead phone normalization failed', error);
+  }
+  return {featured: false};
   }
   featured = existing;
   if (!featured) {
@@ -795,6 +847,11 @@ async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
   }
   if (featured) await ensureFeaturedIndex(executor);
   await repairStages(executor);
+  try {
+    await ensureColumn(executor, 'leads', 'created_via', 'VARCHAR(40) NULL');
+  } catch (error) {
+    console.error('leads.created_via was not added', error);
+  }
   try {
     await normalizeExistingLeadPhones(executor);
   } catch (error) {

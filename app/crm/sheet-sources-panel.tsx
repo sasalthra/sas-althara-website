@@ -41,11 +41,19 @@ type SheetSource = {
 
 type SheetTab = {gid: string; name: string};
 
+type DuplicateCleanup = {
+  deleted: number;
+  totalDeleted: number;
+  rowsMarked: number;
+  ranAt: string;
+};
+
 type Status = {
   sources: SheetSource[];
   intervalMs: number;
   cronReady: boolean;
   serviceAccount: boolean;
+  duplicateCleanup?: DuplicateCleanup | null;
 };
 
 const emptyMapping = (): SheetMapping => ({});
@@ -211,8 +219,9 @@ export default function SheetSourcesPanel() {
       }
       const errorText = data.errorMessage || (Array.isArray(data.errors) ? data.errors.filter(Boolean)[0] : '');
       const seededNote = data.seeded ? 'أُضيفت ورقة تيك توك. ' : '';
+      const removed = Number(data.duplicatesRemoved ?? 0);
       setMessage(
-        `${seededNote}آخر مزامنة: قُرئ ${data.rowsRead ?? 0}، جديد ${data.created ?? data.inserted ?? 0}، موجود ${data.existing ?? data.duplicates ?? 0}، متخطى ${data.skippedRows ?? 0}${errorText ? `. ${errorText}` : ''}`
+        `${seededNote}آخر مزامنة: قُرئ ${data.rowsRead ?? 0}، جديد ${data.created ?? data.inserted ?? 0}، موجود ${data.existing ?? data.duplicates ?? 0}، متخطى ${data.skippedRows ?? 0}${errorText ? `. ${errorText}` : ''}. تم حذف ${removed} عميل مكرر من المزامنة`
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'تعذرت المزامنة');
@@ -243,6 +252,31 @@ export default function SheetSourcesPanel() {
     }
   }
 
+  async function cleanDuplicates() {
+    if (!window.confirm('سيُحذف العملاء الأحدث الذين أنشأتهم المزامنة إذا كان رقمهم موجوداً على عميل أقدم. العميل الأقدم يبقى كما هو. هل تريد المتابعة؟')) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      const response = await fetch('/api/integrations/sheet-sources/cleanup', {method: 'POST'});
+      const data = await response.json();
+      if (!response.ok) throw Error(data.error || 'تعذر تنظيف المكررات');
+      await load();
+      if (data.skipped && data.reason) {
+        setMessage(String(data.reason));
+        return;
+      }
+      const deleted = Number(data.deleted ?? 0);
+      const rowsMarked = Number(data.rowsMarked ?? 0);
+      setMessage(
+        `تم حذف ${deleted} عميل مكرر من المزامنة${rowsMarked ? `. عُلّمت ${rowsMarked} صفوف حتى لا تُستورد مرة أخرى` : ''}`
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'تعذر تنظيف المكررات');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove(id: string) {
     if (!window.confirm('حذف المصدر يوقف سحبه. لإيقافه مؤقتاً ألغِ التفعيل بدلاً من الحذف. هل تريد الحذف؟')) return;
     setBusy(true);
@@ -268,6 +302,7 @@ export default function SheetSourcesPanel() {
       <h2>مصادر نماذج الإعلانات</h2>
       <p>
         كل صف جديد في الجدول يصبح عميلاً في مرحلة «عميل جديد»، المصدر تسمية المصدر مع اسم الحملة، والجوال بصيغة 05، ومن غير تعيين حتى يوزّعه المدير.
+        إذا كان الجوال موجوداً لأي عميل، بأي مصدر أو حالة أو تعيين، لا يُنشأ عميل جديد ويُسجّل الصف مكرراً على العميل الأقدم.
         أول مزامنة لمصدر جديد تُسجّل النشاط فقط، وترسل للإدارة ملخصاً واحداً بعدد الجدد والموجودين، دون بريد إعادة تسجيل.
         بعد ذلك، أكثر من خمس إعادات تسجيل في المزامنة نفسها تُجمع في بريد واحد للإدارة وبريد لكل مندوب بعملائه فقط.
         الورقة المزروعة هي «تيك توك» برقم {TIKTOK_SHEET_GID}، بلا اسم حملة حتى يكتبه المدير. ورقة meta لا تُزامَن.
@@ -282,8 +317,12 @@ export default function SheetSourcesPanel() {
       <p data-sheet-health role="status">
         صحة المزامنة: {!status ? (message || 'لم تتم أي مزامنة بعد') : status.sources.length ? status.sources.map(healthLine).join(' ') : 'لم تتم أي مزامنة بعد'}
       </p>
+      {status?.duplicateCleanup?.ranAt ? (
+        <p data-sheet-cleanup role="status">تم حذف {status.duplicateCleanup.totalDeleted} عميل مكرر من المزامنة</p>
+      ) : null}
       <button type="button" className="primary" disabled={busy} onClick={() => void syncNow()}>مزامنة الآن</button>{' '}
-      <button type="button" disabled={busy} onClick={() => void diagnose()}>فحص قاعدة البيانات</button>
+      <button type="button" disabled={busy} onClick={() => void diagnose()}>فحص قاعدة البيانات</button>{' '}
+      <button type="button" disabled={busy} onClick={() => void cleanDuplicates()}>تنظيف المكررات من المزامنة</button>
       <p role="status">{message}</p>
       {steps.length ? (
         <ol>

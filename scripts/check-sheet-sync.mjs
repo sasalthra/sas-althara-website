@@ -38,6 +38,7 @@ try {
       sync: 'lib/sheet-sync.ts',
       cron: 'lib/cron-auth.ts',
       schema: 'lib/lead-schema.ts',
+      dedupe: 'lib/sheet-duplicate-cleanup.ts',
     },
     outdir: output,
     bundle: true,
@@ -50,6 +51,7 @@ try {
   const sync = require(join(output, 'sync.cjs'));
   const cron = require(join(output, 'cron.cjs'));
   const schema = require(join(output, 'schema.cjs'));
+  const dedupe = require(join(output, 'dedupe.cjs'));
 
   const ref = config.parseSheetRef('https://docs.google.com/spreadsheets/d/1_lAoABagOV93EQPi_vNWct4ok3zCWE1plJFfbDzm6Nc/edit?usp=sharing#gid=0');
   assert.equal(ref.sheetId, config.TIKTOK_SHEET_ID);
@@ -220,7 +222,7 @@ try {
   assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM crm_sheet_rows WHERE source_id = 'tiktok-leads-1'").get().n, 0);
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='crm_sheet_rows'").get().name, 'crm_sheet_rows');
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='crm_sheet_sync_lock'").get().name, 'crm_sheet_sync_lock');
-  const portable = [schema.SHEET_SOURCES_DDL, schema.SHEET_ROWS_DDL, schema.SHEET_LOCK_DDL, schema.SHEET_ROW_INDEX_DDL, schema.SHEET_SOURCE_INDEX_DDL].join('\n');
+  const portable = [schema.SHEET_SOURCES_DDL, schema.SHEET_ROWS_DDL, schema.SHEET_LOCK_DDL, schema.SHEET_CLEANUP_DDL, schema.SHEET_ROW_INDEX_DDL, schema.SHEET_SOURCE_INDEX_DDL].join('\n');
   assert.doesNotMatch(portable, /TEXT\s+PRIMARY\s+KEY/i);
   assert.doesNotMatch(portable, /\bJSON\b/);
   assert.doesNotMatch(portable, /\bDATETIME\b/i);
@@ -231,6 +233,8 @@ try {
   assert.match(schema.SHEET_ROWS_DDL, /source_id VARCHAR\(40\)/);
   assert.match(schema.SHEET_ROWS_DDL, /row_key VARCHAR\(255\)/);
   assert.match(schema.SHEET_ROWS_DDL, /row_key_hash CHAR\(64\)/);
+  assert.match(schema.SHEET_CLEANUP_DDL, /crm_sheet_cleanup/);
+  assert.match(schema.SHEET_CLEANUP_DDL, /total_deleted INTEGER/);
   assert.match(schema.SHEET_ROW_INDEX_DDL, /\(source_id, row_key_hash\)/);
   assert.doesNotMatch(schema.SHEET_ROW_INDEX_DDL, /row_key\)/);
   assert.ok(40 + 64 < 191);
@@ -446,6 +450,33 @@ try {
   assert.match(boomImport.error, /Unknown column 'source'/);
   assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM leads WHERE phone = '0550000007'").get().n, 0);
   assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM crm_sheet_rows WHERE source_id = 'fixture-boom' AND status = 'imported'").get().n, 0);
+  const batchDupHeaders = ['full_name', 'phone_number'];
+  const batchDup = await sync.importSheetGrid(db, {...source, id: 'batch-dup', headers: batchDupHeaders, mapping: {name: 0, phone: 1}}, [
+    batchDupHeaders,
+    ['أول', '+966 55 111 0081'],
+    ['ثاني', '0551110081'],
+  ], owner);
+  assert.equal(batchDup.inserted, 1);
+  assert.equal(batchDup.duplicates, 1);
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM leads WHERE phone = '0551110081'").get().n, 1);
+  assert.equal(mem.prepare("SELECT name FROM leads WHERE phone = '0551110081'").get().name, 'أول');
+  assert.equal(mem.prepare("SELECT created_via FROM leads WHERE phone = '0551110081'").get().created_via, 'google_sheet');
+  mem.prepare(`INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, phone, property_id, property_other, source, stage, notes, follow_up, created_at, updated_at) VALUES ('weird-9660', ?, ?, 'rep-existing', '', 'عميل سابق', '9660551110091', 'other', '', 'موقع', 'contacted', '', '', '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z')`).run(owner, owner);
+  mem.prepare(`INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, phone, property_id, property_other, source, stage, notes, follow_up, created_at, updated_at) VALUES ('weird-ar', ?, ?, '', '', 'عميل عربي', '٠٥٥١١١٠٠٩٢', 'other', '', 'تيك توك', 'new', '', '', '2020-02-01T00:00:00.000Z', '2020-02-01T00:00:00.000Z')`).run(owner, owner);
+  const weird = await sync.importSheetGrid(db, {...source, id: 'weird-phones', headers: batchDupHeaders, mapping: {name: 0, phone: 1}}, [
+    batchDupHeaders,
+    ['لن يُضاف', '0551110091'],
+    ['لن يُضاف أيضاً', '0551110092'],
+  ], owner);
+  assert.equal(weird.inserted, 0);
+  assert.equal(weird.duplicates, 2);
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM leads WHERE id IN ('weird-9660', 'weird-ar')").get().n, 2);
+  assert.equal(mem.prepare("SELECT name, phone, assigned_to, stage FROM leads WHERE id = 'weird-9660'").get().name, 'عميل سابق');
+  assert.equal(mem.prepare("SELECT phone FROM leads WHERE id = 'weird-9660'").get().phone, '0551110091');
+  assert.equal(mem.prepare("SELECT assigned_to, stage FROM leads WHERE id = 'weird-9660'").get().assigned_to, 'rep-existing');
+  assert.equal(mem.prepare("SELECT name, source FROM leads WHERE id = 'weird-ar'").get().name, 'عميل عربي');
+  assert.equal(mem.prepare("SELECT source FROM leads WHERE id = 'weird-ar'").get().source, 'تيك توك');
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM leads WHERE phone = '0551110092' OR phone = '٠٥٥١١١٠٠٩٢'").get().n, 1);
   mem.close();
 
   assert.match(readFileSync('instrumentation.ts', 'utf8'), /phase-production-build/);
@@ -470,6 +501,138 @@ try {
   assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /أول مزامنة/);
   assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /TIKTOK_SHEET_GID/);
   assert.match(readFileSync('app/api/integrations/sheet-sources/preview/route.ts', 'utf8'), /listSheetTabs/);
+  assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /تنظيف المكررات من المزامنة/);
+  assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /تم حذف \{status\.duplicateCleanup\.totalDeleted\} عميل مكرر من المزامنة/);
+  assert.match(readFileSync('app/api/integrations/sheet-sources/cleanup/route.ts', 'utf8'), /cleanupSheetSyncDuplicates/);
+  assert.match(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /enqueueSheetTurn/);
+  assert.match(readFileSync('lib/sheet-duplicate-cleanup.ts', 'utf8'), /SHEET_SYNC_CREATED_VIA/);
+  assert.doesNotMatch(readFileSync('lib/sheet-duplicate-cleanup.ts', 'utf8'), /sendMail|assignment-notify/);
+  assert.equal(dedupe.SHEET_SYNC_CREATED_VIA, 'google_sheet');
+  const plan = dedupe.planSheetSyncDuplicateCleanup([
+    {id: 'old-manual', phone: '+966 55 111 1001', createdAt: '2020-01-01T00:00:00.000Z', syncCreated: false},
+    {id: 'new-sync', phone: '0551111001', createdAt: '2026-06-01T00:00:00.000Z', syncCreated: true},
+    {id: 'keep-sync', phone: '9660552222002', createdAt: '2024-01-01T00:00:00.000Z', syncCreated: true},
+    {id: 'drop-sync', phone: '٠٥٥٢٢٢٢٠٠٢', createdAt: '2026-07-01T00:00:00.000Z', syncCreated: true},
+    {id: 'tiktok-only', phone: '0553333003', createdAt: '2026-08-01T00:00:00.000Z', syncCreated: false},
+    {id: 'older-c', phone: '0553333003', createdAt: '2019-01-01T00:00:00.000Z', syncCreated: false},
+    {id: 'sync-b', phone: '0555555005', createdAt: '2025-01-01T00:00:00.000Z', syncCreated: true},
+    {id: 'sync-a', phone: '0555555005', createdAt: '2025-01-01T00:00:00.000Z', syncCreated: true},
+    {id: 'blank', phone: '', createdAt: '2020-01-01T00:00:00.000Z', syncCreated: true},
+    {id: 'blank-2', phone: 'abc', createdAt: '2026-01-01T00:00:00.000Z', syncCreated: true},
+  ]);
+  assert.deepEqual(plan.map(item => item.deleteId).sort(), ['drop-sync', 'new-sync', 'sync-b']);
+  assert.equal(plan.find(item => item.deleteId === 'new-sync').survivorId, 'old-manual');
+  assert.equal(plan.find(item => item.deleteId === 'drop-sync').survivorId, 'keep-sync');
+  assert.equal(plan.find(item => item.deleteId === 'sync-b').survivorId, 'sync-a');
+  assert.equal(dedupe.isSheetSyncCreatedLead({createdVia: 'google_sheet'}), true);
+  assert.equal(dedupe.isSheetSyncCreatedLead({importedBySheet: true}), true);
+  assert.equal(dedupe.isSheetSyncCreatedLead({createdActivities: [JSON.stringify({via: 'google_sheet'})]}), true);
+  assert.equal(dedupe.isSheetSyncCreatedLead({createdVia: '', importedBySheet: false, createdActivities: []}), false);
+  assert.equal(dedupe.activityViaSheet({via: 'google_sheet'}), true);
+  assert.equal(dedupe.activityViaSheet('{"note":"تيك توك"}'), false);
+
+  const cleanDb = new DatabaseSync(':memory:');
+  cleanDb.exec(`CREATE TABLE leads(id TEXT PRIMARY KEY, name TEXT, phone TEXT, source TEXT, stage TEXT, assigned_to TEXT, created_at TEXT, is_featured INTEGER NOT NULL DEFAULT 0, created_via TEXT);
+    CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE crm_transactions(id TEXT PRIMARY KEY, lead_id TEXT, data TEXT);
+    CREATE TABLE crm_import_rows(id TEXT PRIMARY KEY, lead_id TEXT, source TEXT, raw_data TEXT, created_at TEXT);
+    CREATE TABLE crm_sheet_rows(id TEXT PRIMARY KEY, source_id TEXT, row_key TEXT, row_key_hash TEXT, lead_id TEXT, status TEXT, created_at TEXT);`);
+  const putLead = (id, name, phone, source, stage, assigned, created, via) => {
+    cleanDb.prepare('INSERT INTO leads (id, name, phone, source, stage, assigned_to, created_at, created_via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, name, phone, source, stage, assigned, created, via);
+  };
+  putLead('keep-manual', 'الأصل', '+966 55 111 1001', 'موقع', 'contacted', 'rep-1', '2020-01-01T00:00:00.000Z', null);
+  putLead('drop-sync', 'المكرر', '0551111001', 'تيك توك', 'contacted', 'rep-2', '2026-06-01T00:00:00.000Z', null);
+  putLead('keep-sync', 'الأقدم مزامنة', '9660552222002', 'تيك توك', 'new', '', '2024-01-01T00:00:00.000Z', 'google_sheet');
+  putLead('drop-sync-2', 'الأحدث مزامنة', '٠٥٥٢٢٢٢٠٠٢', 'تيك توك', 'new', '', '2026-07-01T00:00:00.000Z', null);
+  putLead('keep-tiktok', 'تيك توك يدوي', '0553333003', 'تيك توك', 'new', '', '2026-08-01T00:00:00.000Z', null);
+  putLead('keep-older', 'أقدم يدوي', '0553333003', 'موقع', 'won', 'rep-3', '2019-01-01T00:00:00.000Z', null);
+  putLead('manual-d1', 'يدوي ١', '0554444004', 'موقع', 'new', '', '2020-03-01T00:00:00.000Z', null);
+  putLead('manual-d2', 'يدوي ٢', '0554444004', 'موقع', 'new', '', '2021-03-01T00:00:00.000Z', null);
+  putLead('sync-a', 'أ', '0555555005', 'تيك توك', 'new', '', '2025-01-01T00:00:00.000Z', 'google_sheet');
+  putLead('sync-b', 'ب', '0555555005', 'تيك توك', 'new', '', '2025-01-01T00:00:00.000Z', 'google_sheet');
+  cleanDb.prepare(`INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES ('act-drop', 'drop-sync', 'system', 'created', ?)`).run(JSON.stringify({via: 'google_sheet', source: 'تيك توك'}));
+  cleanDb.prepare(`INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES ('act-drop2', 'drop-sync-2', 'system', 'created', ?)`).run(JSON.stringify({via: 'google_sheet'}));
+  cleanDb.prepare(`INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES ('act-keep', 'keep-manual', 'system', 'created', ?)`).run(JSON.stringify({source: 'موقع'}));
+  cleanDb.prepare(`INSERT INTO crm_transactions (id, lead_id, data) VALUES ('tx-drop', 'drop-sync', '{}')`).run();
+  cleanDb.prepare(`INSERT INTO crm_transactions (id, lead_id, data) VALUES ('tx-keep', 'keep-manual', '{}')`).run();
+  cleanDb.prepare(`INSERT INTO crm_import_rows (id, lead_id, source, raw_data, created_at) VALUES ('imp-drop', 'drop-sync', 'excel', '{}', '2026-06-01')`).run();
+  cleanDb.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('row-drop', 'cleanup-src', 'tt:drop', 'drop-sync', 'imported', '2026-06-01')`).run();
+  cleanDb.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('row-keep-link', 'cleanup-src', 'tt:keep', 'keep-manual', 'duplicate', '2026-06-02')`).run();
+  cleanDb.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('row-drop2', 'cleanup-src', 'tt:drop2', 'drop-sync-2', 'imported', '2026-07-01')`).run();
+  cleanDb.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('row-sync-a', 'cleanup-src', 'tt:a', 'sync-a', 'imported', '2025-01-01')`).run();
+  cleanDb.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('row-sync-b', 'cleanup-src', 'tt:b', 'sync-b', 'imported', '2025-01-01')`).run();
+  schema.resetLeadSchemaCache();
+  await schema.ensureLeadSchema(sqliteExecutor(cleanDb));
+  assert.deepEqual(cleanDb.prepare('SELECT id FROM leads ORDER BY id').all().map(row => row.id), ['keep-manual', 'keep-older', 'keep-sync', 'keep-tiktok', 'manual-d1', 'manual-d2', 'sync-a']);
+  const keptManual = cleanDb.prepare("SELECT name, stage, assigned_to, source FROM leads WHERE id = 'keep-manual'").get();
+  assert.equal(keptManual.name, 'الأصل');
+  assert.equal(keptManual.stage, 'contacted');
+  assert.equal(keptManual.assigned_to, 'rep-1');
+  assert.equal(keptManual.source, 'موقع');
+  assert.equal(cleanDb.prepare("SELECT id FROM leads WHERE id = 'drop-sync'").get(), undefined);
+  assert.equal(cleanDb.prepare("SELECT id FROM leads WHERE id = 'drop-sync-2'").get(), undefined);
+  assert.equal(cleanDb.prepare("SELECT id FROM leads WHERE id = 'sync-b'").get(), undefined);
+  assert.equal(cleanDb.prepare("SELECT source FROM leads WHERE id = 'keep-tiktok'").get().source, 'تيك توك');
+  assert.equal(cleanDb.prepare("SELECT id FROM crm_transactions WHERE lead_id = 'drop-sync'").get(), undefined);
+  assert.equal(cleanDb.prepare("SELECT id FROM crm_transactions WHERE id = 'tx-keep'").get().id, 'tx-keep');
+  assert.equal(cleanDb.prepare("SELECT id FROM crm_import_rows WHERE lead_id = 'drop-sync'").get(), undefined);
+  assert.equal(cleanDb.prepare("SELECT COUNT(*) AS n FROM lead_activity WHERE lead_id = 'drop-sync'").get().n, 0);
+  const droppedRow = cleanDb.prepare("SELECT status, lead_id FROM crm_sheet_rows WHERE id = 'row-drop'").get();
+  assert.equal(droppedRow.status, 'duplicate');
+  assert.equal(droppedRow.lead_id, 'keep-manual');
+  assert.equal(cleanDb.prepare("SELECT status, lead_id FROM crm_sheet_rows WHERE id = 'row-keep-link'").get().lead_id, 'keep-manual');
+  assert.equal(cleanDb.prepare("SELECT lead_id FROM crm_sheet_rows WHERE id = 'row-drop2'").get().lead_id, 'keep-sync');
+  assert.equal(cleanDb.prepare("SELECT status, lead_id FROM crm_sheet_rows WHERE id = 'row-sync-b'").get().lead_id, 'sync-a');
+  assert.equal(cleanDb.prepare("SELECT action FROM lead_activity WHERE lead_id = 'keep-manual' AND action = 'sheet_duplicate_removed'").get().action, 'sheet_duplicate_removed');
+  assert.equal(Number(cleanDb.prepare("SELECT total_deleted FROM crm_sheet_cleanup WHERE id = 'latest'").get().total_deleted), 3);
+  schema.resetLeadSchemaCache();
+  await schema.ensureLeadSchema(sqliteExecutor(cleanDb));
+  assert.equal(cleanDb.prepare('SELECT COUNT(*) AS n FROM leads').get().n, 7);
+  const secondCleanup = cleanDb.prepare("SELECT deleted_count, total_deleted FROM crm_sheet_cleanup WHERE id = 'latest'").get();
+  assert.equal(Number(secondCleanup.deleted_count), 0);
+  assert.equal(Number(secondCleanup.total_deleted), 3);
+  cleanDb.close();
+
+  function sqlRunner(db) {
+    return {
+      async all(sql, values = []) { return db.prepare(sql).all(...values); },
+      async run(sql, values = []) { db.prepare(sql).run(...values); },
+    };
+  }
+  const lockDb = new DatabaseSync(':memory:');
+  lockDb.exec(`CREATE TABLE crm_sheet_sync_lock(id TEXT PRIMARY KEY, locked_until TEXT NOT NULL, token TEXT NOT NULL);
+    CREATE TABLE leads(id TEXT PRIMARY KEY, phone TEXT, created_at TEXT, created_via TEXT);
+    CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT);
+    CREATE TABLE crm_sheet_rows(id TEXT PRIMARY KEY, lead_id TEXT, status TEXT);
+    CREATE TABLE crm_sheet_cleanup(id TEXT PRIMARY KEY, deleted_count INTEGER, total_deleted INTEGER, rows_marked INTEGER, ran_at TEXT);`);
+  lockDb.prepare(`INSERT INTO leads (id, phone, created_at, created_via) VALUES ('old', '0551000001', '2020-01-01T00:00:00.000Z', NULL)`).run();
+  lockDb.prepare(`INSERT INTO leads (id, phone, created_at, created_via) VALUES ('new', '0551000001', '2026-01-01T00:00:00.000Z', 'google_sheet')`).run();
+  const held = await dedupe.acquireSheetSyncLock(sqlRunner(lockDb));
+  assert.ok(held);
+  const skippedCleanup = await dedupe.cleanupSheetSyncDuplicates(sqlRunner(lockDb));
+  assert.equal(skippedCleanup.skipped, true);
+  assert.equal(skippedCleanup.deleted, 0);
+  assert.equal(lockDb.prepare('SELECT COUNT(*) AS n FROM leads').get().n, 2);
+  assert.equal(await dedupe.acquireSheetSyncLock(sqlRunner(lockDb)), '');
+  await dedupe.releaseSheetSyncLock(sqlRunner(lockDb), held);
+  const ranCleanup = await dedupe.cleanupSheetSyncDuplicates(sqlRunner(lockDb));
+  assert.equal(ranCleanup.deleted, 1);
+  assert.deepEqual(ranCleanup.deletedIds, ['new']);
+  assert.equal(lockDb.prepare('SELECT id FROM leads').get().id, 'old');
+  const againCleanup = await dedupe.cleanupSheetSyncDuplicates(sqlRunner(lockDb));
+  assert.equal(againCleanup.deleted, 0);
+  assert.equal(againCleanup.totalDeleted, 1);
+  let turnOrder = '';
+  await Promise.all([
+    dedupe.enqueueSheetTurn(async () => {
+      turnOrder += 'a';
+      await new Promise(resolve => setTimeout(resolve, 20));
+      turnOrder += 'b';
+    }),
+    dedupe.enqueueSheetTurn(async () => { turnOrder += 'c'; }),
+  ]);
+  assert.equal(turnOrder, 'abc');
+  lockDb.close();
   console.log('PASS sheet mapping, row keys, seed, import once, duplicate phone, and cron secret');
 
   const mailDb = new DatabaseSync(':memory:');
