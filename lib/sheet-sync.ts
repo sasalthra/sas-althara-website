@@ -10,7 +10,13 @@ import {
   sheetRowProblem,
   type SheetMapping,
 } from './sheet-sync-config';
-import {findLeadByNormalizedPhone, noteReregistration, type ExistingLead, type LeadDb} from './lead-reregistration';
+import {noteReregistration, type ExistingLead, type LeadDb} from './lead-reregistration';
+import {
+  indexLeadsByNormalizedPhone,
+  SHEET_ROW_DUPLICATE,
+  SHEET_SYNC_CREATED_VIA,
+  type IndexedLead,
+} from './sheet-duplicate-cleanup';
 import {normalizeLeadPhone} from './phone';
 
 export type StoredSheetSource = {
@@ -119,6 +125,14 @@ export async function importSheetGrid(
   );
   const result = emptyResult();
   const now = new Date().toISOString();
+  const phones = indexLeadsByNormalizedPhone(
+    (await db
+      .prepare(
+        `SELECT id, name, phone, stage, IFNULL(assigned_to, '') AS assigned_to, IFNULL(source, '') AS source, created_at FROM leads`
+      )
+      .bind()
+      .all()).results
+  );
   for (let index = 1; index < grid.length; index++) {
     const cells = (grid[index] || []).map(cell => String(cell ?? ''));
     const rowNumber = index + 1;
@@ -151,21 +165,22 @@ export async function importSheetGrid(
       continue;
     }
     try {
-      const existing = await findLeadByNormalizedPhone(db, draft.phone);
+      const phone = normalizeLeadPhone(draft.phone);
+      const existing = phone ? phones.get(phone) : undefined;
       if (existing) {
-        const phone = normalizeLeadPhone(existing.phone) || existing.phone;
-        await noteReregistration(db, {...existing, phone}, {
+        const lead = indexedLead(existing);
+        await noteReregistration(db, {...lead, phone: existing.storedPhone || lead.phone}, {
           actorId: 'system',
           source: draft.source,
           submittedName: draft.name,
           submittedNotes: draft.notes,
           campaign: draft.campaign,
         });
-        await remember(db, source.id, key, existing.id, 'duplicate', now);
+        await remember(db, source.id, key, existing.id, SHEET_ROW_DUPLICATE, now);
         known.add(key);
         result.duplicates += 1;
         result.reregistrations.push({
-          lead: {...existing, phone},
+          lead,
           source: draft.source,
           submittedName: draft.name,
           submittedNotes: draft.notes,
@@ -174,16 +189,16 @@ export async function importSheetGrid(
         continue;
       }
       const id = crypto.randomUUID();
-      await db
-        .prepare(
-          `INSERT INTO leads (
-            id, owner, assigned_to, field_assigned_to, created_by,
-            name, phone, property_id, property_other, source, stage, notes, follow_up,
-            created_at, updated_at
-          ) VALUES (?, ?, '', '', ?, ?, ?, 'other', ?, ?, 'new', ?, '', ?, ?)`
-        )
-        .bind(id, ownerId, ownerId, draft.name, draft.phone, draft.propertyOther, draft.source, draft.notes, now, now)
-        .run();
+      await insertSheetLead(db, {
+        id,
+        ownerId,
+        name: draft.name,
+        phone: draft.phone,
+        propertyOther: draft.propertyOther,
+        source: draft.source,
+        notes: draft.notes,
+        now,
+      });
       await db
         .prepare('INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES (?, ?, ?, ?, ?)')
         .bind(
@@ -191,11 +206,23 @@ export async function importSheetGrid(
           id,
           'system',
           'created',
-          JSON.stringify({source: draft.source, stage: 'new', campaign: draft.campaign, via: 'google_sheet'})
+          JSON.stringify({source: draft.source, stage: 'new', campaign: draft.campaign, via: SHEET_SYNC_CREATED_VIA})
         )
         .run();
       await remember(db, source.id, key, id, 'imported', now);
       known.add(key);
+      if (phone) {
+        phones.set(phone, {
+          id,
+          name: draft.name,
+          phone,
+          storedPhone: phone,
+          stage: 'new',
+          assigned_to: '',
+          source: draft.source,
+          createdAt: now,
+        });
+      }
       result.inserted += 1;
       result.created.push({
         id,
@@ -214,6 +241,69 @@ export async function importSheetGrid(
     }
   }
   return result;
+}
+
+function indexedLead(existing: IndexedLead): ExistingLead {
+  return {
+    id: existing.id,
+    name: existing.name,
+    phone: existing.phone,
+    stage: existing.stage,
+    assigned_to: existing.assigned_to,
+    source: existing.source,
+  };
+}
+
+async function insertSheetLead(
+  db: LeadDb,
+  lead: {
+    id: string;
+    ownerId: string;
+    name: string;
+    phone: string;
+    propertyOther: string;
+    source: string;
+    notes: string;
+    now: string;
+  }
+) {
+  const values = [
+    lead.id,
+    lead.ownerId,
+    lead.ownerId,
+    lead.name,
+    lead.phone,
+    lead.propertyOther,
+    lead.source,
+    lead.notes,
+    lead.now,
+    lead.now,
+  ];
+  try {
+    await db
+      .prepare(
+        `INSERT INTO leads (
+          id, owner, assigned_to, field_assigned_to, created_by,
+          name, phone, property_id, property_other, source, stage, notes, follow_up,
+          created_at, updated_at, created_via
+        ) VALUES (?, ?, '', '', ?, ?, ?, 'other', ?, ?, 'new', ?, '', ?, ?, ?)`
+      )
+      .bind(...values, SHEET_SYNC_CREATED_VIA)
+      .run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/created_via/i.test(message)) throw error;
+    await db
+      .prepare(
+        `INSERT INTO leads (
+          id, owner, assigned_to, field_assigned_to, created_by,
+          name, phone, property_id, property_other, source, stage, notes, follow_up,
+          created_at, updated_at
+        ) VALUES (?, ?, '', '', ?, ?, ?, 'other', ?, ?, 'new', ?, '', ?, ?)`
+      )
+      .bind(...values)
+      .run();
+  }
 }
 
 async function remember(db: LeadDb, sourceId: string, rowKey: string, leadId: string, status: string, now: string) {

@@ -3,6 +3,7 @@ import {ensureSheetSchema} from '@/lib/lead-schema';
 import {actor, ApiError, body, endpoint, reply} from '@/lib/secure-api';
 import {serviceAccountConfigured} from '@/lib/sheet-fetch.server';
 import {sheetSourceKey} from '@/lib/sheet-keys';
+import {readSheetDuplicateCleanup, runnerFromLeadDb} from '@/lib/sheet-duplicate-cleanup';
 import {parseSheetRef, sheetSourceInputSchema, sheetsSyncIntervalMs} from '@/lib/sheet-sync-config';
 
 export const runtime = 'nodejs';
@@ -70,6 +71,7 @@ export async function GET() {
       intervalMs: sheetsSyncIntervalMs(),
       cronReady: (process.env.CRON_SECRET || '').trim().length >= 32,
       serviceAccount: serviceAccountConfigured(),
+      duplicateCleanup: await readSheetDuplicateCleanup(runnerFromLeadDb(crmDb())),
     });
   });
 }

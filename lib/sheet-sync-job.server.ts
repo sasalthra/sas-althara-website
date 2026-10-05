@@ -7,6 +7,14 @@ import {readSheetGrid} from './sheet-fetch.server';
 import {importSheetGrid, type SheetCreatedLead, type SheetImportResult, type SheetReregistration, type StoredSheetSource} from './sheet-sync';
 import {publicSyncError, sheetsSyncIntervalMs, type SheetMapping} from './sheet-sync-config';
 import {ApiError} from './secure-api';
+import {
+  acquireSheetSyncLock,
+  cleanupSheetSyncDuplicates,
+  enqueueSheetTurn,
+  releaseSheetSyncLock,
+  runnerFromLeadDb,
+  type SheetDuplicateCleanupResult,
+} from './sheet-duplicate-cleanup';
 
 export type SheetSyncStep = {step: string; ok: boolean; detail: string};
 
@@ -26,6 +34,7 @@ export type SheetSyncReport = {
   errors: string[];
   steps: SheetSyncStep[];
   seeded: boolean;
+  duplicatesRemoved: number;
   at: string;
 };
 
@@ -45,6 +54,7 @@ const EMPTY_REPORT = (reason = ''): SheetSyncReport => ({
   errors: reason ? [reason] : [],
   steps: [],
   seeded: false,
+  duplicatesRemoved: 0,
   at: new Date().toISOString(),
 });
 
@@ -86,30 +96,34 @@ async function ownerId() {
   return admin?.id || '';
 }
 
+function sheetRunner() {
+  return runnerFromLeadDb(crmDb());
+}
+
 async function acquireLock() {
-  const token = crypto.randomUUID();
-  const now = new Date().toISOString();
-  const until = new Date(Date.now() + 4 * 60 * 1000).toISOString();
-  const db = crmDb();
-  await db.prepare('DELETE FROM crm_sheet_sync_lock WHERE id = ? AND locked_until < ?').bind('sheets', now).run();
-  try {
-    await db
-      .prepare('INSERT INTO crm_sheet_sync_lock (id, locked_until, token) VALUES (?, ?, ?)')
-      .bind('sheets', until, token)
-      .run();
-    return token;
-  } catch (error) {
-    if (/duplicate|UNIQUE|ER_DUP_ENTRY/i.test(error instanceof Error ? error.message : String(error))) return '';
-    throw error;
-  }
+  return acquireSheetSyncLock(sheetRunner());
 }
 
 async function releaseLock(token: string) {
-  if (!token) return;
+  await releaseSheetSyncLock(sheetRunner(), token);
+}
+
+async function removeSyncDuplicates(): Promise<SheetDuplicateCleanupResult> {
   try {
-    await crmDb().prepare('DELETE FROM crm_sheet_sync_lock WHERE id = ? AND token = ?').bind('sheets', token).run();
+    return await cleanupSheetSyncDuplicates(sheetRunner(), {locked: true});
   } catch (error) {
-    console.error('sheet sync lock was not released', error instanceof Error ? error.name : 'error');
+    const message = publicSyncError(error);
+    console.error('sheet duplicate cleanup failed', message);
+    return {
+      ok: false,
+      skipped: false,
+      reason: message,
+      deleted: 0,
+      deletedIds: [],
+      rowsMarked: 0,
+      totalDeleted: 0,
+      ranAt: '',
+    };
   }
 }
 
@@ -166,6 +180,7 @@ function logSync(report: SheetSyncReport) {
       created: report.created,
       existing: report.existing,
       skipped: report.skippedRows,
+      duplicatesRemoved: report.duplicatesRemoved,
       error: report.errorMessage,
       at: report.at,
     })}`
@@ -207,7 +222,7 @@ async function doSync(): Promise<SheetSyncReport> {
   }
   const created: SheetCreatedLead[] = [];
   const reregistrations: SheetReregistration[] = [];
-  const backfills: SheetBackfillNotice[] = [];
+  const backfills: Array<SheetBackfillNotice & {createdIds: string[]}> = [];
   const report = EMPTY_REPORT();
   report.ok = true;
   report.skipped = false;
@@ -217,6 +232,8 @@ async function doSync(): Promise<SheetSyncReport> {
   report.seeded = seeded;
   if (seeded) report.steps.push({step: 'المصادر', ok: true, detail: 'أُضيفت ورقة تيك توك لأن القائمة كانت فارغة'});
   try {
+    const removedBefore = await removeSyncDuplicates();
+    report.duplicatesRemoved += removedBefore.deleted;
     const owner = await ownerId();
     if (!owner) {
       const message = 'لا يوجد مدير نشط لحفظ العملاء';
@@ -269,6 +286,7 @@ async function doSync(): Promise<SheetSyncReport> {
               campaign: source.campaign,
               inserted: result.inserted,
               duplicates: result.duplicates,
+              createdIds: result.created.map(lead => lead.id),
             });
           }
         } else {
@@ -292,6 +310,30 @@ async function doSync(): Promise<SheetSyncReport> {
         }
       }
     }
+    const removedAfter = await removeSyncDuplicates();
+    const removedIds = new Set(removedAfter.deletedIds);
+    const freshCreated = created.filter(lead => !removedIds.has(lead.id));
+    const dropped = created.length - freshCreated.length;
+    if (dropped) {
+      report.inserted = Math.max(0, report.inserted - dropped);
+      report.duplicates += dropped;
+    }
+    report.duplicatesRemoved += removedAfter.deleted;
+    for (const item of backfills) {
+      const gone = item.createdIds.filter(id => removedIds.has(id)).length;
+      if (!gone) continue;
+      item.inserted = Math.max(0, item.inserted - gone);
+      item.duplicates += gone;
+    }
+    created.length = 0;
+    created.push(...freshCreated);
+    report.steps.push({
+      step: 'تنظيف المكررات',
+      ok: removedBefore.ok && removedAfter.ok,
+      detail: removedBefore.ok && removedAfter.ok
+        ? `تم حذف ${report.duplicatesRemoved} عميل مكرر من المزامنة`
+        : removedBefore.reason || removedAfter.reason || 'تعذر تنظيف العملاء المكررين',
+    });
     try {
       await notifySheetBackfillSummaries(backfills);
     } catch (error) {
@@ -325,7 +367,7 @@ async function doSync(): Promise<SheetSyncReport> {
 
 export function syncAllSheets(): Promise<SheetSyncReport> {
   if (!inflight) {
-    inflight = doSync().finally(() => {
+    inflight = enqueueSheetTurn(() => doSync()).finally(() => {
       inflight = null;
     });
   }
