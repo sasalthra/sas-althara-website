@@ -9,6 +9,7 @@ const activeStageEntries = [
   ['new', 'عميل جديد'],
   ['no_answer', 'لم يتم الرد'],
   ['contacted', 'تم التواصل'],
+  ['interested', 'مهتم'],
   ['awaiting_offers', 'بانتظار العروض'],
   ['field_dispatch', 'تفويج للميداني'],
   ['property_visited', 'تم زيارة العقار'],
@@ -56,6 +57,7 @@ export const stageEnumValues = [
   'properties_shown',
   'viewing',
   'won',
+  'interested',
 ] as const;
 
 /** Stored value -> the stage that replaces it in the UI, import, and reports. */
@@ -121,6 +123,7 @@ export const stageAliasGroups: Record<string, string[]> = {
     'تم استلام بيانات العميل', 'استلام بيانات', 'بيانات مستلمة', 'data received', 'data_received',
     'تم عمل حسبة للعميل', 'تم عمل حسبة', 'حسبة', 'حسبه', 'حسابه', 'calculation', 'calculation_done',
   ],
+  interested: ['مهتم', 'interested'],
   awaiting_offers: [
     'بانتظار العروض', 'بنتظار العروض', 'في انتظار العروض', 'انتظار العروض', 'انتظار العرض',
     'تم عرض العقارات', 'عرض العقارات', 'تم عرض العقار', 'عرض العقار',

@@ -17,7 +17,7 @@ import LeadForm, {
 import {formatRiyadhDate} from '@/lib/lead-dates';
 import {canToggleFeatured, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
 import NewLeadBadge from '@/components/new-lead-badge';
-import {editableStage, stageChoices, stageLabel} from '@/lib/lead-stages';
+import {displayStage, editableStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import {displayLeadPhone} from '@/lib/phone';
 
 import {
@@ -68,6 +68,31 @@ type FieldEmployee = {
   name: string;
   username?: string;
 };
+
+type StageNote = {
+  id: string;
+  text: string;
+  at: string;
+  byUserId: string;
+  byName: string;
+  stage: string;
+};
+
+function groupStageNotes(notes: StageNote[]) {
+  const groups: {stage: string; notes: StageNote[]}[] = [];
+  const index = new Map<string, number>();
+  for (const note of notes) {
+    const key = note.stage || '';
+    const at = index.get(key);
+    if (at == null) {
+      index.set(key, groups.length);
+      groups.push({stage: key, notes: [note]});
+    } else {
+      groups[at].notes.push(note);
+    }
+  }
+  return groups;
+}
 
 function valueOrDash(
   value?: string | null
@@ -164,6 +189,8 @@ function actionLabel(
       return 'تمت إضافة متابعة';
     case 'stage_changed':
       return 'تم تغيير المرحلة';
+    case 'stage_note':
+      return 'ملاحظة على المرحلة';
     case 'featured_changed':
       return 'تم تحديث تمييز العميل';
     case 'field_dispatched':
@@ -240,6 +267,16 @@ function getActivityNote(
           `المرحلة: ${stageLabel(stage)}`
         );
       }
+    }
+
+    if (
+      activity.action === 'stage_note' &&
+      typeof stage === 'string' &&
+      stage
+    ) {
+      parts.push(
+        `المرحلة: ${stageLabel(stage)}`
+      );
     }
 
     if (
@@ -343,6 +380,9 @@ export default function LeadDetailsPage() {
   const [stageNote, setStageNote] =
     useState('');
 
+  const [stageNotes, setStageNotes] =
+    useState<StageNote[]>([]);
+
   const [fieldStaff, setFieldStaff] =
     useState<FieldEmployee[]>([]);
 
@@ -396,6 +436,22 @@ export default function LeadDetailsPage() {
     }
   };
 
+  const refreshStageNotes = async () => {
+    try {
+      const response = await fetch(
+        `/api/leads/${params.id}/stage-notes`,
+        {cache: 'no-store'}
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'تعذر تحميل ملاحظات المراحل');
+      }
+      setStageNotes(Array.isArray(result) ? result : []);
+    } catch {
+      setStageNotes([]);
+    }
+  };
+
   const refreshActivity =
     async () => {
       setActivityLoading(true);
@@ -428,8 +484,10 @@ export default function LeadDetailsPage() {
     };
 
   useEffect(() => {
+    setStageNotes([]);
     void refresh();
     void refreshActivity();
+    void refreshStageNotes();
 
     void getSession().then(
       session => {
@@ -582,6 +640,16 @@ export default function LeadDetailsPage() {
   ) {
     event.preventDefault();
 
+    if (
+      nextStage === editableStage(lead?.stage) &&
+      !stageNote.trim()
+    ) {
+      setDialogError(
+        'اكتب الملاحظة. الحفظ على نفس المرحلة يضيف ملاحظة جديدة ولا يستبدل السابقة.'
+      );
+      return;
+    }
+
     setSaving(true);
     setDialogError('');
 
@@ -618,6 +686,7 @@ export default function LeadDetailsPage() {
       await Promise.all([
         refresh(),
         refreshActivity(),
+        refreshStageNotes(),
       ]);
     } catch (error) {
       setDialogError(
@@ -751,6 +820,8 @@ export default function LeadDetailsPage() {
     );
   }
 
+  const stageNoteGroups = groupStageNotes(stageNotes);
+  const currentStageKey = displayStage(lead.stage);
   const latestDispatch = activities.find(
     item => item.action === 'field_dispatched'
   );
@@ -898,7 +969,7 @@ export default function LeadDetailsPage() {
                 }}
                 className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
               >
-                تغيير المرحلة
+                المرحلة والملاحظة
               </button>
 
               <button
@@ -1132,6 +1203,49 @@ export default function LeadDetailsPage() {
               ) : (
                 <p className="text-sm text-slate-500">
                   لا توجد تحديثات ميدانية بعد.
+                </p>
+              )}
+            </div>
+
+            <div className="rounded-3xl border border-[#3F1A44]/15 bg-white p-6 shadow-sm">
+              <h2 className="mb-2 text-xl font-bold text-[#3F1A44]">
+                سجل ملاحظات المراحل
+              </h2>
+              <p className="mb-5 text-sm text-slate-500">
+                الأحدث أولاً. كل ملاحظة تُحفظ بتوقيتها وكاتبها، والمراحل السابقة تبقى ظاهرة.
+              </p>
+              {stageNoteGroups.length ? (
+                <div className="space-y-6">
+                  {stageNoteGroups.map(group => (
+                    <section key={group.stage || 'unknown'}>
+                      <h3 className="mb-3 text-sm font-bold text-slate-900">
+                        {stageLabel(group.stage)}
+                        {currentStageKey === displayStage(group.stage) ? (
+                          <span className="mr-2 rounded-full bg-[#3F1A44]/10 px-2 py-0.5 text-xs font-semibold text-[#3F1A44]">
+                            المرحلة الحالية
+                          </span>
+                        ) : null}
+                      </h3>
+                      <div className="space-y-3">
+                        {group.notes.map(item => (
+                          <article key={item.id} className="rounded-2xl bg-slate-50 p-4">
+                            <div className="text-xs text-slate-500">
+                              {item.byName || 'النظام'}
+                              {' • '}
+                              {formatDateTime(item.at)}
+                            </div>
+                            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">
+                              {item.text}
+                            </p>
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">
+                  لا توجد ملاحظات على المراحل بعد.
                 </p>
               )}
             </div>
@@ -1409,11 +1523,11 @@ export default function LeadDetailsPage() {
         >
           <DialogHeader>
             <DialogTitle>
-              تغيير المرحلة
+              المرحلة والملاحظة
             </DialogTitle>
 
             <DialogDescription>
-              اختر المرحلة الجديدة وسجّل سبب أو نتيجة التغيير.
+              اختر المرحلة. ملاحظة على نفس المرحلة تُضاف إلى السجل ولا تحذف الملاحظات السابقة.
             </DialogDescription>
           </DialogHeader>
 
@@ -1456,13 +1570,33 @@ export default function LeadDetailsPage() {
               </select>
             </div>
 
+            {stageNotes.some(item => item.stage === nextStage) && (
+              <div className="max-h-40 space-y-2 overflow-y-auto rounded-xl bg-slate-50 p-3">
+                <p className="text-xs font-semibold text-slate-500">
+                  ملاحظات هذه المرحلة — الأحدث أولاً
+                </p>
+                {stageNotes.filter(item => item.stage === nextStage).map(item => (
+                  <p key={item.id} className="text-sm text-slate-700">
+                    <span className="text-xs text-slate-500">
+                      {item.byName || 'النظام'}
+                      {' • '}
+                      {formatDateTime(item.at)}
+                    </span>
+                    <br />
+                    {item.text}
+                  </p>
+                ))}
+              </div>
+            )}
+
             <div>
               <label className="mb-2 block text-sm font-medium">
-                ملاحظة التغيير
+                ملاحظة المرحلة
               </label>
 
               <textarea
                 rows={4}
+                maxLength={2000}
                 value={stageNote}
                 onChange={
                   event =>
@@ -1499,7 +1633,9 @@ export default function LeadDetailsPage() {
               >
                 {saving
                   ? 'جارٍ الحفظ...'
-                  : 'حفظ المرحلة'}
+                  : nextStage === editableStage(lead.stage)
+                    ? 'حفظ الملاحظة'
+                    : 'حفظ المرحلة'}
               </button>
             </div>
           </form>
