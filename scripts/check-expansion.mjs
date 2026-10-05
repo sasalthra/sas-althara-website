@@ -131,7 +131,7 @@ try {
   assert.deepEqual(wonAliases.map(r=>r.lead.stage),['contract_signed','contract_signed','contract_signed','contract_signed','contract_signed','contract_signed']);
   console.log('PASS import mapping, Arabic digits, canonical phone dedup, invalid rows and raw preservation');
   console.log('PASS retired won aliases import as contract_signed');
-  await build({stdin:{contents:`export {stageChoices, stageWriteAllowed, canonicalStage, stageLabel, editableStage, stageEnumValues} from './lib/lead-stages.ts';
+  await build({stdin:{contents:`export {stageChoices, stageWriteAllowed, canonicalStage, stageLabel, editableStage, stageEnumValues, stagePipelineIndex} from './lib/lead-stages.ts';
 export {formatRiyadhDate, riyadhDayKey} from './lib/lead-dates.ts';
 export {canToggleFeatured, compareClients, featuredControlsEnabled, isNewUnassignedLead, leadListOrderSql} from './lib/lead-featured.ts';`,resolveDir:process.cwd(),loader:'ts'},outfile:join(output,'lead-rules.cjs'),bundle:true,platform:'node',format:'cjs'});
   const rules=createRequire(import.meta.url)(join(output,'lead-rules.cjs'));
@@ -148,9 +148,17 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled, isNewUnassig
   assert.equal(rules.stageWriteAllowed('contract_signed','won'),true);
   const choiceLabels=rules.stageChoices().map(([,label])=>label);
   assert.deepEqual(choiceLabels,[
-    'عميل جديد','لم يتم الرد','تم التواصل','بانتظار العروض','تفويج للميداني','تم زيارة العقار','تفاوض',
+    'عميل جديد','لم يتم الرد','تم التواصل','مهتم','بانتظار العروض','تفويج للميداني','تم زيارة العقار','تفاوض',
     'تمت إحالة معاملة العميل للبنك','دفع عربون','وقع عقد','إفراغ','تم تأجيل الطلب - للمتابعة','غير مؤهل','غير مهتم','مغلق',
   ]);
+  assert.equal(rules.stageLabel('interested'),'مهتم');
+  assert.equal(rules.canonicalStage('مهتم'),'interested');
+  assert.equal(rules.canonicalStage('interested'),'interested');
+  assert.equal(rules.canonicalStage('غير مهتم'),'not_interested');
+  assert.equal(rules.stageWriteAllowed('interested'),true);
+  assert.ok(rules.stagePipelineIndex('interested')>rules.stagePipelineIndex('contacted'));
+  assert.ok(rules.stagePipelineIndex('interested')<rules.stagePipelineIndex('awaiting_offers'));
+  assert.equal(rules.stageEnumValues.includes('interested'),true);
   assert.equal(choiceLabels.includes('تم عمل حسبة للعميل'),false);
   assert.equal(choiceLabels.includes('مؤهل بانتظار موافقة البنك'),false);
   assert.equal(rules.canonicalStage('حسبه'),'contacted');
@@ -305,6 +313,15 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled, isNewUnassig
   resetLeadSchemaCache();
   await ensureLeadSchema(sqliteExecutor(mem));
   assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM lead_activity').get().n,11,'a second repair does not write another history row');
+  assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='lead_stage_notes'").get().name,'lead_stage_notes');
+  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM lead_stage_notes').get().n,11,'each retired-stage note is kept once');
+  const contactedNote=mem.prepare("SELECT note_text, stage, by_name FROM lead_stage_notes WHERE lead_id='c1'").get();
+  assert.equal(contactedNote.stage,'contacted');
+  assert.match(contactedNote.note_text,/تم اعتماد مرحلة تم التواصل/);
+  assert.equal(contactedNote.by_name,'النظام');
+  resetLeadSchemaCache();
+  await ensureLeadSchema(sqliteExecutor(mem));
+  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM lead_stage_notes').get().n,11,'a second repair does not copy stage notes again');
   const locked=new DatabaseSync(':memory:');
   locked.exec("CREATE TABLE leads(id TEXT PRIMARY KEY, stage TEXT, created_at TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT); INSERT INTO leads VALUES ('w2','won','2020-01-01'),('v2','viewing','2020-01-01');");
   resetLeadSchemaCache();
@@ -327,7 +344,8 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled, isNewUnassig
   assert.ok(alter,'an ENUM stage column is widened before rows are moved');
   const members=[...alter.matchAll(/'([^']+)'/g)].map(m=>m[1]);
   assert.deepEqual(members.slice(0,6),['new','received','contacted','viewing','won','closed']);
-  for(const key of ['awaiting_offers','field_dispatch','bank_referred','postponed','properties_shown','visit_qualified','data_received'])assert.ok(members.includes(key),key);
+  for(const key of ['awaiting_offers','field_dispatch','bank_referred','postponed','properties_shown','visit_qualified','data_received','interested'])assert.ok(members.includes(key),key);
+  assert.ok(members.indexOf('interested')>5,'interested is appended and does not remap earlier ENUM indexes');
   const alterAt=calls.findIndex(sql=>sql.startsWith('ALTER TABLE leads MODIFY COLUMN stage'));
   const updateAt=calls.findIndex(sql=>sql.startsWith('UPDATE leads SET stage'));
   assert.ok(updateAt>alterAt,'rows move only after the ENUM includes the new keys');

@@ -7,6 +7,10 @@
  * Stage repair appends ENUM members (it never drops or reorders existing
  * ones) and then moves retired stages. A failure is logged and the page
  * keeps loading with the previous stage list.
+ * lead_stage_notes keeps every stage note as its own row
+ * (text, at, byUserId, byName, stage). A later note on the same stage is
+ * inserted; it does not replace the previous row. Existing stage_changed
+ * notes are copied once, keyed by the activity id.
  * crm_users.phone is added the same way when an older users table lacks it.
  * Telegram offers use site_properties. Beds and baths are nullable TEXT so an
  * unparsed post stores NULL, and telegram_chat_id / telegram_message_id /
@@ -36,6 +40,19 @@
 
 import {planLeadPhoneMigration} from './phone';
 import {retiredStageMoves, stageEnumValues} from './lead-stages';
+import {
+  STAGE_CHANGED_NOTES_SQL,
+  STAGE_NOTE_INSERT_SQL,
+  STAGE_NOTE_SOURCES_SQL,
+  STAGE_NOTES_DDL,
+  STAGE_NOTES_LEAD_INDEX,
+  STAGE_NOTES_LEAD_INDEX_ALTER,
+  STAGE_NOTES_SOURCE_INDEX,
+  STAGE_NOTES_SOURCE_INDEX_ALTER,
+  clipName,
+  normalizeNoteAt,
+  parseStageActivityNote,
+} from './stage-notes';
 import {sheetSourceKey} from './sheet-keys';
 import {cleanupSheetSyncDuplicates, type SqlRunner} from './sheet-duplicate-cleanup';
 import {TIKTOK_META_TAB_GID, tiktokSheetSeed} from './sheet-sync-config';
@@ -479,6 +496,79 @@ async function noteSharedLeadPhones(executor: SqlExecutor) {
   }
 }
 
+async function ensureStageNoteIndex(executor: SqlExecutor, createSql: string, alterSql: string) {
+  try {
+    await run(executor, createSql);
+  } catch (error) {
+    if (/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(error))) return;
+    try {
+      await run(executor, alterSql);
+    } catch (fallback) {
+      if (/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(fallback))) return;
+      console.error('lead_stage_notes index was not added', fallback);
+    }
+  }
+}
+
+/**
+ * Copies the one `note` string on each stage_changed activity into
+ * lead_stage_notes. source_activity_id makes a second pass a no-op.
+ * New notes are inserted by the stage route and are not rewritten here.
+ */
+async function backfillStageNotes(executor: SqlExecutor) {
+  const activities = rowsOf(await run(executor, STAGE_CHANGED_NOTES_SQL));
+  if (!activities.length) return;
+  const copied = new Set(
+    rowsOf(await run(executor, STAGE_NOTE_SOURCES_SQL))
+      .map(row => String(row.source_activity_id ?? row.sourceActivityId ?? ''))
+      .filter(Boolean)
+  );
+  for (const row of activities) {
+    const sourceId = String(row.id ?? '').trim();
+    if (!sourceId || copied.has(sourceId)) continue;
+    const parsed = parseStageActivityNote(row.details);
+    if (!parsed) continue;
+    const leadId = String(row.lead_id ?? row.leadId ?? '').trim();
+    if (!leadId) continue;
+    const userId = String(row.user_id ?? row.userId ?? '').trim();
+    try {
+      await run(executor, STAGE_NOTE_INSERT_SQL, [
+        crypto.randomUUID(),
+        leadId.slice(0, 64),
+        parsed.stage,
+        parsed.text,
+        normalizeNoteAt(row.created_at),
+        clipName(userId),
+        userId === 'system' || !userId ? 'النظام' : '',
+        sourceId.slice(0, 36),
+      ]);
+      copied.add(sourceId);
+    } catch (error) {
+      if (/duplicate|UNIQUE|ER_DUP_ENTRY/i.test(messageOf(error))) {
+        copied.add(sourceId);
+        continue;
+      }
+      console.error('a stage note was not copied into history', error);
+    }
+  }
+}
+
+async function ensureStageNotes(executor: SqlExecutor) {
+  try {
+    await run(executor, STAGE_NOTES_DDL);
+  } catch (error) {
+    console.error('lead_stage_notes table was not created', error);
+    return;
+  }
+  await ensureStageNoteIndex(executor, STAGE_NOTES_LEAD_INDEX, STAGE_NOTES_LEAD_INDEX_ALTER);
+  await ensureStageNoteIndex(executor, STAGE_NOTES_SOURCE_INDEX, STAGE_NOTES_SOURCE_INDEX_ALTER);
+  try {
+    await backfillStageNotes(executor);
+  } catch (error) {
+    console.error('stage note history was not backfilled', error);
+  }
+}
+
 async function repairStages(executor: SqlExecutor) {
   try {
     await widenStageEnum(executor);
@@ -489,6 +579,11 @@ async function repairStages(executor: SqlExecutor) {
     await convertRetiredStages(executor);
   } catch (error) {
     console.error('retired stage conversion failed', error);
+  }
+  try {
+    await ensureStageNotes(executor);
+  } catch (error) {
+    console.error('stage note history was not prepared', error);
   }
 }
 
