@@ -1,5 +1,6 @@
 'use client';
 import {useEffect, useState, type FormEvent} from 'react';
+import {DEFAULT_SHEET_TEST_KEEP_PHONES} from '@/lib/sheet-test-purge';
 import {
   DEFAULT_SHEET_LABEL,
   SHEET_FIELDS,
@@ -58,6 +59,19 @@ type Status = {
 
 const emptyMapping = (): SheetMapping => ({});
 
+type PurgeLead = {id: string; name: string; phone: string; createdAt: string};
+
+type PurgePreview = {
+  aborted: boolean;
+  skipped?: boolean;
+  reason: string;
+  cutoff: string;
+  kept: PurgeLead[];
+  delete: PurgeLead[];
+  count: number;
+  message?: string;
+};
+
 function riyadh(value: string) {
   if (!value) return 'لم تتم بعد';
   const date = new Date(value);
@@ -104,6 +118,9 @@ export default function SheetSourcesPanel() {
   const [message, setMessage] = useState('');
   const [steps, setSteps] = useState<SyncStep[]>([]);
   const [busy, setBusy] = useState(false);
+  const [keepPhones, setKeepPhones] = useState<string[]>([...DEFAULT_SHEET_TEST_KEEP_PHONES]);
+  const [purgePreview, setPurgePreview] = useState<PurgePreview | null>(null);
+  const [purgeMessage, setPurgeMessage] = useState('');
 
   async function load() {
     const response = await fetch('/api/integrations/sheet-sources', {cache: 'no-store'});
@@ -277,6 +294,60 @@ export default function SheetSourcesPanel() {
     }
   }
 
+  function editKeepPhone(index: number, value: string) {
+    setKeepPhones(current => current.map((phone, phoneIndex) => (phoneIndex === index ? value : phone)));
+    setPurgePreview(null);
+    setPurgeMessage('');
+  }
+
+  async function previewTestPurge() {
+    setBusy(true);
+    setPurgeMessage('');
+    try {
+      const response = await fetch('/api/integrations/sheet-sources/purge-tests', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({phones: keepPhones, confirm: false}),
+      });
+      const data = await response.json();
+      if (!response.ok) throw Error(data.error || 'تعذرت المعاينة');
+      setPurgePreview(data);
+      setPurgeMessage(data.aborted ? String(data.reason || data.message || 'لم يُحذف شيء') : '');
+    } catch (error) {
+      setPurgePreview(null);
+      setPurgeMessage(error instanceof Error ? error.message : 'تعذرت المعاينة');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmTestPurge() {
+    const count = Number(purgePreview?.count ?? 0);
+    if (!window.confirm(`سيُحذف ${count} عميل أنشأتهم مزامنة الجدول قبل العملاء الحقيقيين. لا يُرسل بريد، ولا يمكن التراجع. هل تريد المتابعة؟`)) return;
+    setBusy(true);
+    setPurgeMessage('');
+    try {
+      const response = await fetch('/api/integrations/sheet-sources/purge-tests', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({phones: keepPhones, confirm: true}),
+      });
+      const data = await response.json();
+      if (!response.ok) throw Error(data.error || 'تعذر الحذف');
+      if (data.skipped || data.aborted) {
+        setPurgeMessage(String(data.reason || data.message || 'لم يُحذف شيء'));
+        if (data.aborted) setPurgePreview(data);
+        return;
+      }
+      setPurgePreview(null);
+      setPurgeMessage(`تم حذف ${Number(data.deleted ?? 0)} عميل`);
+    } catch (error) {
+      setPurgeMessage(error instanceof Error ? error.message : 'تعذر الحذف');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove(id: string) {
     if (!window.confirm('حذف المصدر يوقف سحبه. لإيقافه مؤقتاً ألغِ التفعيل بدلاً من الحذف. هل تريد الحذف؟')) return;
     setBusy(true);
@@ -331,6 +402,53 @@ export default function SheetSourcesPanel() {
           ))}
         </ol>
       ) : null}
+      <section data-sheet-test-purge-panel className="space-y-3" style={{border: '1px solid #3F1A44', padding: '12px 14px'}}>
+        <h3 style={{color: '#3F1A44'}}>حذف عملاء التجربة</h3>
+        <p>
+          يحذف فقط العملاء الذين أنشأتهم مزامنة الجدول قبل أقدم تاريخ بين الأرقام الحقيقية أدناه.
+          يبقى هؤلاء الثلاثة، وكل عميل تاريخه في نفس اللحظة أو بعدها، وكل عميل أُدخل يدوياً أو من إكسل أو نموذج الموقع أو تيليجرام.
+          صفوف الجدول المرتبطة بالمحذوف تُعلَّم purged حتى لا تُستورد الاختبارات مرة أخرى. لا يُرسل بريد، ولا يعمل الحذف تلقائياً.
+        </p>
+        <div className="fields">
+          {['الجوال الأول', 'الجوال الثاني', 'الجوال الثالث'].map((label, index) => (
+            <label key={label}>{label}
+              <input
+                dir="ltr"
+                value={keepPhones[index] || ''}
+                onChange={event => editKeepPhone(index, event.target.value)}
+                inputMode="tel"
+                maxLength={40}
+                placeholder="05XXXXXXXX"
+              />
+            </label>
+          ))}
+        </div>
+        <button type="button" disabled={busy} onClick={() => void previewTestPurge()}>معاينة حذف عملاء التجربة</button>
+        {purgeMessage ? <p role="status">{purgeMessage}</p> : null}
+        {purgePreview && !purgePreview.aborted ? (
+          <div data-sheet-test-purge role="status">
+            <p>
+              سيُحذف <strong>{purgePreview.count}</strong> عميل من مزامنة الجدول
+              {purgePreview.cutoff ? ` أقدم من ${riyadh(purgePreview.cutoff)}` : ''}.
+            </p>
+            <h4>ما سيُحذف</h4>
+            {purgePreview.delete.length ? (
+              <ul data-sheet-test-delete style={{maxHeight: 280, overflow: 'auto'}}>
+                {purgePreview.delete.map(lead => (
+                  <li key={lead.id}>{lead.name || 'بدون اسم'} — {lead.phone} — {riyadh(lead.createdAt)}</li>
+                ))}
+              </ul>
+            ) : <p>لا يوجد عملاء تجربة أقدم من الحد.</p>}
+            <h4>العملاء الحقيقيون المحتفظ بهم</h4>
+            <ul data-sheet-test-kept>
+              {purgePreview.kept.map(lead => (
+                <li key={lead.id}>{lead.name || 'بدون اسم'} — {lead.phone} — {riyadh(lead.createdAt)}</li>
+              ))}
+            </ul>
+            <button type="button" className="primary" style={{background: '#3F1A44', borderColor: '#3F1A44'}} disabled={busy} onClick={() => void confirmTestPurge()}>تأكيد الحذف</button>
+          </div>
+        ) : null}
+      </section>
       {status?.sources?.length ? (
         <div className="space-y-3">
           {status.sources.map(source => (

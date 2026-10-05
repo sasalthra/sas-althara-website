@@ -39,6 +39,7 @@ try {
       cron: 'lib/cron-auth.ts',
       schema: 'lib/lead-schema.ts',
       dedupe: 'lib/sheet-duplicate-cleanup.ts',
+      purge: 'lib/sheet-test-purge.ts',
     },
     outdir: output,
     bundle: true,
@@ -52,6 +53,7 @@ try {
   const cron = require(join(output, 'cron.cjs'));
   const schema = require(join(output, 'schema.cjs'));
   const dedupe = require(join(output, 'dedupe.cjs'));
+  const purge = require(join(output, 'purge.cjs'));
 
   const ref = config.parseSheetRef('https://docs.google.com/spreadsheets/d/1_lAoABagOV93EQPi_vNWct4ok3zCWE1plJFfbDzm6Nc/edit?usp=sharing#gid=0');
   assert.equal(ref.sheetId, config.TIKTOK_SHEET_ID);
@@ -502,6 +504,20 @@ try {
   assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /TIKTOK_SHEET_GID/);
   assert.match(readFileSync('app/api/integrations/sheet-sources/preview/route.ts', 'utf8'), /listSheetTabs/);
   assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /تنظيف المكررات من المزامنة/);
+  assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /معاينة حذف عملاء التجربة/);
+  assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /تأكيد الحذف/);
+  assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /تم حذف \$\{Number\(data\.deleted \?\? 0\)\} عميل/);
+  assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /#3F1A44/);
+  assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /data-sheet-test-purge/);
+  assert.match(readFileSync('app/api/integrations/sheet-sources/purge-tests/route.ts', 'utf8'), /actor\(req, \['admin'\]\)/);
+  assert.match(readFileSync('app/api/integrations/sheet-sources/purge-tests/route.ts', 'utf8'), /crmTransaction/);
+  assert.match(readFileSync('app/api/integrations/sheet-sources/purge-tests/route.ts', 'utf8'), /acquireSheetSyncLock/);
+  assert.match(readFileSync('app/api/integrations/sheet-sources/purge-tests/route.ts', 'utf8'), /تم حذف \$\{result\.deleted\} عميل/);
+  assert.match(readFileSync('app/api/integrations/sheet-sources/purge-tests/route.ts', 'utf8'), /if \(!input\.confirm\)/);
+  assert.doesNotMatch(readFileSync('app/api/integrations/sheet-sources/purge-tests/route.ts', 'utf8'), /sendMail|assignment-notify/);
+  assert.doesNotMatch(readFileSync('lib/sheet-test-purge.ts', 'utf8'), /sendMail|assignment-notify/);
+  assert.doesNotMatch(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /sheet-test-purge|purgeSheetTest|executeSheetTestLeadPurge/);
+  assert.doesNotMatch(readFileSync('lib/lead-schema.ts', 'utf8'), /sheet-test-purge|purgeSheetTest|executeSheetTestLeadPurge/);
   assert.match(readFileSync('app/crm/sheet-sources-panel.tsx', 'utf8'), /تم حذف \{status\.duplicateCleanup\.totalDeleted\} عميل مكرر من المزامنة/);
   assert.match(readFileSync('app/api/integrations/sheet-sources/cleanup/route.ts', 'utf8'), /cleanupSheetSyncDuplicates/);
   assert.match(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /enqueueSheetTurn/);
@@ -633,6 +649,129 @@ try {
   ]);
   assert.equal(turnOrder, 'abc');
   lockDb.close();
+
+  assert.deepEqual(purge.DEFAULT_SHEET_TEST_KEEP_PHONES, ['0544823616', '0532406763', '0503704328']);
+  assert.deepEqual(
+    purge.normalizeSheetTestKeepPhones(['+966 54 482 3616', '+966 53 240 6763', '+966 50 370 4328']),
+    ['0544823616', '0532406763', '0503704328']
+  );
+  assert.equal(purge.SHEET_ROW_PURGED, 'purged');
+  const absent = purge.planSheetTestLeadPurge([
+    {id: 'only-test', name: 'تجربة', phone: '0551111111', createdAt: '2020-01-01T00:00:00.000Z', syncCreated: true},
+  ], purge.DEFAULT_SHEET_TEST_KEEP_PHONES);
+  assert.equal(absent.aborted, true);
+  assert.equal(absent.delete.length, 0);
+  const customCutoff = purge.planSheetTestLeadPurge([
+    {id: 'real', name: 'حقيقي', phone: '0559990001', createdAt: '2026-10-01T00:00:00.000Z', syncCreated: true},
+    {id: 'default-real', name: 'افتراضي', phone: '0544823616', createdAt: '2026-01-01T00:00:00.000Z', syncCreated: true},
+  ], ['0559990001']);
+  assert.equal(customCutoff.aborted, false);
+  assert.deepEqual(customCutoff.delete.map(lead => lead.id), ['default-real']);
+  assert.equal(customCutoff.kept[0].id, 'real');
+
+  const purgeDb = new DatabaseSync(':memory:');
+  purgeDb.exec(`CREATE TABLE leads(id TEXT PRIMARY KEY, name TEXT, phone TEXT, source TEXT, stage TEXT, assigned_to TEXT, created_at TEXT, created_via TEXT, owner TEXT, created_by TEXT, field_assigned_to TEXT, property_id TEXT, property_other TEXT, notes TEXT, follow_up TEXT, updated_at TEXT);
+    CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT);
+    CREATE TABLE crm_transactions(id TEXT PRIMARY KEY, lead_id TEXT, data TEXT);
+    CREATE TABLE crm_import_rows(id TEXT PRIMARY KEY, lead_id TEXT, source TEXT, raw_data TEXT, created_at TEXT);
+    CREATE TABLE crm_sheet_rows(id TEXT PRIMARY KEY, source_id TEXT, row_key TEXT, row_key_hash TEXT, lead_id TEXT, status TEXT, created_at TEXT);
+    CREATE TABLE crm_sheet_sync_lock(id TEXT PRIMARY KEY, locked_until TEXT NOT NULL, token TEXT NOT NULL);`);
+  const putPurgeLead = (id, name, phone, source, created, via) => {
+    purgeDb.prepare('INSERT INTO leads (id, name, phone, source, stage, assigned_to, created_at, created_via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, name, phone, source, 'new', '', created, via);
+  };
+  putPurgeLead('real-a', 'حقيقي أحمد', '+966 54 482 3616', 'تيك توك', '2026-09-15T00:00:00.000Z', 'google_sheet');
+  putPurgeLead('real-b', 'حقيقي سارة', '0532406763', 'تيك توك', '2026-09-10T00:00:00.000Z', 'google_sheet');
+  putPurgeLead('real-c', 'حقيقي نورة', '0503704328', 'تيك توك', '2026-09-20T00:00:00.000Z', null);
+  putPurgeLead('real-a-old', 'أقدم نفس الرقم', '0544823616', 'تيك توك', '2026-08-01T00:00:00.000Z', 'google_sheet');
+  putPurgeLead('drop-before', 'يُحذف قبل الحد', '0551000001', 'تيك توك', '2026-09-09T23:59:59.999Z', 'google_sheet');
+  putPurgeLead('keep-equal', 'عند الحد', '0551000002', 'تيك توك', '2026-09-10T00:00:00.000Z', 'google_sheet');
+  putPurgeLead('keep-after', 'بعد الحد', '0551000003', 'تيك توك', '2026-09-12T00:00:00.000Z', 'google_sheet');
+  putPurgeLead('keep-manual', 'يدوي', '0551000004', 'موقع', '2020-01-01T00:00:00.000Z', null);
+  putPurgeLead('keep-excel', 'إكسل', '0551000005', 'excel', '2020-02-01T00:00:00.000Z', null);
+  putPurgeLead('keep-telegram', 'تيليجرام', '0551000006', 'تيليجرام', '2020-03-01T00:00:00.000Z', 'telegram');
+  putPurgeLead('keep-tiktok-text', 'نص تيك توك', '0551000007', 'تيك توك', '2020-04-01T00:00:00.000Z', null);
+  putPurgeLead('drop-activity', 'نشاط', '0551000008', 'موقع', '2020-05-01T00:00:00.000Z', null);
+  putPurgeLead('drop-imported', 'صف مستورد', '0551000009', 'موقع', '2020-06-01T00:00:00.000Z', null);
+  putPurgeLead('keep-duplicate-status', 'حالة مكرر', '0551000010', 'تيك توك', '2020-07-01T00:00:00.000Z', null);
+  putPurgeLead('keep-sql-time', 'نفس اللحظة', '0551000011', 'تيك توك', '2026-09-10 00:00:00', 'google_sheet');
+  putPurgeLead('drop-sql-before', 'قبل بصيغة SQL', '0551000012', 'تيك توك', '2026-09-09 21:00:00', 'google_sheet');
+  purgeDb.prepare(`INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES ('act-c', 'real-c', 'system', 'created', ?)`).run(JSON.stringify({via: 'google_sheet'}));
+  purgeDb.prepare(`INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES ('act-drop', 'drop-activity', 'system', 'created', ?)`).run(JSON.stringify({via: 'google_sheet', source: 'تيك توك'}));
+  purgeDb.prepare(`INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES ('act-manual', 'keep-manual', 'user', 'created', ?)`).run(JSON.stringify({source: 'موقع'}));
+  purgeDb.prepare(`INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES ('act-text', 'keep-tiktok-text', 'user', 'created', ?)`).run(JSON.stringify({note: 'تيك توك'}));
+  purgeDb.prepare(`INSERT INTO crm_transactions (id, lead_id, data) VALUES ('tx-drop', 'drop-before', '{}')`).run();
+  purgeDb.prepare(`INSERT INTO crm_transactions (id, lead_id, data) VALUES ('tx-keep', 'keep-manual', '{}')`).run();
+  purgeDb.prepare(`INSERT INTO crm_import_rows (id, lead_id, source, raw_data, created_at) VALUES ('imp-drop', 'drop-before', 'excel', '{}', '2026-09-01')`).run();
+  purgeDb.prepare(`INSERT INTO crm_import_rows (id, lead_id, source, raw_data, created_at) VALUES ('imp-keep', 'keep-excel', 'excel', '{}', '2020-02-01')`).run();
+  purgeDb.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('row-drop', 'purge-src', 'tt:purge-me', 'drop-before', 'imported', '2026-09-09')`).run();
+  purgeDb.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('row-real', 'purge-src', 'tt:real-b', 'real-b', 'imported', '2026-09-10')`).run();
+  purgeDb.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('row-imported', 'purge-src', 'tt:imported-only', 'drop-imported', 'imported', '2020-06-01')`).run();
+  purgeDb.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('row-dup-status', 'purge-src', 'tt:dup-status', 'keep-duplicate-status', 'duplicate', '2020-07-01')`).run();
+  const purgeRunner = sqlRunner(purgeDb);
+  const missed = await purge.executeSheetTestLeadPurge(purgeRunner, ['0550000099']);
+  assert.equal(missed.aborted, true);
+  assert.equal(missed.deleted, 0);
+  assert.equal(purgeDb.prepare('SELECT COUNT(*) AS n FROM leads').get().n, 16);
+  const previewPurge = await purge.previewSheetTestLeadPurge(purgeRunner);
+  assert.equal(previewPurge.aborted, false);
+  assert.equal(previewPurge.deleted, 0);
+  assert.equal(previewPurge.cutoff, '2026-09-10T00:00:00.000Z');
+  assert.deepEqual(previewPurge.kept.map(lead => lead.id), ['real-a', 'real-b', 'real-c']);
+  assert.deepEqual(previewPurge.kept.map(lead => lead.phone), ['0544823616', '0532406763', '0503704328']);
+  assert.deepEqual(previewPurge.delete.map(lead => lead.id), ['drop-activity', 'drop-imported', 'drop-sql-before', 'drop-before']);
+  assert.equal(purgeDb.prepare('SELECT COUNT(*) AS n FROM leads').get().n, 16);
+  const heldPurge = await dedupe.acquireSheetSyncLock(purgeRunner);
+  assert.ok(heldPurge);
+  const skippedPurge = await purge.purgeSheetTestLeads(purgeRunner);
+  assert.equal(skippedPurge.skipped, true);
+  assert.equal(skippedPurge.deleted, 0);
+  assert.equal(purgeDb.prepare('SELECT COUNT(*) AS n FROM leads').get().n, 16);
+  await dedupe.releaseSheetSyncLock(purgeRunner, heldPurge);
+  const ranPurge = await purge.executeSheetTestLeadPurge(purgeRunner);
+  assert.equal(ranPurge.aborted, false);
+  assert.equal(ranPurge.deleted, 4);
+  assert.equal(ranPurge.rowsMarked, 2);
+  assert.equal(purgeDb.prepare("SELECT id FROM leads WHERE id = 'drop-before'").get(), undefined);
+  assert.equal(purgeDb.prepare("SELECT id FROM leads WHERE id = 'drop-activity'").get(), undefined);
+  assert.equal(purgeDb.prepare("SELECT id FROM leads WHERE id = 'drop-imported'").get(), undefined);
+  assert.equal(purgeDb.prepare("SELECT id FROM leads WHERE id = 'drop-sql-before'").get(), undefined);
+  for (const id of ['real-a', 'real-b', 'real-c', 'real-a-old', 'keep-equal', 'keep-after', 'keep-manual', 'keep-excel', 'keep-telegram', 'keep-tiktok-text', 'keep-duplicate-status', 'keep-sql-time']) {
+    assert.equal(purgeDb.prepare('SELECT id FROM leads WHERE id = ?').get(id).id, id);
+  }
+  assert.equal(purgeDb.prepare("SELECT id FROM crm_transactions WHERE lead_id = 'drop-before'").get(), undefined);
+  assert.equal(purgeDb.prepare("SELECT id FROM crm_import_rows WHERE lead_id = 'drop-before'").get(), undefined);
+  assert.equal(purgeDb.prepare("SELECT COUNT(*) AS n FROM lead_activity WHERE lead_id = 'drop-before' OR lead_id = 'drop-activity'").get().n, 0);
+  assert.equal(purgeDb.prepare("SELECT id FROM crm_transactions WHERE id = 'tx-keep'").get().id, 'tx-keep');
+  assert.equal(purgeDb.prepare("SELECT id FROM crm_import_rows WHERE id = 'imp-keep'").get().id, 'imp-keep');
+  assert.equal(purgeDb.prepare("SELECT action FROM lead_activity WHERE id = 'act-manual'").get().action, 'created');
+  const purgedRow = purgeDb.prepare("SELECT status, lead_id, row_key FROM crm_sheet_rows WHERE id = 'row-drop'").get();
+  assert.equal(purgedRow.status, 'purged');
+  assert.equal(purgedRow.lead_id, 'drop-before');
+  assert.equal(purgedRow.row_key, 'tt:purge-me');
+  assert.equal(purgeDb.prepare("SELECT status, row_key FROM crm_sheet_rows WHERE id = 'row-imported'").get().status, 'purged');
+  assert.equal(purgeDb.prepare("SELECT status, lead_id FROM crm_sheet_rows WHERE id = 'row-real'").get().status, 'imported');
+  assert.equal(purgeDb.prepare("SELECT status, lead_id FROM crm_sheet_rows WHERE id = 'row-dup-status'").get().status, 'duplicate');
+  const againPurge = await purge.executeSheetTestLeadPurge(purgeRunner);
+  assert.equal(againPurge.aborted, false);
+  assert.equal(againPurge.deleted, 0);
+  assert.equal(againPurge.rowsMarked, 0);
+  assert.equal(purgeDb.prepare("SELECT status FROM crm_sheet_rows WHERE id = 'row-drop'").get().status, 'purged');
+  const purgeHeaders = ['الاسم', 'رقم الجوال', 'TikTok Lead ID'];
+  const purgeImport = await sync.importSheetGrid(leadDb(purgeDb), {
+    id: 'purge-src',
+    sheetId: config.TIKTOK_SHEET_ID,
+    gid: config.TIKTOK_SHEET_GID,
+    label: 'تيك توك',
+    campaign: '',
+    mapping: config.suggestSheetMapping(purgeHeaders),
+    headers: purgeHeaders,
+    enabled: true,
+  }, [purgeHeaders, ['تعود التجربة', '0551000001', 'purge-me']], 'owner-1');
+  assert.equal(purgeImport.inserted, 0);
+  assert.equal(purgeImport.unchanged, 1);
+  assert.equal(purgeDb.prepare("SELECT COUNT(*) AS n FROM leads WHERE phone = '0551000001'").get().n, 0);
+  assert.equal(purgeDb.prepare("SELECT status FROM crm_sheet_rows WHERE row_key = 'tt:purge-me'").get().status, 'purged');
+  purgeDb.close();
   console.log('PASS sheet mapping, row keys, seed, import once, duplicate phone, and cron secret');
 
   const mailDb = new DatabaseSync(':memory:');
