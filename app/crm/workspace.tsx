@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import {Star} from 'lucide-react';
@@ -26,7 +27,9 @@ import LeadForm, {
   Lead,
 } from '@/app/lead-form';
 import {formatRiyadhDate, riyadhDayKey} from '@/lib/lead-dates';
+import {canBulkSelect} from '@/lib/bulk-lead-access';
 import {canToggleFeatured, compareClients, featuredControlsEnabled, isFeaturedValue, isNewUnassignedLead} from '@/lib/lead-featured';
+import LeadBulkBar from './lead-bulk-bar';
 import NewLeadBadge from '@/components/new-lead-badge';
 import {displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import {displayLeadPhone, leadPhoneMatchesQuery} from '@/lib/phone';
@@ -170,6 +173,14 @@ export default function CRM({
   const [duplicateOnly, setDuplicateOnly] = useState(false);
 
   const [newOnly, setNewOnly] = useState(false);
+
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const [bulkNotice, setBulkNotice] = useState('');
+
+  const pageSelectRef = useRef<HTMLInputElement>(null);
+
+  const cardSelectRef = useRef<HTMLInputElement>(null);
 
   const [open, setOpen] =
     useState(false);
@@ -325,6 +336,42 @@ export default function CRM({
 
   const newUnassignedCount = leads.filter(isNewUnassignedLead).length;
 
+  const bulkSelect = canBulkSelect(role);
+  const shownIds = shown.map(lead => lead.id);
+  const selectedOnPage = shownIds.filter(id => selectedIds.includes(id)).length;
+  const pageAllSelected = shownIds.length > 0 && selectedOnPage === shownIds.length;
+
+  useEffect(() => {
+    const live = new Set(leads.map(lead => lead.id));
+    setSelectedIds(current => {
+      const next = current.filter(id => live.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [leads]);
+
+  useEffect(() => {
+    const indeterminate = selectedOnPage > 0 && !pageAllSelected;
+    if (pageSelectRef.current) pageSelectRef.current.indeterminate = indeterminate;
+    if (cardSelectRef.current) cardSelectRef.current.indeterminate = indeterminate;
+  }, [selectedOnPage, pageAllSelected]);
+
+  function toggleLead(id: string) {
+    setBulkNotice('');
+    setSelectedIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
+  }
+
+  function togglePage() {
+    setBulkNotice('');
+    setSelectedIds(current => {
+      if (pageAllSelected) return current.filter(id => !shownIds.includes(id));
+      return [...new Set([...current, ...shownIds])];
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds([]);
+  }
+
   return (
     <>
       <div className="crm-shell" dir="rtl">
@@ -450,6 +497,21 @@ export default function CRM({
                 </p>
               )}
 
+              {bulkNotice ? (
+                <p role="status" className="crm-bulk-status">{bulkNotice}</p>
+              ) : null}
+
+              <LeadBulkBar
+                role={role}
+                ids={selectedIds}
+                onClear={clearSelection}
+                onDone={message => {
+                  setBulkNotice(message);
+                  setSelectedIds([]);
+                  void refresh();
+                }}
+              />
+
               {error && (
                 <p
                   role="alert"
@@ -473,10 +535,78 @@ export default function CRM({
                 </p>
               ) : shown.length ? (
                 <>
-                  <div className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <div className="crm-lead-cards">
+                    {bulkSelect ? (
+                      <label className="crm-check crm-page-select">
+                        <input
+                          ref={cardSelectRef}
+                          type="checkbox"
+                          checked={pageAllSelected}
+                          onChange={togglePage}
+                          aria-label="تحديد الكل في هذه الصفحة"
+                        />
+                        <span>تحديد الكل في هذه الصفحة</span>
+                      </label>
+                    ) : null}
+                    {shown.map((lead, index) => {
+                      const property = data.find(item => item.id === lead.property_id);
+                      const featured = isFeaturedValue(lead.is_featured);
+                      const allowFeature = featuredControlsEnabled(lead) && canToggleFeatured({userId, role}, lead);
+                      return (
+                        <article key={lead.id} className={`crm-lead-card${featured ? ' is-featured' : ''}`}>
+                          <div className="crm-lead-card-head">
+                            {bulkSelect ? (
+                              <label className="crm-check">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.includes(lead.id)}
+                                  onChange={() => toggleLead(lead.id)}
+                                  aria-label={`تحديد ${lead.name}`}
+                                />
+                              </label>
+                            ) : null}
+                            <span className="crm-lead-index">{index + 1}</span>
+                            {allowFeature ? (
+                              <button
+                                type="button"
+                                aria-pressed={featured}
+                                aria-label={featured ? `إلغاء تمييز ${lead.name}` : `تعليم ${lead.name} كعميل مميز`}
+                                title={featured ? 'عميل مميز' : 'تعليم كعميل مميز'}
+                                disabled={featureBusy === lead.id}
+                                onClick={() => void toggleFeatured(lead)}
+                                className={`inline-flex shrink-0 items-center justify-center rounded-full border p-1 disabled:opacity-60 ${featured ? 'border-[#3F1A44] bg-white text-[#3F1A44]' : 'border-slate-200 text-slate-400 hover:border-[#3F1A44] hover:text-[#3F1A44]'}`}
+                              >
+                                <Star className={`size-3.5 ${featured ? 'fill-[#3F1A44]' : ''}`} aria-hidden />
+                              </button>
+                            ) : featured ? (
+                              <Star className="size-3.5 shrink-0 fill-[#3F1A44] text-[#3F1A44]" aria-hidden />
+                            ) : null}
+                            <a href={`/crm/leads/${lead.id}`} className="crm-lead-card-name">{lead.name}</a>
+                            <NewLeadBadge lead={lead} />
+                          </div>
+                          {featured ? <span className="mt-1 inline-flex rounded-full bg-[#3F1A44] px-1.5 py-0.5 text-[10px] font-semibold text-white">عميل مميز</span> : null}
+                          <p dir="ltr">{displayLeadPhone(lead.phone)}</p>
+                          <p>{stageLabel(lead.stage)} · {lead.assigned_name || 'بدون تعيين'}</p>
+                          <p>{compactPropertyTitle(property?.title || lead.property_other)}</p>
+                        </article>
+                      );
+                    })}
+                  </div>
+                  <div className="crm-lead-table w-full overflow-hidden rounded-2xl border border-slate-200 bg-white">
                     <Table className="w-full min-w-[1380px] table-fixed">
                       <TableHeader>
                         <TableRow className="bg-slate-50/80">
+                          {bulkSelect ? (
+                            <TableHead className="w-10 px-2 text-center">
+                              <input
+                                ref={pageSelectRef}
+                                type="checkbox"
+                                checked={pageAllSelected}
+                                onChange={togglePage}
+                                aria-label="تحديد الكل في هذه الصفحة"
+                              />
+                            </TableHead>
+                          ) : null}
                           <TableHead className="w-[3%] px-2 text-center">
                             #
                           </TableHead>
@@ -546,6 +676,16 @@ export default function CRM({
                                 }
                                 className={`align-middle ${featured ? 'bg-[#f3eaf4]/60' : ''}`}
                               >
+                                {bulkSelect ? (
+                                  <TableCell className="px-2 text-center">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedIds.includes(lead.id)}
+                                      onChange={() => toggleLead(lead.id)}
+                                      aria-label={`تحديد ${lead.name}`}
+                                    />
+                                  </TableCell>
+                                ) : null}
                                 <TableCell className="px-2 text-center text-sm text-muted-foreground">
                                   {index + 1}
                                 </TableCell>
