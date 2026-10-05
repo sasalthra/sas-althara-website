@@ -158,6 +158,8 @@ function actionLabel(
     case 'updated':
     case 'lead_updated':
       return 'تم تحديث بيانات العميل';
+    case 'assigned':
+      return 'تم إسناد العميل';
     case 'follow_up_added':
       return 'تمت إضافة متابعة';
     case 'stage_changed':
@@ -193,7 +195,13 @@ function getActivityNote(
     const previousStage = activity.details.previousStage;
     const fieldAssignedName = activity.details.fieldAssignedName;
     const dispatchedByName = activity.details.dispatchedByName;
+    const assignedName = activity.details.assignedName;
     const parts: string[] = [];
+
+    if (activity.action === 'assigned') {
+      const target = typeof assignedName === 'string' ? assignedName.trim() : '';
+      if (target) parts.push(`تم الإسناد إلى ${target}`);
+    }
 
     if (activity.action === 'field_dispatched') {
       const target =
