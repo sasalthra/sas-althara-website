@@ -329,7 +329,7 @@ export default function CRM({
       return searchable
         .toLowerCase()
         .includes(queryText.toLowerCase()) || leadPhoneMatchesQuery(phoneShown, queryText);
-    }).sort((a, b) => compareClients(a, b, {promoteNewUnassigned: role === 'admin'}));
+    }).sort((a, b) => compareClients(a, b));
 
   const followUps =
     leads.filter(needsFollowUp).length;

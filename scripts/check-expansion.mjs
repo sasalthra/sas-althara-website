@@ -133,7 +133,7 @@ try {
   console.log('PASS retired won aliases import as contract_signed');
   await build({stdin:{contents:`export {stageChoices, stageWriteAllowed, canonicalStage, stageLabel, editableStage, stageEnumValues} from './lib/lead-stages.ts';
 export {formatRiyadhDate, riyadhDayKey} from './lib/lead-dates.ts';
-export {canToggleFeatured, compareClients, featuredControlsEnabled, isNewUnassignedLead} from './lib/lead-featured.ts';`,resolveDir:process.cwd(),loader:'ts'},outfile:join(output,'lead-rules.cjs'),bundle:true,platform:'node',format:'cjs'});
+export {canToggleFeatured, compareClients, featuredControlsEnabled, isNewUnassignedLead, leadListOrderSql} from './lib/lead-featured.ts';`,resolveDir:process.cwd(),loader:'ts'},outfile:join(output,'lead-rules.cjs'),bundle:true,platform:'node',format:'cjs'});
   const rules=createRequire(import.meta.url)(join(output,'lead-rules.cjs'));
   assert.equal(rules.stageChoices('new').some(([key])=>key==='won'),false);
   assert.equal(rules.stageChoices('won').some(([key])=>key==='won'),false);
@@ -245,15 +245,24 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled, isNewUnassig
   assert.equal(ordered[0].id,'old');
   assert.equal(rules.isNewUnassignedLead({assigned_to:null,stage:'new'}),true);
   assert.equal(rules.isNewUnassignedLead({assigned_to:'',stage:'new'}),true);
+  assert.equal(rules.isNewUnassignedLead({assigned_to:'   ',stage:'new'}),true);
   assert.equal(rules.isNewUnassignedLead({assigned_to:'rep',stage:'new'}),false);
   assert.equal(rules.isNewUnassignedLead({assigned_to:null,stage:'contacted'}),false);
   const adminOrder=[
     {id:'featured',is_featured:1,assigned_to:'rep',stage:'contacted',created_at:'2020-01-01T00:00:00.000Z'},
     {id:'fresh',is_featured:0,assigned_to:'',stage:'new',created_at:'2026-01-01T00:00:00.000Z'},
+    {id:'featured-fresh',is_featured:1,assigned_to:'   ',stage:'new',created_at:'2024-06-01T00:00:00.000Z'},
     {id:'older-fresh',is_featured:0,assigned_to:null,stage:'new',created_at:'2025-01-01T00:00:00.000Z'},
     {id:'assigned-new',is_featured:0,assigned_to:'rep',stage:'new',created_at:'2026-08-01T00:00:00.000Z'},
-  ].sort((a,b)=>rules.compareClients(a,b,{promoteNewUnassigned:true}));
-  assert.deepEqual(adminOrder.map(row=>row.id),['featured','fresh','older-fresh','assigned-new']);
+  ].sort(rules.compareClients);
+  assert.deepEqual(adminOrder.map(row=>row.id),['fresh','older-fresh','featured-fresh','featured','assigned-new']);
+  const withFeatured=rules.leadListOrderSql(true);
+  const withoutFeatured=rules.leadListOrderSql(false);
+  assert.match(withFeatured,/CASE WHEN leads\.stage = 'new' AND TRIM\(IFNULL\(leads\.assigned_to, ''\)\) = '' THEN 0 ELSE 1 END/);
+  assert.match(withFeatured,/THEN 1 ELSE leads\.is_featured END DESC, leads\.created_at DESC/);
+  assert.doesNotMatch(withoutFeatured,/is_featured/);
+  assert.match(withoutFeatured,/leads\.created_at DESC/);
+  assert.doesNotMatch(withFeatured,/OVER\s*\(|ROW_NUMBER|JSON_TABLE/);
   console.log('PASS featured permissions, Riyadh registration date, and retired won stage rules');
   await build({entryPoints:['lib/lead-schema.ts'],outfile:join(output,'lead-schema.cjs'),bundle:true,platform:'node',format:'cjs',external:['mysql2/promise']});
   const {ensureLeadSchema,resetLeadSchemaCache}=createRequire(import.meta.url)(join(output,'lead-schema.cjs'));

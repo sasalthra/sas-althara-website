@@ -28,19 +28,33 @@ export function isNewUnassignedLead(lead: FeatureLead): boolean {
 }
 
 /**
- * Featured clients stay first. For admins, unassigned «عميل جديد» leads come
- * next, then everyone else by newest registration.
+ * Unassigned «عميل جديد» leads stay first (newest first), above featured
+ * clients, in every view that can see them. Featured clients follow, then
+ * everyone else by newest registration. Assignment leaves the top group.
  */
-export function compareClients<T extends FeatureLead>(
-  a: T,
-  b: T,
-  options?: {promoteNewUnassigned?: boolean}
-): number {
-  const featuredDelta = Number(isFeaturedValue(b.is_featured)) - Number(isFeaturedValue(a.is_featured));
-  if (featuredDelta) return featuredDelta;
-  if (options?.promoteNewUnassigned) {
-    const freshDelta = Number(isNewUnassignedLead(b)) - Number(isNewUnassignedLead(a));
-    if (freshDelta) return freshDelta;
+export function compareClients<T extends FeatureLead>(a: T, b: T): number {
+  const aFresh = isNewUnassignedLead(a);
+  const bFresh = isNewUnassignedLead(b);
+  if (aFresh !== bFresh) return Number(bFresh) - Number(aFresh);
+  if (!aFresh && !bFresh) {
+    const featuredDelta = Number(isFeaturedValue(b.is_featured)) - Number(isFeaturedValue(a.is_featured));
+    if (featuredDelta) return featuredDelta;
   }
   return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+}
+
+/**
+ * Same order as compareClients, evaluated in MySQL 5.7/8 and MariaDB.
+ * CASE/TRIM/IFNULL stay portable; the featured column is omitted when it
+ * could not be added. Unassigned new leads are still first in that case.
+ */
+export function leadListOrderSql(featuredColumn: boolean): string {
+  const fresh = `CASE WHEN leads.stage = 'new' AND TRIM(IFNULL(leads.assigned_to, '')) = '' THEN 0 ELSE 1 END`;
+  // Featured applies only after the unassigned-new group, so a pinned new lead
+  // does not jump ahead of a newer unassigned one. The constant keeps every
+  // unassigned new lead tied on that key and ordered by created_at.
+  const featuredAfterFresh = `CASE WHEN leads.stage = 'new' AND TRIM(IFNULL(leads.assigned_to, '')) = '' THEN 1 ELSE leads.is_featured END DESC`;
+  return featuredColumn
+    ? `ORDER BY ${fresh}, ${featuredAfterFresh}, leads.created_at DESC`
+    : `ORDER BY ${fresh}, leads.created_at DESC`;
 }

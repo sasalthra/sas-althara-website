@@ -5,6 +5,7 @@ import {crmDb} from '@/lib/crm-db';
 import {leadSchema as schema} from '@/lib/lead-input';
 import {findLeadByNormalizedPhone, noteReregistration} from '@/lib/lead-reregistration';
 import {ensureLeadSchema, isMissingFeaturedColumn} from '@/lib/lead-schema';
+import {leadListOrderSql} from '@/lib/lead-featured';
 import {stageWriteAllowed} from '@/lib/lead-stages';
 import {displayLeadPhone, normalizeLeadPhone} from '@/lib/phone';
 
@@ -213,9 +214,7 @@ async function readLeads(
   user: {userId: string; role: string},
   featured: boolean
 ) {
-  const order = featured
-    ? 'ORDER BY leads.is_featured DESC, leads.created_at DESC'
-    : 'ORDER BY leads.created_at DESC';
+  const order = leadListOrderSql(featured);
   const db = crmDb();
 
   if (canSeeAll(user.role)) {
