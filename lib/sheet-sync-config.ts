@@ -62,6 +62,40 @@ export const TIKTOK_SHEET_GID = '1331680179';
 export const TIKTOK_META_TAB_GID = '1976004933';
 export const TIKTOK_SHEET_CAMPAIGN = '';
 
+/** Tab «اسناب يوليو» on the same spreadsheet. gid 1645681762. */
+export const SNAP_SHEET_SOURCE_ID = 'snap-july-leads';
+export const SNAP_SHEET_GID = '1645681762';
+export const SNAP_SHEET_LABEL = 'اسناب يوليو';
+
+/**
+ * Header row of the public «اسناب يوليو» tab. The form titles are repeated:
+ * the first block does not line up with the cells, and the block that starts
+ * at «الاسم» followed by an empty column does.
+ */
+export const SNAP_SHEET_HEADERS = [
+  'الاسم',
+  'رقم الجوال',
+  'نوع العقار',
+  'موقع العقار',
+  'طريقة الشراء',
+  'الراتب',
+  'مواطن ام مقيم',
+  'الفترة المتوقعه للشراء',
+  '',
+  '',
+  'التاريخ',
+  'الاسم',
+  '',
+  'رقم الجوال',
+  'نوع العقار',
+  'موقع العقار',
+  'طريقة الشراء',
+  'الراتب',
+  'مواطن ام مقيم',
+  'الفترة المتوقعه للشراء',
+  '',
+];
+
 /** Header row of the public «تيك توك» tab (gid 1331680179). */
 export const TIKTOK_SHEET_HEADERS = [
   'Lead status',
@@ -231,21 +265,43 @@ const matchers: {key: SheetField; test: (folded: string) => boolean}[] = [
   {key: 'salary', test: folded => /^الراتب$|^salary$/.test(folded)},
   {key: 'age', test: folded => /^العمر$|^age$/.test(folded)},
   {key: 'contactTime', test: folded => /وقت التواصل/.test(folded)},
-  {key: 'purchaseTimeline', test: folded => /الوقت المتوقع للشراء/.test(folded)},
+  {key: 'purchaseTimeline', test: folded => /الوقت المتوقع للشراء|الفتره المتوقعه للشراء/.test(folded)},
   {key: 'sheetAssignment', test: folded => /^الاسناد$/.test(folded)},
   {key: 'sheetState', test: folded => /^الحاله$/.test(folded)},
-  {key: 'city', test: folded => /^(city|المدينه|مدينه)$/.test(folded)},
+  {key: 'city', test: folded => /^(city|المدينه|مدينه|موقع العقار)$/.test(folded)},
   {key: 'campaign', test: folded => /campaign name|^campaign$|اسم الحمله|^الحمله$/.test(folded)},
   {key: 'formName', test: folded => /form name|اسم النموذج|^النموذج$/.test(folded)},
-  {key: 'residency', test: folded => /^هل انت$|residency/.test(folded)},
+  {key: 'residency', test: folded => /^هل انت$|residency/.test(folded) || (/مواطن/.test(folded) && /مقيم/.test(folded))},
   {key: 'platform', test: folded => /^(platform|المنصه|منصه)$/.test(folded)},
   {key: 'notes', test: folded => /^(notes|note|الملاحظات|ملاحظات|ملاحظه)$/.test(folded)},
 ];
 
-export function suggestSheetMapping(headers: string[]): SheetMapping {
+function nameHeader(folded: string) {
+  return /^(الاسم|اسم|name|full name)$/.test(folded);
+}
+
+/**
+ * Snap lead sheets repeat the form titles. The block that lines up with the
+ * cells is the «الاسم» whose next header is empty, once a phone header follows.
+ * TikTok has a single «الاسم» followed by «رقم الجوال», so this stays -1.
+ */
+export function alignedFormHeaderStart(headers: string[]) {
+  let found = -1;
+  for (let index = 0; index < headers.length - 1; index++) {
+    if (!nameHeader(foldHeader(headers[index] || ''))) continue;
+    if (normalizeHeaderCell(headers[index + 1] || '') !== '') continue;
+    const hasPhone = headers.slice(index).some(header => /جوال|هاتف|موبايل|phone|mobile/.test(foldHeader(header)));
+    if (!hasPhone) continue;
+    found = index;
+  }
+  return found;
+}
+
+function suggestSequential(headers: string[], start: number): SheetMapping {
   const mapping: SheetMapping = {};
   const used = new Set<number>();
   headers.forEach((header, index) => {
+    if (index < start) return;
     const folded = foldHeader(header);
     if (!folded || used.has(index)) return;
     for (const matcher of matchers) {
@@ -259,8 +315,39 @@ export function suggestSheetMapping(headers: string[]): SheetMapping {
   return mapping;
 }
 
+export function suggestSheetMapping(headers: string[]): SheetMapping {
+  const aligned = alignedFormHeaderStart(headers);
+  const mapping = suggestSequential(headers, aligned < 0 ? 0 : aligned);
+  if (aligned >= 0 && mapping.leadId === undefined) {
+    const dateIndex = headers.findIndex(header => foldHeader(header) === 'التاريخ');
+    if (dateIndex > 0 && normalizeHeaderCell(headers[dateIndex - 1] || '') === '') mapping.leadId = dateIndex - 1;
+  }
+  return mapping;
+}
+
+/** Snap form answers look like `{شقة:true}` or `{كاش :true}`. Other text is unchanged. */
+export function parseSnapChoice(value: string) {
+  const compact = String(value ?? '').replace(/\u00a0/g, ' ').trim();
+  if (!compact.startsWith('{') || !compact.endsWith('}')) return compact;
+  const chosen: string[] = [];
+  let sawFlag = false;
+  for (const part of compact.slice(1, -1).split(',')) {
+    const match = part.match(/^\s*(.*?)\s*:\s*(true|false)\s*$/i);
+    if (!match) continue;
+    sawFlag = true;
+    if (match[2].toLowerCase() !== 'true') continue;
+    const text = match[1].replace(/\s+/g, ' ').trim();
+    if (text) chosen.push(text);
+  }
+  return sawFlag ? chosen.join('، ') : compact;
+}
+
+export function isSheetUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value ?? '').trim());
+}
+
 function tidy(value: string) {
-  return value.replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
+  return parseSnapChoice(value).replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 export type SheetLeadDraft = {
@@ -271,6 +358,8 @@ export type SheetLeadDraft = {
   notes: string;
   campaign: string;
   stage: 'new';
+  /** UTC instant from the sheet, when the row carries one. Empty uses the import time. */
+  registeredAt?: string;
 };
 
 const noteLines: Array<{key: SheetField; label: string}> = [
@@ -329,9 +418,11 @@ export function composeSheetLead(
     read('notes'),
   ].filter(Boolean);
   const propertyOther = (propertyType || 'غير محدد').slice(0, 500);
+  const name = tidy(read('name'));
+  const phoneCell = read('phone');
   return {
-    name: tidy(read('name')).slice(0, 100),
-    phone: normalizeLeadPhone(read('phone')),
+    name: (isSheetUuid(name) ? '' : name).slice(0, 100),
+    phone: isSheetUuid(phoneCell) ? '' : normalizeLeadPhone(phoneCell),
     propertyOther: propertyOther.length >= 2 ? propertyOther : 'غير محدد',
     source: (campaign ? `${label} — ${campaign}` : label).slice(0, 80) || DEFAULT_SHEET_LABEL,
     notes: lines.join('\n').slice(0, 3000),
@@ -420,6 +511,20 @@ export function tiktokSheetSeed() {
     campaign: TIKTOK_SHEET_CAMPAIGN,
     mapping: suggestSheetMapping(TIKTOK_SHEET_HEADERS),
     headers: TIKTOK_SHEET_HEADERS,
+    enabled: 1,
+  };
+}
+
+/** Enabled, unassigned-new defaults. Campaign stays empty so the lead source is chosen at import. */
+export function snapSheetSeed() {
+  return {
+    id: SNAP_SHEET_SOURCE_ID,
+    sheetId: TIKTOK_SHEET_ID,
+    gid: SNAP_SHEET_GID,
+    label: SNAP_SHEET_LABEL,
+    campaign: '',
+    mapping: suggestSheetMapping(SNAP_SHEET_HEADERS),
+    headers: SNAP_SHEET_HEADERS,
     enabled: 1,
   };
 }

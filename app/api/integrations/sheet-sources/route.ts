@@ -86,10 +86,11 @@ export async function POST(req: Request) {
     if (gid && !/^\d{1,20}$/.test(gid)) throw new ApiError(400, 'رقم الورقة غير صالح');
     const now = new Date().toISOString();
     const id = input.id || crypto.randomUUID();
-    const duplicate = await crmDb()
-      .prepare(`SELECT id FROM crm_sheet_sources WHERE sheet_id = ? AND IFNULL(gid, '') = ? AND id <> ? LIMIT 1`)
-      .bind(ref.sheetId, gid, id)
-      .first<{id: string}>();
+    // Compare in JS. IFNULL(gid, '') = ? mixes collations on production (error 1267).
+    const existingSources = await crmDb().prepare('SELECT id, sheet_id, gid FROM crm_sheet_sources').all();
+    const duplicate = existingSources.results.find(
+      row => String(row.sheet_id ?? '').trim() === ref.sheetId && String(row.gid ?? '').trim() === gid && String(row.id ?? '') !== id
+    );
     if (duplicate?.id) throw new ApiError(409, 'هذا الجدول مضاف مسبقاً');
     const existing = input.id
       ? await crmDb().prepare('SELECT id FROM crm_sheet_sources WHERE id = ?').bind(id).first<{id: string}>()

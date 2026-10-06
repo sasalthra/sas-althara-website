@@ -130,6 +130,44 @@ try {
   assert.equal(tabs[1].name, 'تيك توك');
   assert.equal(config.sheetRowProblem(draft), '');
   assert.equal(config.sheetRowProblem({name: 'س', phone: ''}), 'الاسم ناقص');
+  assert.equal(config.parseSnapChoice('{شقة:true}'), 'شقة');
+  assert.equal(config.parseSnapChoice('{كاش :true}'), 'كاش');
+  assert.equal(config.parseSnapChoice('{6000 - 9000:true}'), '6000 - 9000');
+  assert.equal(config.parseSnapChoice('{شقة:true, روف:false}'), 'شقة');
+  assert.equal(config.parseSnapChoice('شقة تمليك'), 'شقة تمليك');
+  assert.equal(config.isSheetUuid('b41e147f-838d-4eec-bbc0-ce522f601350'), true);
+  assert.equal(config.isSheetUuid('+966565959930'), false);
+  const uuidName = config.composeSheetLead(
+    ['b41e147f-838d-4eec-bbc0-ce522f601350', 'اسناب يوليو 2026 شقق'],
+    {label: 'تيك توك', campaign: ''},
+    {name: 0, phone: 1}
+  );
+  assert.equal(uuidName.name, '');
+  assert.equal(config.sheetRowProblem(uuidName), 'الاسم ناقص');
+  const uuidPhone = config.composeSheetLead(
+    ['سارة اختبار', 'b41e147f-838d-4eec-bbc0-ce522f601350'],
+    {label: 'تيك توك', campaign: ''},
+    {name: 0, phone: 1}
+  );
+  assert.equal(uuidPhone.name, 'سارة اختبار');
+  assert.equal(uuidPhone.phone, '');
+  assert.equal(config.sheetRowProblem(uuidPhone), 'الجوال غير صالح');
+  assert.equal(sync.planSheetImport(headers, [tiktokRow], mapping).snap, false);
+  const snapSuggested = config.suggestSheetMapping(config.SNAP_SHEET_HEADERS);
+  assert.equal(snapSuggested.name, 11);
+  assert.equal(config.SNAP_SHEET_HEADERS[snapSuggested.name], 'الاسم');
+  assert.equal(snapSuggested.phone, 13);
+  assert.equal(config.SNAP_SHEET_HEADERS[snapSuggested.phone], 'رقم الجوال');
+  assert.equal(snapSuggested.propertyType, 14);
+  assert.equal(snapSuggested.city, 15);
+  assert.equal(snapSuggested.budget, 16);
+  assert.equal(snapSuggested.salary, 17);
+  assert.equal(snapSuggested.residency, 18);
+  assert.equal(snapSuggested.purchaseTimeline, 19);
+  assert.equal(snapSuggested.leadId, 9);
+  assert.equal(sync.snapPlatformLabel(), 'سناب');
+  assert.equal(config.alignedFormHeaderStart(headers), -1);
+  assert.equal(config.alignedFormHeaderStart(config.SNAP_SHEET_HEADERS), 11);
 
   const key = sync.sheetRowKey(2, ['أ', '0551110000']);
   assert.equal(key, sync.sheetRowKey(2, ['أ', '0551110000']));
@@ -158,15 +196,27 @@ try {
   schema.resetLeadSchemaCache();
   await schema.ensureLeadSchema(sqliteExecutor(mem));
   const seeded = mem.prepare('SELECT id, sheet_id, gid, label, campaign, enabled, mapping, headers FROM crm_sheet_sources').all();
-  assert.equal(seeded.length, 1);
-  assert.equal(seeded[0].id, 'tiktok-leads-1');
-  assert.equal(seeded[0].sheet_id, config.TIKTOK_SHEET_ID);
-  assert.equal(seeded[0].label, 'تيك توك');
-  assert.equal(seeded[0].campaign, '');
-  assert.equal(seeded[0].gid, config.TIKTOK_SHEET_GID);
-  assert.equal(Number(seeded[0].enabled), 1);
-  const seededMapping = JSON.parse(seeded[0].mapping);
-  const seededHeaders = JSON.parse(seeded[0].headers);
+  assert.equal(seeded.length, 2);
+  const tiktokSeeded = seeded.find(row => row.id === 'tiktok-leads-1');
+  assert.ok(tiktokSeeded);
+  assert.equal(tiktokSeeded.sheet_id, config.TIKTOK_SHEET_ID);
+  assert.equal(tiktokSeeded.label, 'تيك توك');
+  assert.equal(tiktokSeeded.campaign, '');
+  assert.equal(tiktokSeeded.gid, config.TIKTOK_SHEET_GID);
+  assert.equal(Number(tiktokSeeded.enabled), 1);
+  const seededMapping = JSON.parse(tiktokSeeded.mapping);
+  const seededHeaders = JSON.parse(tiktokSeeded.headers);
+  const snapSeeded = seeded.find(row => row.id === config.SNAP_SHEET_SOURCE_ID);
+  assert.ok(snapSeeded);
+  assert.equal(snapSeeded.sheet_id, config.TIKTOK_SHEET_ID);
+  assert.equal(snapSeeded.gid, config.SNAP_SHEET_GID);
+  assert.equal(snapSeeded.label, 'اسناب يوليو');
+  assert.equal(snapSeeded.campaign, '');
+  assert.equal(Number(snapSeeded.enabled), 1);
+  const snapSeedMapping = JSON.parse(snapSeeded.mapping);
+  assert.equal(snapSeedMapping.name, 11);
+  assert.equal(snapSeedMapping.phone, 13);
+  assert.equal(JSON.parse(snapSeeded.headers)[11], 'الاسم');
   assert.equal(seededHeaders[seededMapping.phone], 'رقم الجوال');
   assert.equal(seededHeaders[seededMapping.name], 'الاسم');
   assert.equal(seededHeaders[seededMapping.leadId], 'TikTok Lead ID');
@@ -188,7 +238,7 @@ try {
   assert.match(mem.prepare("SELECT sheet_key FROM crm_sheet_sources WHERE id='tiktok-leads-1'").get().sheet_key, /^[a-f0-9]{64}$/);
   schema.resetLeadSchemaCache();
   await schema.ensureLeadSchema(sqliteExecutor(mem));
-  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM crm_sheet_sources').get().n, 1);
+  assert.equal(mem.prepare('SELECT COUNT(*) AS n FROM crm_sheet_sources').get().n, 2);
   mem.prepare(`UPDATE crm_sheet_sources SET gid = '', campaign = 'تمويل عقارى 4 نوفمبر', headers = '[]', mapping = '{}' WHERE id = 'tiktok-leads-1'`).run();
   mem.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('old-key', 'tiktok-leads-1', 'meta-row', NULL, 'imported', '2026-01-01')`).run();
   mem.prepare(`INSERT INTO crm_sheet_sources (id, sheet_id, gid, label, campaign, mapping, headers, enabled, created_at, updated_at) VALUES ('meta-extra', ?, ?, 'ميتا', '', '{}', '[]', 1, '2026-01-01', '2026-01-01')`).run(config.TIKTOK_SHEET_ID, config.TIKTOK_META_TAB_GID);
@@ -216,12 +266,24 @@ try {
   assert.equal(seededAgain.gid, config.TIKTOK_SHEET_GID);
   assert.equal(Number(seededAgain.enabled), 1);
   assert.equal(Number(withOther.find(row => row.id === 'other-src').enabled), 1);
+  const snapWithOther = withOther.find(row => row.id === config.SNAP_SHEET_SOURCE_ID);
+  assert.ok(snapWithOther);
+  assert.equal(snapWithOther.gid, config.SNAP_SHEET_GID);
+  assert.equal(Number(snapWithOther.enabled), 1);
   mem.prepare(`UPDATE crm_sheet_sources SET gid = '42' WHERE id = 'tiktok-leads-1'`).run();
   mem.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, lead_id, status, created_at) VALUES ('wrong-gid', 'tiktok-leads-1', 'tt:stale', NULL, 'imported', '2026-04-01')`).run();
   schema.resetLeadSchemaCache();
   await schema.ensureLeadSchema(sqliteExecutor(mem));
   assert.equal(mem.prepare("SELECT gid FROM crm_sheet_sources WHERE id = 'tiktok-leads-1'").get().gid, config.TIKTOK_SHEET_GID);
   assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM crm_sheet_rows WHERE source_id = 'tiktok-leads-1'").get().n, 0);
+  mem.prepare(`UPDATE crm_sheet_sources SET enabled = 0, label = 'يدوي سناب' WHERE id = ?`).run(config.SNAP_SHEET_SOURCE_ID);
+  schema.resetLeadSchemaCache();
+  await schema.ensureLeadSchema(sqliteExecutor(mem));
+  const keptSnap = mem.prepare('SELECT id, label, enabled FROM crm_sheet_sources WHERE gid = ?').all(config.SNAP_SHEET_GID);
+  assert.equal(keptSnap.length, 1);
+  assert.equal(keptSnap[0].id, config.SNAP_SHEET_SOURCE_ID);
+  assert.equal(keptSnap[0].label, 'يدوي سناب');
+  assert.equal(Number(keptSnap[0].enabled), 0);
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='crm_sheet_rows'").get().name, 'crm_sheet_rows');
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='crm_sheet_sync_lock'").get().name, 'crm_sheet_sync_lock');
   const portable = [schema.SHEET_SOURCES_DDL, schema.SHEET_ROWS_DDL, schema.SHEET_LOCK_DDL, schema.SHEET_CLEANUP_DDL, schema.SHEET_ROW_INDEX_DDL, schema.SHEET_SOURCE_INDEX_DDL].join('\n');
@@ -277,6 +339,8 @@ try {
   assert.ok(mysqlCalls.some(call => call.sql === schema.SHEET_ROW_INDEX_ALTER));
   assert.ok(mysqlCalls.some(call => call.sql === schema.SHEET_SOURCE_INDEX_ALTER));
   assert.ok(mysqlCalls.some(call => call.sql.startsWith('INSERT INTO crm_sheet_sources') && call.values.includes(config.TIKTOK_SHEET_GID)));
+  assert.ok(mysqlCalls.some(call => call.sql.startsWith('INSERT INTO crm_sheet_sources') && call.values.includes(config.SNAP_SHEET_GID)));
+  assert.equal(mysqlCalls.some(call => /IFNULL\s*\(\s*gid/i.test(call.sql)), false);
   assert.equal(mysqlCalls.some(call => /ON crm_sheet_rows \(source_id, row_key\)/.test(call.sql)), false);
   schema.resetLeadSchemaCache();
   console.log('PASS sheet DDL is portable and a failed create is retried');
@@ -429,6 +493,117 @@ try {
   assert.equal(orphanImport.inserted, 1);
   assert.equal(mem.prepare("SELECT name, assigned_to, stage FROM leads WHERE phone = '0550000008'").get().name, 'عميل يتيم');
   assert.equal(mem.prepare("SELECT lead_id FROM crm_sheet_rows WHERE source_id = 'fixture-orphan' AND row_key = 'tt:tt-sample-orphan'").get().lead_id.length > 10, true);
+
+  const snapCsv = readFileSync('scripts/fixtures/snap-july-leads.csv', 'utf8');
+  const snapGrid = config.parseCsv(snapCsv);
+  assert.deepEqual(snapGrid[0], config.SNAP_SHEET_HEADERS);
+  assert.equal(snapGrid.length, 7);
+  const parsedSnap = sync.parseSnapLeads(snapGrid);
+  assert.equal(parsedSnap.length, 6);
+  const expectedSnap = [
+    ['Almaha Albogami', '0565959930', 'شقة', 'وسط جدة', 'تمويل عقاري', '6000 - 9000', 'مواطن', 'خلال شهر', 'فيديو شقق جدة', 'd0ef60c4-a1dd-43b8-aede-ad44d4c4d894', '2026-10-06T14:39:36.031Z'],
+    ['Aziz الشهري', '0532272206', 'فيلا', 'شمال جدة', 'تمويل عقاري', '9000 - 12000', 'مواطن', 'مجرد استفسار', 'صورة فيلا الياقوت', '992914a6-7fdf-4041-a088-5800485548e3', '2026-10-06T14:47:38.923Z'],
+    ['بندر محمد', '0566620355', 'فيلا', 'شمال جدة', 'كاش', '9000 - 12000', 'مواطن', 'خلال شهرين', 'صورة فيلا الياقوت', 'abfe9bd3-9115-4ad0-a7be-0c830737c553', '2026-10-06T16:03:46.459Z'],
+    ['مشعل الزهراني', '0503422291', 'فيلا', 'جنوب جدة', 'تمويل عقاري', '9000 - 12000', 'مواطن', 'مجرد استفسار', 'صورة فيلا الياقوت', 'c1573253-f8ba-428c-adbf-1bcff707d12f', '2026-10-06T16:25:10.789Z'],
+    ['Amjad Fallatah', '0543492126', 'فيلا', 'شمال جدة', 'تمويل عقاري', '12000 - أعلى', 'مواطن', 'خلال شهرين', 'صورة فيلا الياقوت', 'c0b2b53b-3dc7-4922-92b1-f3a3cbe62aa9', '2026-10-06T16:40:34.327Z'],
+    ['صابر الحارثي', '0565653001', 'شقة', 'شمال جدة', 'تمويل عقاري', '9000 - 12000', 'مواطن', 'خلال شهر', 'صورة حي السلامة', '34f2f051-6f65-4e71-b994-2219fac849bf', '2026-10-06T19:00:46.611Z'],
+  ];
+  parsedSnap.forEach((lead, index) => {
+    const expected = expectedSnap[index];
+    assert.equal(lead.name, expected[0], lead.name);
+    assert.equal(lead.phone, expected[1]);
+    assert.equal(lead.propertyType, expected[2]);
+    assert.equal(lead.location, expected[3]);
+    assert.equal(lead.purchaseMethod, expected[4]);
+    assert.equal(lead.salary, expected[5]);
+    assert.equal(lead.residency, expected[6]);
+    assert.equal(lead.timeline, expected[7]);
+    assert.equal(lead.adName, expected[8]);
+    assert.equal(lead.leadId, expected[9]);
+    assert.equal(lead.registeredAt, expected[10]);
+    assert.equal(lead.riyadhDay, '2026-10-06');
+    assert.equal(lead.source, 'سناب');
+    assert.equal(lead.campaign, 'شقق جدة - ليدز - أكتوبر 2026');
+    assert.equal(lead.adSet, 'جدة 27-55 عقار');
+    assert.equal(lead.formName, 'اسناب يوليو 2026 شقق');
+    assert.equal(lead.extra, 'More Volume');
+    assert.equal(lead.name.includes('-'), false);
+    assert.equal(/^[0-9a-f-]{36}$/i.test(lead.phone), false);
+  });
+  const snapSource = {
+    id: 'snap-july',
+    sheetId: config.TIKTOK_SHEET_ID,
+    gid: config.SNAP_SHEET_GID,
+    label: 'اسناب يوليو',
+    campaign: 'يجب ألا يلتصق بالمصدر',
+    mapping: {name: 0, phone: 1, propertyType: 2, budget: 4},
+    headers: config.SNAP_SHEET_HEADERS,
+    enabled: true,
+  };
+  const snapImport = await sync.importSheetGrid(db, snapSource, snapGrid, owner);
+  assert.equal(snapImport.ok, true, snapImport.error);
+  assert.equal(snapImport.inserted, 6);
+  assert.equal(snapImport.duplicates, 0);
+  assert.equal(snapImport.invalid, 0);
+  const snapStored = mem.prepare("SELECT name, phone, source, stage, assigned_to, property_other, notes, created_at, created_via FROM leads WHERE phone = '0565959930'").get();
+  assert.equal(snapStored.name, 'Almaha Albogami');
+  assert.equal(snapStored.source, 'سناب');
+  assert.equal(snapStored.stage, 'new');
+  assert.equal(snapStored.assigned_to, '');
+  assert.equal(snapStored.property_other, 'شقة');
+  assert.equal(snapStored.created_at, '2026-10-06T14:39:36.031Z');
+  assert.equal(snapStored.created_via, 'google_sheet');
+  assert.match(snapStored.notes, /نوع العقار: شقة/);
+  assert.match(snapStored.notes, /موقع العقار: وسط جدة/);
+  assert.match(snapStored.notes, /طريقة الشراء: تمويل عقاري/);
+  assert.match(snapStored.notes, /الراتب: 6000 - 9000/);
+  assert.match(snapStored.notes, /مواطن ام مقيم: مواطن/);
+  assert.match(snapStored.notes, /الفترة المتوقعه للشراء: خلال شهر/);
+  assert.match(snapStored.notes, /الحملة: شقق جدة - ليدز - أكتوبر 2026/);
+  assert.match(snapStored.notes, /الإعلان: فيديو شقق جدة/);
+  assert.match(snapStored.notes, /المجموعة الإعلانية: جدة 27-55 عقار/);
+  assert.match(snapStored.notes, /معرف سناب: d0ef60c4-a1dd-43b8-aede-ad44d4c4d894/);
+  assert.match(snapStored.notes, /النموذج: اسناب يوليو 2026 شقق/);
+  assert.match(snapStored.notes, /حقل إضافي: More Volume/);
+  assert.equal(snapStored.notes.includes('TikTok'), false);
+  assert.equal(snapStored.notes.includes('{'), false);
+  assert.equal(mem.prepare("SELECT row_key, status FROM crm_sheet_rows WHERE source_id = 'snap-july' AND lead_id = (SELECT id FROM leads WHERE phone = '0565959930')").get().row_key, 'tt:d0ef60c4-a1dd-43b8-aede-ad44d4c4d894');
+  assert.equal(mem.prepare("SELECT phone, property_other FROM leads WHERE phone = '0566620355'").get().property_other, 'فيلا');
+  assert.match(mem.prepare("SELECT notes FROM leads WHERE phone = '0566620355'").get().notes, /طريقة الشراء: كاش/);
+  assert.equal(mem.prepare("SELECT name, phone FROM leads WHERE phone = '0565653001'").get().name, 'صابر الحارثي');
+  const snapAgain = await sync.importSheetGrid(db, snapSource, snapGrid, owner);
+  assert.equal(snapAgain.inserted, 0);
+  assert.equal(snapAgain.unchanged, 6);
+  assert.equal(snapAgain.duplicates, 0);
+  const repeatPhone = snapGrid[1].slice();
+  repeatPhone[9] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  repeatPhone[11] = 'اسم';
+  repeatPhone[12] = 'مكرر';
+  const repeatImport = await sync.importSheetGrid(db, snapSource, [snapGrid[0], repeatPhone], owner);
+  assert.equal(repeatImport.inserted, 0);
+  assert.equal(repeatImport.duplicates, 1);
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM leads WHERE phone = '0565959930'").get().n, 1);
+  assert.equal(mem.prepare("SELECT name FROM leads WHERE phone = '0565959930'").get().name, 'Almaha Albogami');
+  const roofRow = snapGrid[2].slice();
+  roofRow[9] = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff';
+  roofRow[11] = 'ريف';
+  roofRow[12] = 'مقيم';
+  roofRow[13] = '+966500000111';
+  roofRow[14] = '{روف:true}';
+  roofRow[18] = '{مقيم:true}';
+  const roofImport = await sync.importSheetGrid(db, snapSource, [snapGrid[0], roofRow], owner);
+  assert.equal(roofImport.inserted, 1);
+  const roofLead = mem.prepare("SELECT name, property_other, notes, source, assigned_to, stage FROM leads WHERE phone = '0500000111'").get();
+  assert.equal(roofLead.name, 'ريف مقيم');
+  assert.equal(roofLead.property_other, 'روف');
+  assert.equal(roofLead.source, 'سناب');
+  assert.equal(roofLead.assigned_to, '');
+  assert.equal(roofLead.stage, 'new');
+  assert.match(roofLead.notes, /مواطن ام مقيم: مقيم/);
+  const driftedSnap = await sync.importSheetGrid(db, {...snapSource, id: 'snap-drift', headers: ['اسم مختلف', 'جوال']}, snapGrid, owner);
+  assert.equal(driftedSnap.ok, false);
+  assert.match(driftedSnap.error, /عناوين/);
+  assert.equal(driftedSnap.inserted, 0);
   const boom = {prepare(sql) {
     const inner = db.prepare(sql);
     return {bind(...args) {

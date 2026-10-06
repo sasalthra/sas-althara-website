@@ -1,8 +1,9 @@
 import {createHash} from 'node:crypto';
 import {sheetRowKeyHash} from './sheet-keys';
+import {composePlannedLead, parseSnapLeads, planSheetImport, snapPlatformLabel} from './sheet-snap';
 import {
-  composeSheetLead,
   isBlankSheetRow,
+  isSheetUuid,
   publicSyncError,
   sameHeaders,
   sheetExternalId,
@@ -18,6 +19,8 @@ import {
   type IndexedLead,
 } from './sheet-duplicate-cleanup';
 import {normalizeLeadPhone} from './phone';
+
+export {parseSnapLeads, planSheetImport, snapPlatformLabel};
 
 export type StoredSheetSource = {
   id: string;
@@ -102,7 +105,10 @@ export async function importSheetGrid(
     failed.skippedRows = dataRows;
     return failed;
   }
-  if (source.mapping.name === undefined || source.mapping.phone === undefined) {
+  const body = grid.slice(1).map(row => (row || []).map(cell => String(cell ?? '')));
+  const plan = planSheetImport(header, body, source.mapping);
+  const mapping = plan.mapping;
+  if (mapping.name === undefined || mapping.phone === undefined) {
     const failed = emptyResult('ربط الاسم أو الجوال ناقص');
     failed.rowsRead = dataRows;
     failed.skippedRows = dataRows;
@@ -141,7 +147,10 @@ export async function importSheetGrid(
       result.skippedRows += 1;
       continue;
     }
-    const externalId = sheetExternalId(cells, source.mapping);
+    const snapLeadId = plan.snap && plan.leadIdIndex >= 0 ? String(cells[plan.leadIdIndex] ?? '').trim() : '';
+    const externalId = plan.snap
+      ? (isSheetUuid(snapLeadId) ? snapLeadId.slice(0, 120) : '')
+      : sheetExternalId(cells, mapping);
     const stableKey = externalId ? sheetRowKey(rowNumber, cells, externalId) : '';
     const hashKey = sheetRowKey(rowNumber, cells);
     if ((stableKey && known.has(stableKey)) || known.has(hashKey)) {
@@ -149,11 +158,11 @@ export async function importSheetGrid(
       result.skippedRows += 1;
       continue;
     }
-    if (sheetNameAndPhoneBlank(cells, source.mapping)) {
+    if (sheetNameAndPhoneBlank(cells, mapping)) {
       result.skippedRows += 1;
       continue;
     }
-    const draft = composeSheetLead(cells, source, source.mapping);
+    const draft = composePlannedLead(cells, source, plan);
     const problem = sheetRowProblem(draft);
     const key = problem ? hashKey : stableKey || hashKey;
     if (problem) {
@@ -198,6 +207,7 @@ export async function importSheetGrid(
         source: draft.source,
         notes: draft.notes,
         now,
+        registeredAt: draft.registeredAt || '',
       });
       await db
         .prepare('INSERT INTO lead_activity (id, lead_id, user_id, action, details) VALUES (?, ?, ?, ?, ?)')
@@ -265,8 +275,10 @@ async function insertSheetLead(
     source: string;
     notes: string;
     now: string;
+    registeredAt?: string;
   }
 ) {
+  const createdAt = lead.registeredAt || lead.now;
   const values = [
     lead.id,
     lead.ownerId,
@@ -276,7 +288,7 @@ async function insertSheetLead(
     lead.propertyOther,
     lead.source,
     lead.notes,
-    lead.now,
+    createdAt,
     lead.now,
   ];
   try {
