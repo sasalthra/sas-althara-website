@@ -33,7 +33,9 @@
  * The public TikTok lead sheet is inserted whenever that sheet id and gid
  * are missing, even if other sources already exist. A wrong gid on the seeded
  * row is rewritten. Disabling a row that already points at the right gid is
- * kept, and a second process start does not duplicate it. A failed create is
+ * kept, and a second process start does not duplicate it. The Snap tab
+ * «اسناب يوليو» is inserted once when that spreadsheet id and gid are missing,
+ * and an existing row for the same tab is left as the admin saved it. A failed create is
  * not cached, so the next read or write tries again. last_run_at, rows_read,
  * created, existing, skipped, and error_message are added the same way.
  */
@@ -55,7 +57,7 @@ import {
 } from './stage-notes';
 import {sheetSourceKey} from './sheet-keys';
 import {cleanupSheetSyncDuplicates, type SqlRunner} from './sheet-duplicate-cleanup';
-import {TIKTOK_META_TAB_GID, tiktokSheetSeed} from './sheet-sync-config';
+import {TIKTOK_META_TAB_GID, snapSheetSeed, tiktokSheetSeed} from './sheet-sync-config';
 
 export type LeadSchemaState = {featured: boolean};
 
@@ -791,6 +793,29 @@ async function alignTiktokSheetSource(executor: SqlExecutor) {
 async function insertTiktokSeed(executor: SqlExecutor) {
   const seed = tiktokSheetSeed();
   const now = new Date().toISOString();
+  await insertSheetSeed(executor, seed, now);
+}
+
+/**
+ * Insert «اسناب يوليو» only when no source already uses this spreadsheet id and gid.
+ * Compared in JS so mixed utf8mb4 collations cannot raise error 1267.
+ * An admin's label, mapping, or enabled flag on that tab is left untouched.
+ */
+async function ensureSnapSheetSource(executor: SqlExecutor) {
+  const seed = snapSheetSeed();
+  const rows = rowsOf(await run(executor, 'SELECT id, sheet_id, gid FROM crm_sheet_sources'));
+  const exists = rows.some(
+    row => String(row.sheet_id ?? '').trim() === seed.sheetId && String(row.gid ?? '').trim() === seed.gid
+  );
+  if (exists) return;
+  await insertSheetSeed(executor, seed, new Date().toISOString());
+}
+
+async function insertSheetSeed(
+  executor: SqlExecutor,
+  seed: ReturnType<typeof tiktokSheetSeed>,
+  now: string
+) {
   await run(
     executor,
     `INSERT INTO crm_sheet_sources (
@@ -852,8 +877,16 @@ async function ensureSheetSyncSchema(executor: SqlExecutor) {
   try {
     await alignTiktokSheetSource(executor);
   } catch (error) {
+    if (!/duplicate|UNIQUE|ER_DUP_ENTRY/i.test(messageOf(error))) {
+      console.error('tiktok sheet seed skipped', error);
+      throw error;
+    }
+  }
+  try {
+    await ensureSnapSheetSource(executor);
+  } catch (error) {
     if (/duplicate|UNIQUE|ER_DUP_ENTRY/i.test(messageOf(error))) return;
-    console.error('tiktok sheet seed skipped', error);
+    console.error('snap sheet seed skipped', error);
     throw error;
   }
 }
