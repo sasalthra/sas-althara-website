@@ -6,7 +6,10 @@ function database() {
     const {DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT} = process.env;
     if (!DB_HOST || !DB_USER || !DB_PASSWORD || !DB_NAME) throw new Error('Database configuration missing');
     pool = mysql.createPool({host: DB_HOST, user: DB_USER, password: DB_PASSWORD, database: DB_NAME,
-      port: Number(DB_PORT || 3306), charset: 'utf8mb4', connectionLimit: 5, queueLimit: 20,
+      // mysql2 maps the bare charset name "utf8mb4" to utf8mb4_general_ci. Name the
+      // unicode collation explicitly so coercible literals are not general_ci while
+      // unicode_ci columns produce the other coercible collation (MySQL 1267).
+      port: Number(DB_PORT || 3306), charset: 'utf8mb4_unicode_ci', connectionLimit: 5, queueLimit: 20,
       connectTimeout: 10000, multipleStatements: false,
       ...(process.env.DB_SSL === 'true' ? {ssl: {rejectUnauthorized: true}} : {}),
     });

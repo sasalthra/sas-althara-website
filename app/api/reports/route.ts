@@ -41,7 +41,7 @@ export async function GET(req:Request){
 // instead of hiding behind a generic message. Only the column name is surfaced —
 // never SQL text, credentials or connection details.
 async function selfEmployee(db: ReturnType<typeof crmDb>, user: {userId: string; name: string}) {
-  const row = await db.prepare('SELECT id, name FROM crm_users WHERE HEX(LOWER(id))=HEX(LOWER(?)) LIMIT 1').bind(user.userId).first<{id: string; name: string | null}>();
+  const row = await db.prepare('SELECT id, name FROM crm_users WHERE CAST(LOWER(TRIM(id)) AS BINARY)=CAST(LOWER(TRIM(?)) AS BINARY) LIMIT 1').bind(user.userId).first<{id: string; name: string | null}>();
   return [{id: user.userId, name: row?.name?.trim() || user.name, username: ''}];
 }
 

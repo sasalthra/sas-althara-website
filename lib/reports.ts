@@ -17,24 +17,42 @@ export function parseReportFilters(query:URLSearchParams,now=new Date()):ReportF
  const positive=(key:string,fallback:number,max:number)=>{const v=query.get(key);if(v===null)return fallback;if(!/^\d+$/.test(v)||Number(v)<1||Number(v)>max)throw new ReportError(400,'صفحة غير صالحة');return Number(v);};
  return {from,to,employee:text('employee'),source:text('source'),stage:text('stage'),funding:text('funding'),page:positive('page',1,10000),pageSize:positive('pageSize',25,100)};
 }
-// HEX(LOWER()) compares user ids without mixing ascii_bin columns and utf8mb4 parameters (MySQL 1267).
-const leadFrom='leads l LEFT JOIN crm_users s ON HEX(LOWER(s.id))=HEX(LOWER(l.assigned_to)) LEFT JOIN crm_users f ON HEX(LOWER(f.id))=HEX(LOWER(l.field_assigned_to))';
+// CAST(... AS BINARY) on both sides compares bytes and has no collation. HEX(), LOWER(),
+// CONVERT_TZ, and string literals are coercible strings; MySQL/MariaDB error 1267 when two
+// of those use different collations (connection utf8mb4_general_ci vs column/server
+// utf8mb4_unicode_ci, or the inverse). That fired on the user-id join even with no filters.
+function asBinary(expr:string){return `CAST(${expr} AS BINARY)`;}
+function folded(expr:string){return asBinary(`LOWER(TRIM(${expr}))`);}
+function binEq(expr:string){return `${folded(expr)}=${folded('?')}`;}
+function binJoin(left:string,right:string){return `${folded(left)}=${folded(right)}`;}
+function pad2(n:number){return String(n).padStart(2,'0');}
+function nextCalendarDay(day:string){const [y,m,d]=day.split('-').map(Number);const dt=new Date(Date.UTC(y,m-1,d));dt.setUTCDate(dt.getUTCDate()+1);return dt.toISOString().slice(0,10);}
+/** Midnight opening a Riyadh calendar day, as UTC 'YYYY-MM-DD HH:MM:SS'. Saudi Arabia is fixed UTC+3. */
+function riyadhMidnightUtc(day:string){const [y,m,d]=day.split('-').map(Number);const utc=new Date(Date.UTC(y,m-1,d)-3*60*60*1000);return `${utc.getUTCFullYear()}-${pad2(utc.getUTCMonth()+1)}-${pad2(utc.getUTCDate())} ${pad2(utc.getUTCHours())}:${pad2(utc.getUTCMinutes())}:${pad2(utc.getUTCSeconds())}`;}
+function timestampExpr(column:string){return asBinary(`REPLACE(${asBinary(`SUBSTR(${column},1,19)`)}, ${asBinary(`'T'`)}, ${asBinary(`' '`)})`);}
+function dateWindow(column:string,from:string,to:string){
+ const local=column==='l.follow_up'||column==='a.work_day';
+ if(local){const expr=asBinary(`SUBSTR(${column},1,10)`);return {sql:`${expr} >= ${asBinary('?')} AND ${expr} < ${asBinary('?')}`,args:[from,nextCalendarDay(to)]};}
+ const expr=timestampExpr(column);
+ return {sql:`${expr} >= ${asBinary('?')} AND ${expr} < ${asBinary('?')}`,args:[riyadhMidnightUtc(from),riyadhMidnightUtc(nextCalendarDay(to))]};
+}
+const leadFrom=`leads l LEFT JOIN crm_users s ON ${binJoin('s.id','l.assigned_to')} LEFT JOIN crm_users f ON ${binJoin('f.id','l.field_assigned_to')}`;
 const leadFields='l.id,l.name,l.property_id,l.property_other,l.source,l.stage,l.follow_up,l.created_at,l.updated_at,s.name AS sales,f.name AS field,l.assigned_to AS assigned_raw,l.field_assigned_to AS field_raw';
 type Spec={select:string;from:string;date?:string;employee?:string;lead?:boolean;fixed?:string;order:string;columns:string[][];groups?:string[]};
 const specs:Record<Exclude<ReportId,'properties'>,Spec>={
  leads:{select:leadFields,from:leadFrom,date:'l.created_at',lead:true,order:'l.created_at DESC,l.id',columns:[['id','معرف العميل'],['name','العميل'],['source','المصدر'],['stage','المرحلة الحالية'],['sales','المبيعات'],['field','الميدان'],['property_id','معرف العقار'],['property_other','عقار آخر'],['follow_up','المتابعة'],['created_at','الإنشاء UTC']],groups:['source','stage','sales','field']},
- followups:{select:leadFields,from:leadFrom,date:'l.follow_up',lead:true,fixed:"l.follow_up <> ''",order:'l.follow_up,l.id',columns:[['id','معرف العميل'],['name','العميل'],['follow_up','الموعد الحالي'],['follow_up_age','عمر المتابعة بتوقيت الرياض'],['stage','المرحلة'],['sales','المبيعات'],['field','الميدان']],groups:['follow_up_age','stage','sales']},
- activity:{select:'a.id,a.lead_id,a.user_id,a.action,CAST(a.created_at AS CHAR) AS created_at',from:'lead_activity a JOIN leads l ON l.id=a.lead_id',date:'a.created_at',lead:true,order:'a.created_at DESC,a.id',columns:[['id','معرف الحدث'],['lead_id','العميل'],['user_id','الفاعل'],['action','العمل'],['created_at','الوقت المخزن — منطقة DB']],groups:['action','user_id']},
- transactions:{select:'t.id,t.lead_id,t.data,t.confirmed_due,t.updated_at,l.name,l.source,l.stage,l.property_id,s.name AS sales,f.name AS field,l.assigned_to AS assigned_raw,l.field_assigned_to AS field_raw',from:'crm_transactions t JOIN leads l ON l.id=t.lead_id LEFT JOIN crm_users s ON HEX(LOWER(s.id))=HEX(LOWER(l.assigned_to)) LEFT JOIN crm_users f ON HEX(LOWER(f.id))=HEX(LOWER(l.field_assigned_to))',date:'t.updated_at',lead:true,order:'t.updated_at DESC,t.id',columns:[],groups:['fundingEntity','debtPayer','requestStage']},
- attendance:{select:'a.user_id,u.name,a.work_day,a.check_in,a.check_out,a.late_minutes',from:'hr_attendance a LEFT JOIN crm_users u ON u.id=a.user_id',date:'a.work_day',employee:'a.user_id',order:'a.work_day DESC,a.user_id',columns:[['user_id','الموظف'],['name','الاسم'],['work_day','يوم العمل'],['check_in','الحضور UTC'],['check_out','الانصراف UTC'],['hours','ساعات مكتملة'],['late_minutes','دقائق التأخير المسجلة']],groups:['name']},
- profiles:{select:'p.user_id,u.name,p.job_title,p.department,p.leave_balance,p.updated_at,p.schedule',from:'hr_profiles p LEFT JOIN crm_users u ON u.id=p.user_id',employee:'p.user_id',order:'p.user_id',columns:[['user_id','الموظف'],['name','الاسم'],['job_title','الوظيفة'],['department','القسم'],['leave_balance','رصيد الإجازة اليدوي'],['schedule_status','الدوام الحالي'],['shift','وقت الدوام الحالي'],['timezone','منطقة الدوام'],['work_days','أيام الدوام الحالي (0 الأحد–6 السبت)'],['grace_minutes','السماح الحالي بالدقائق'],['updated_at','آخر تعديل UTC']],groups:['department','schedule_status']},
- requests:{select:'r.id,r.user_id,u.name,r.type,r.status,r.created_at,r.start_date,r.end_date,r.reviewed_at',from:'hr_requests r LEFT JOIN crm_users u ON u.id=r.user_id',date:'r.created_at',employee:'r.user_id',order:'r.created_at DESC,r.id',columns:[['id','معرف الطلب'],['user_id','الموظف'],['name','الاسم'],['type','الخدمة'],['status','الحالة الحالية'],['created_at','الطلب UTC'],['start_date','بداية الإجازة'],['end_date','نهاية الإجازة'],['reviewed_at','المراجعة UTC']],groups:['type','status']},
+ followups:{select:leadFields,from:leadFrom,date:'l.follow_up',lead:true,fixed:`${asBinary('l.follow_up')} <> ${asBinary("''")}`,order:'l.follow_up,l.id',columns:[['id','معرف العميل'],['name','العميل'],['follow_up','الموعد الحالي'],['follow_up_age','عمر المتابعة بتوقيت الرياض'],['stage','المرحلة'],['sales','المبيعات'],['field','الميدان']],groups:['follow_up_age','stage','sales']},
+ activity:{select:'a.id,a.lead_id,a.user_id,a.action,CAST(a.created_at AS CHAR) AS created_at',from:`lead_activity a JOIN leads l ON ${binJoin('l.id','a.lead_id')}`,date:'a.created_at',lead:true,order:'a.created_at DESC,a.id',columns:[['id','معرف الحدث'],['lead_id','العميل'],['user_id','الفاعل'],['action','العمل'],['created_at','الوقت المخزن — منطقة DB']],groups:['action','user_id']},
+ transactions:{select:'t.id,t.lead_id,t.data,t.confirmed_due,t.updated_at,l.name,l.source,l.stage,l.property_id,s.name AS sales,f.name AS field,l.assigned_to AS assigned_raw,l.field_assigned_to AS field_raw',from:`crm_transactions t JOIN leads l ON ${binJoin('l.id','t.lead_id')} LEFT JOIN crm_users s ON ${binJoin('s.id','l.assigned_to')} LEFT JOIN crm_users f ON ${binJoin('f.id','l.field_assigned_to')}`,date:'t.updated_at',lead:true,order:'t.updated_at DESC,t.id',columns:[],groups:['fundingEntity','debtPayer','requestStage']},
+ attendance:{select:'a.user_id,u.name,a.work_day,a.check_in,a.check_out,a.late_minutes',from:`hr_attendance a LEFT JOIN crm_users u ON ${binJoin('u.id','a.user_id')}`,date:'a.work_day',employee:'a.user_id',order:'a.work_day DESC,a.user_id',columns:[['user_id','الموظف'],['name','الاسم'],['work_day','يوم العمل'],['check_in','الحضور UTC'],['check_out','الانصراف UTC'],['hours','ساعات مكتملة'],['late_minutes','دقائق التأخير المسجلة']],groups:['name']},
+ profiles:{select:'p.user_id,u.name,p.job_title,p.department,p.leave_balance,p.updated_at,p.schedule',from:`hr_profiles p LEFT JOIN crm_users u ON ${binJoin('u.id','p.user_id')}`,employee:'p.user_id',order:'p.user_id',columns:[['user_id','الموظف'],['name','الاسم'],['job_title','الوظيفة'],['department','القسم'],['leave_balance','رصيد الإجازة اليدوي'],['schedule_status','الدوام الحالي'],['shift','وقت الدوام الحالي'],['timezone','منطقة الدوام'],['work_days','أيام الدوام الحالي (0 الأحد–6 السبت)'],['grace_minutes','السماح الحالي بالدقائق'],['updated_at','آخر تعديل UTC']],groups:['department','schedule_status']},
+ requests:{select:'r.id,r.user_id,u.name,r.type,r.status,r.created_at,r.start_date,r.end_date,r.reviewed_at',from:`hr_requests r LEFT JOIN crm_users u ON ${binJoin('u.id','r.user_id')}`,date:'r.created_at',employee:'r.user_id',order:'r.created_at DESC,r.id',columns:[['id','معرف الطلب'],['user_id','الموظف'],['name','الاسم'],['type','الخدمة'],['status','الحالة الحالية'],['created_at','الطلب UTC'],['start_date','بداية الإجازة'],['end_date','نهاية الإجازة'],['reviewed_at','المراجعة UTC']],groups:['type','status']},
  announcements:{select:'id,title,created_at',from:'hr_announcements',date:'created_at',order:'created_at DESC,id',columns:[['id','المعرف'],['title','الإعلان'],['created_at','النشر UTC']]},
  users:{select:'id,name,role,active,CAST(created_at AS CHAR) AS created_at',from:'crm_users',employee:'id',order:'id',columns:[['id','المعرف'],['name','الاسم'],['role','الدور'],['active','فعال'],['created_at','إنشاء الحساب']],groups:['role','active']},
  audit:{select:'id,actor_id,action,created_at',from:'crm_audit',date:'created_at',employee:'actor_id',order:'created_at DESC,id',columns:[['id','الحدث'],['actor_id','الفاعل'],['action','العمل'],['created_at','الوقت UTC']],groups:['action','actor_id']},
- imports:{select:"id,actor_id,created_at,JSON_EXTRACT(details,'$.inserted') AS inserted",from:'crm_audit',date:'created_at',employee:'actor_id',fixed:"action='leads.import'",order:'created_at DESC,id',columns:[['id','معرف التشغيل'],['actor_id','الفاعل'],['inserted','صفوف مقبولة'],['created_at','الوقت UTC']],groups:['actor_id']},
- importRows:{select:'r.id,r.lead_id,r.source,r.created_at',from:'crm_import_rows r JOIN leads l ON l.id=r.lead_id',date:'r.created_at',lead:true,order:'r.created_at DESC,r.id',columns:[['id','معرف الصف'],['lead_id','العميل'],['source','مصدر الاستيراد'],['created_at','الوقت UTC']],groups:['source']},
- sheets:{select:"id,last_run,JSON_EXTRACT(config,'$.enabled') AS enabled,JSON_EXTRACT(config,'$.sourceConfirmed') AS sourceConfirmed,JSON_EXTRACT(last_result,'$.error') AS failed,JSON_EXTRACT(last_result,'$.inserted') AS inserted,JSON_EXTRACT(last_result,'$.duplicates') AS duplicates,JSON_EXTRACT(last_result,'$.invalid') AS invalid",from:'crm_integrations',fixed:"id='sheets'",order:'id',columns:[['id','التكامل'],['enabled','حالة الإعداد'],['sourceConfirmed','اعتماد المصدر'],['last_run','آخر تشغيل UTC'],['health','الحالة المحفوظة'],['inserted','المقبول'],['duplicates','المكرر'],['invalid','غير الصالح']]},
+ imports:{select:"id,actor_id,created_at,JSON_EXTRACT(details,'$.inserted') AS inserted",from:'crm_audit',date:'created_at',employee:'actor_id',fixed:`${asBinary('action')} = ${asBinary("'leads.import'")}`,order:'created_at DESC,id',columns:[['id','معرف التشغيل'],['actor_id','الفاعل'],['inserted','صفوف مقبولة'],['created_at','الوقت UTC']],groups:['actor_id']},
+ importRows:{select:'r.id,r.lead_id,r.source,r.created_at',from:`crm_import_rows r JOIN leads l ON ${binJoin('l.id','r.lead_id')}`,date:'r.created_at',lead:true,order:'r.created_at DESC,r.id',columns:[['id','معرف الصف'],['lead_id','العميل'],['source','مصدر الاستيراد'],['created_at','الوقت UTC']],groups:['source']},
+ sheets:{select:"id,last_run,JSON_EXTRACT(config,'$.enabled') AS enabled,JSON_EXTRACT(config,'$.sourceConfirmed') AS sourceConfirmed,JSON_EXTRACT(last_result,'$.error') AS failed,JSON_EXTRACT(last_result,'$.inserted') AS inserted,JSON_EXTRACT(last_result,'$.duplicates') AS duplicates,JSON_EXTRACT(last_result,'$.invalid') AS invalid",from:'crm_integrations',fixed:`${asBinary('id')} = ${asBinary("'sheets'")}`,order:'id',columns:[['id','التكامل'],['enabled','حالة الإعداد'],['sourceConfirmed','اعتماد المصدر'],['last_run','آخر تشغيل UTC'],['health','الحالة المحفوظة'],['inserted','المقبول'],['duplicates','المكرر'],['invalid','غير الصالح']]},
  ai:{select:'user_id,hour_key,requests',from:'ai_usage',date:'hour_key',employee:'user_id',order:'hour_key DESC,user_id',columns:[['user_id','المستخدم'],['hour_key','الساعة UTC'],['requests','محاولات الطلبات']],groups:['user_id']},
 };
 const financeFields=[['brokerage','السعي — مدخل'],['companyDebt','سداد الشركة للمديونية'],['clientDebt','سداد العميل المباشر — ليس تحصيلاً'],['confirmed_due','المستحق المؤكد حسب القاعدة'],['companyDeposit','عربون الشركة — يدوي'],['companyValuation','تقييم الشركة — يدوي'],['companyPayments','دفعات الشركة — يدوي'],['totalPayments','إجمالي مدفوعات — يدوي مستقل'],['brokerageCheque','تحصيل شيك سعي — يدوي'],['ownerCollection','تحصيل المالك — يدوي'],['clientCollection','تحصيل العميل للشركة — يدوي'],['totalCollections','إجمالي متحصلات — يدوي مستقل'],['totalDue','إجمالي مستحق — يدوي مستقل'],['balance','رصيد — يدوي مستقل'],['tax','ضريبة — يدوي'],['netCommission','صافي العمولة — يدوي'],['fundingAmount','تمويل — يدوي'],['propertyValue','قيمة عقار — يدوي'],['refund','استرداد — يدوي'],['brokerCommission','عمولة وسيط — يدوي'],['externalExpenses','مصروفات خارجية — يدوي'],['buyerDeposit','عربون المشتري — يدوي']];
@@ -51,11 +69,10 @@ export function authorizeReport(user:Actor,id:string,filters:ReportFilters,expor
  if((meta.admin||exporting)&&user.role!=='admin')throw new ReportError(403,'لا تملك صلاحية هذا التقرير أو التصدير');
  if(user.role!=='admin'&&filters.employee&&filters.employee!==user.userId)throw new ReportError(403,'الموظف غير مسموح');return meta;
 }
-function hexEq(expr:string){return `HEX(LOWER(${expr}))=HEX(LOWER(?))`;}
-function hexAny(exprs:string[],values:string[]){
+function matchAny(exprs:string[],values:string[]){
  const unique=[...new Set(values.map(value=>value.trim()).filter(Boolean))];
  const parts:string[]=[],args:string[]=[];
- for(const expr of exprs)for(const value of unique){parts.push(hexEq(expr));args.push(value);}
+ for(const expr of exprs)for(const value of unique){parts.push(binEq(expr));args.push(value);}
  return {sql:parts.length?`(${parts.join(' OR ')})`:'',args};
 }
 function where(spec:Spec,user:Actor,f:ReportFilters,employeeTokens:string[]=[]){
@@ -67,26 +84,26 @@ function where(spec:Spec,user:Actor,f:ReportFilters,employeeTokens:string[]=[]){
    if(user.role==='field')columns.push('l.field_assigned_to');
    else if(user.role==='supervisor')columns.push('l.assigned_to','l.field_assigned_to');
    else columns.push('l.assigned_to');
-   const scope=hexAny(columns,[user.userId]);add(scope.sql,...scope.args);
+   const scope=matchAny(columns,[user.userId]);add(scope.sql,...scope.args);
   }
   if(f.employee){
    const tokens=employeeTokens.length?employeeTokens:[f.employee];
    const columns=['l.assigned_to','l.field_assigned_to','l.owner','l.created_by'];
    if(spec===specs.transactions)columns.push("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.financeEmployeeId'))");
-   const match=hexAny(columns,tokens);add(match.sql,...match.args);
+   const match=matchAny(columns,tokens);add(match.sql,...match.args);
   }
-  if(f.source)add(hexEq('l.source'),f.source);
+  if(f.source)add(binEq('l.source'),f.source);
   if(f.stage){
-    if(spec===specs.transactions)add(hexEq("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.requestStage'))"),f.stage);
-    else {const keys=stageMatchKeys(f.stage);const match=hexAny(['l.stage'],keys);add(match.sql,...match.args);}
+    if(spec===specs.transactions)add(binEq("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.requestStage'))"),f.stage);
+    else {const keys=stageMatchKeys(f.stage);const match=matchAny(['l.stage'],keys);add(match.sql,...match.args);}
   }
-  if(f.funding&&spec===specs.transactions)add(hexEq("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.fundingEntity'))"),f.funding);
+  if(f.funding&&spec===specs.transactions)add(binEq("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.fundingEntity'))"),f.funding);
  } else if(spec.employee){
-  if(user.role!=='admin')add(hexEq(spec.employee),user.userId);
-  else if(f.employee){const tokens=employeeTokens.length?employeeTokens:[f.employee];const match=hexAny([spec.employee],tokens);add(match.sql,...match.args);}
+  if(user.role!=='admin')add(binEq(spec.employee),user.userId);
+  else if(f.employee){const tokens=employeeTokens.length?employeeTokens:[f.employee];const match=matchAny([spec.employee],tokens);add(match.sql,...match.args);}
  }
- // Date-only fields are already local work/calendar days. UTC text/timestamps are shifted to fixed Riyadh UTC+03 (Saudi Arabia has no DST).
- if(spec.date){const localDate=['l.follow_up','a.work_day'].includes(spec.date)?`SUBSTRING(${spec.date},1,10)`:`SUBSTRING(CONVERT_TZ(CAST(${spec.date} AS CHAR),'+00:00','+03:00'),1,10)`;add(`${localDate} >= ?`,f.from);add(`${localDate} <= ?`,f.to);}
+ // Date-only fields are already local work/calendar days. UTC stamps are compared as bytes to a Riyadh window shifted in JS, so CONVERT_TZ never mixes coercible collations.
+ if(spec.date){const window=dateWindow(spec.date,f.from,f.to);add(window.sql,...window.args);}
  return {sql:clauses.length?' WHERE '+clauses.join(' AND '):'',args};
 }
 const tokenCache=new WeakMap<object,Map<string,Promise<string[]>>>();
@@ -95,8 +112,8 @@ async function employeeTokens(db:Database,employee:string):Promise<string[]>{
  add(employee);
  if(!employee.trim())return [];
  const queries=[
-  `SELECT id, name, username FROM crm_users WHERE ${hexEq('id')} OR ${hexEq('username')} OR ${hexEq('name')} LIMIT 5`,
-  `SELECT id, name FROM crm_users WHERE ${hexEq('id')} OR ${hexEq('name')} LIMIT 5`,
+  `SELECT id, name, username FROM crm_users WHERE ${binEq('id')} OR ${binEq('username')} OR ${binEq('name')} LIMIT 5`,
+  `SELECT id, name FROM crm_users WHERE ${binEq('id')} OR ${binEq('name')} LIMIT 5`,
  ];
  for(const sql of queries){
   try{
@@ -247,9 +264,9 @@ function snapshotLeadWhere(user:Actor,f:Pick<ReportFilters,'employee'>,employeeT
   if(user.role==='field')columns.push('l.field_assigned_to');
   else if(user.role==='supervisor')columns.push('l.assigned_to','l.field_assigned_to');
   else columns.push('l.assigned_to');
-  const scope=hexAny(columns,[user.userId]);add(scope.sql,...scope.args);
+  const scope=matchAny(columns,[user.userId]);add(scope.sql,...scope.args);
  }
- if(f.employee){const match=hexAny(['l.assigned_to','l.field_assigned_to','l.owner','l.created_by'],employeeTokens.length?employeeTokens:[f.employee]);add(match.sql,...match.args);}
+ if(f.employee){const match=matchAny(['l.assigned_to','l.field_assigned_to','l.owner','l.created_by'],employeeTokens.length?employeeTokens:[f.employee]);add(match.sql,...match.args);}
  return {sql:clauses.length?' WHERE '+clauses.join(' AND '):'',args};
 }
 export type SnapshotCount={label:string;count:number};

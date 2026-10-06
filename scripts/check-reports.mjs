@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {createRequire} from 'node:module';
 import {build} from 'esbuild';
 import {DatabaseSync} from 'node:sqlite';
+import {assertCollationSafe, sqliteReportSql} from './sqlite-report-sql.mjs';
 assert.ok(existsSync('lib/reports.ts'),'Reports engine must exist');
 const out=mkdtempSync(join(tmpdir(),'sas-reports-'));
 try {
@@ -13,7 +14,6 @@ try {
  const {parseReportFilters,readReport,readReportDashboard,reportCsv,propertyNeighborhood,buildPropertiesSnapshot,readClientsSnapshot,readReportSnapshots}=createRequire(import.meta.url)(join(out,'reports.cjs'));
  const sql=new DatabaseSync(':memory:');
  sql.function('JSON_UNQUOTE',v=>v);
- sql.function('CONVERT_TZ',(value,from,to)=>{assert.equal(from,'+00:00');assert.equal(to,'+03:00');if(value==null)return null;const text=String(value).replace(' ','T');const parsed=Date.parse(text.endsWith('Z')?text:text+'Z');return new Date(parsed+3*60*60*1000).toISOString().replace('T',' ');});
  const bounded=parseReportFilters(new URLSearchParams(),new Date('2026-09-15T22:30:00.000Z'));
  assert.equal(bounded.from,'2026-08-18','default starts 30 Riyadh calendar days inclusive');
  assert.equal(bounded.to,'2026-09-16','default ends on current Riyadh day');
@@ -24,7 +24,7 @@ try {
  INSERT INTO crm_users VALUES ('alice','Alice','sales',1,'2026-01-01'),('bob','Bob','sales',1,'2026-01-01');`);
  const put=sql.prepare('INSERT INTO leads VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
  for(const [id,owner,stamp,stage] of [['a','alice','2026-09-01T00:00:00.000Z','new'],['b','bob','2026-09-30T23:59:59.999Z','won'],['c','alice','2026-10-01T00:00:00.000Z','new']])put.run(id,owner,owner,owner,'',id,'p','',"web' OR 1=1 --",stage,'2026-09-10',stamp,stamp);
- const db={prepare(query){assert.match(query.trim(),/^SELECT/,'read-only SQL');let args=[];return {bind(...v){args=v;return this;},async all(){return {results:sql.prepare(query).all(...args)};}};}};
+ const db={prepare(query){assert.match(query.trim(),/^SELECT/,'read-only SQL');assertCollationSafe(query);const runnable=sqliteReportSql(query);let args=[];return {bind(...v){args=v;return this;},async all(){return {results:sql.prepare(runnable).all(...args)};}};}};
  const admin={userId:'root',role:'admin'},alice={userId:'alice',role:'sales'};
  const filters=parseReportFilters(new URLSearchParams('from=2026-09-01&to=2026-09-30'));
  let report=await readReport(db,admin,'leads',filters);
