@@ -8,4 +8,14 @@ assert.match(readFileSync('app/crm/reports-panel.tsx','utf8'),/اللقطات ا
 assert.match(readFileSync('app/crm/reports-panel.tsx','utf8'),/عدد العملاء/,'Client system total must be labeled');
 assert.match(readFileSync('app/crm/reports-panel.tsx','utf8'),/عقارات الكتالوج/,'Property catalog total must be labeled');
 assert.match(readFileSync('app/api/reports/route.ts','utf8'),/readReportSnapshots/,'Overview API must attach snapshots');
+const panel=readFileSync('app/crm/reports-panel.tsx','utf8');
+assert.match(panel,/أداء المصادر/);
+assert.match(panel,/أداء الموظفين ضمن النطاق/);
+assert.doesNotMatch(panel,/<th>المعرّف<\/th>/);
+assert.doesNotMatch(panel,/تصدير CSV متاح/);
+assert.match(panel,/reports-stage-legend/);
+assert.match(panel,/stageGroup/);
+assert.match(readFileSync('app/crm/workspace.tsx','utf8'),/overdue/);
+assert.match(readFileSync('app/crm/workspace.tsx','utf8'),/inactive/);
+assert.match(readFileSync('lib/reports.ts','utf8'),/HEX\(LOWER\(/);
 console.log('PASS reports navigation wiring, API boundary, deep links and snapshots UI');

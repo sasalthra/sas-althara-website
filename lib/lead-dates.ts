@@ -26,10 +26,14 @@ function asInstant(value: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function instantOf(value?: string | Date | null): Date | null {
+export function crmInstant(value?: string | Date | null): Date | null {
   if (value == null || value === '') return null;
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
   return asInstant(value);
+}
+
+function instantOf(value?: string | Date | null): Date | null {
+  return crmInstant(value);
 }
 
 /** Readable registration date in Asia/Riyadh, e.g. "27 سبتمبر 2026". */
