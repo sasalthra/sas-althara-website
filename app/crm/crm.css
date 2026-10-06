@@ -1369,6 +1369,7 @@ form.report-filters,
 .report-overview.panel,
 .reports-perf,
 .reports-alerts,
+.reports-sources,
 .reports-coverage{
   padding:16px 18px;
   border-radius:16px;
@@ -1384,6 +1385,7 @@ form.report-filters,
 .report-team-card h3,
 .report-overview h3,
 .reports-perf h3,
+.reports-sources h3,
 .reports-alerts h3{
   display:inline-flex;
   align-items:center;
@@ -1530,6 +1532,19 @@ form.report-filters,
   color:#9ca3af;font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap;
 }
 .reports-alerts-note{margin:12px 0 0;color:#6b7280;font-size:12.5px}
+.reports-alerts-list a.reports-alert{width:100%;text-decoration:none;color:inherit}
+.reports-alerts-list a.reports-alert:hover{border-color:#3F1A44;background:#fff}
+.reports-stage-layout{display:flex;gap:12px;align-items:center;min-width:0}
+.reports-stage-pie{flex:0 0 240px;min-width:200px}
+.reports-stage-legend{list-style:none;margin:0;padding:0;display:grid;gap:6px;flex:1;min-width:0;max-height:320px;overflow:auto}
+.reports-stage-link{display:flex;align-items:center;gap:8px;color:#111827;text-decoration:none;font-size:13px;font-weight:700;line-height:1.45;padding:4px 2px;border-radius:8px}
+.reports-stage-link:hover{background:#f3eaf4}
+.reports-stage-swatch{width:10px;height:10px;border-radius:999px;flex:0 0 auto;border:1px solid #e5e7eb}
+.reports-stage-name{color:#111827}
+.reports-num-link{color:#3F1A44;font-weight:800;text-decoration:underline;text-underline-offset:3px}
+.reports-num-link:hover{color:#5B245F}
+.reports-filter-banner{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin:0 0 14px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;color:#111827}
+.reports-filter-banner p{margin:0;font-size:13.5px;line-height:1.6}
 
 .reports-coverage summary{
   cursor:pointer;font-weight:700;color:#111827;padding:4px 0 10px;
@@ -1592,6 +1607,8 @@ form.report-filters,
   .reports-filter-submit{grid-column:1 / -1}
 }
 @media (max-width:960px){
+  .reports-stage-layout{flex-direction:column;align-items:stretch}
+  .reports-stage-pie{flex-basis:auto}
   .reports-charts{grid-template-columns:1fr}
   .report-filter-grid,
   .reports-filters-row{grid-template-columns:1fr 1fr}

@@ -3,6 +3,8 @@ import {useEffect,useState,type FormEvent,type ReactNode} from 'react';
 import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend,CartesianGrid,AreaChart,Area} from 'recharts';
 import {AlertCircle,BarChart3,Bell,Building2,Calendar,CheckCircle2,ClipboardList,Download,FileText,Filter,Home,Info,Layers,PieChart as PieIcon,TrendingUp,Users} from 'lucide-react';
 import {allowedReports,type ReportResult} from '@/lib/report-catalog';
+import type {ReportDashboard} from '@/lib/reports';
+import {COHORT_DEFINITIONS} from '@/lib/lead-cohorts';
 import {canonicalStage, displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import {CrmLink,navigateCrm,useCrmQuery} from './navigation';
 
@@ -12,11 +14,11 @@ type ReportSnapshotsPayload={
  clients:{status:'ok';total:number;interested:number;notInterested:number;byStage:{stage:string;label:string;count:number}[]}|{status:'unavailable';error:string};
  properties:{status:'ok';total:number;byNeighborhood:{label:string;count:number}[]}|{status:'unavailable';error:string};
 };
-type Payload={report?:ReportResult;summaries?:Summary[];snapshots?:ReportSnapshotsPayload;employees:{id:string;name:string}[];canExport:boolean;filters:{from:string;to:string;employee:string;source:string;stage:string;funding:string;page:number;pageSize:number};generatedAt?:string};
+type Payload={report?:ReportResult;summaries?:Summary[];snapshots?:ReportSnapshotsPayload;dashboard?:ReportDashboard|null;dashboardError?:string;employees:{id:string;name:string;username?:string}[];canExport:boolean;filters:{from:string;to:string;employee:string;source:string;stage:string;funding:string;page:number;pageSize:number};generatedAt?:string};
 type Metric=NonNullable<ReportResult['metrics']>[number];
 
 const groupNames:Record<string,string>={source:'المصادر',stage:'المراحل',sales:'المبيعات',field:'الميدان',follow_up_age:'عمر المتابعة',city:'المدن',action:'الأعمال',user_id:'المستخدمون',name:'الموظفون',department:'الأقسام',schedule_status:'الدوام',type:'الخدمات',status:'الحالات',role:'الأدوار',active:'تفعيل الحساب',actor_id:'الفاعلون',fundingEntity:'جهات التمويل',debtPayer:'جهة السداد',requestStage:'مرحلة الطلب'};
-const CHART_COLORS=['#3F1A44','#6B5A70','#9CA3AF','#5B245F','#D1D5DB','#8B6B90','#4B5563','#C4B5C8','#374151','#E5E7EB'];
+const CHART_COLORS=['#3F1A44','#5B245F','#6B5A70','#4B5563','#8B6B90','#374151','#A78BAA','#6B7280','#542454','#1F2937','#7C6A86','#4A4450','#2E1233','#9CA3AF','#C4B5C8','#111827'];
 const PURPLE='#3F1A44';
 const GREY_BAR='#E5E7EB';
 const SIGNED_STAGES=new Set(['contract_signed','transferred','won','deposit_paid']);
@@ -85,6 +87,14 @@ function stageFilterExtra(raw:string){
  return <option value={selected}>{selected}</option>;
 }
 
+function NumLink({href,children}:{href:string;children:ReactNode}){
+ return <CrmLink className="reports-num-link" href={href}>{children}</CrmLink>;
+}
+function StageLegend({items,hrefFor}:{items:{stage:string;label:string;count:number;pct:number;color:string}[];hrefFor:(stage:string)=>string}){
+ return <ul className="reports-stage-legend">
+  {items.map(item=><li key={item.stage}><CrmLink className="reports-stage-link" href={hrefFor(item.stage)}><span className="reports-stage-swatch" style={{background:item.color}} aria-hidden="true"/><span className="reports-stage-name">{item.label} — {fmt(item.count)} ({item.pct}%)</span></CrmLink></li>)}
+ </ul>;
+}
 function ChartEmpty({title,hint}:{title:string;hint:string}){
  return (
   <div className="reports-chart-card panel report-chart">
@@ -124,6 +134,22 @@ export default function ReportsPanel({role}:{role:string}){
  }
  const page=report?.page||1,pages=Math.max(1,Math.ceil((report?.total||0)/(report?.pageSize||25)));
  function deepLink(column:string,value:unknown){if(value===null||value===undefined||value==='')return '';if(column==='lead_id'||(column==='id'&&['leads','followups'].includes(selectedModule)))return '/crm/leads/'+encodeURIComponent(String(value));if(column==='property_id'||(column==='id'&&selectedModule==='properties'&&!['other'].includes(String(value))))return '/properties/'+encodeURIComponent(String(value));return '';}
+ function clientListHref(extra:Record<string,string>){
+  const q=new URLSearchParams();q.set('tab','leads');
+  const from=query.get('from')||stateData?.filters.from||'';const to=query.get('to')||stateData?.filters.to||'';
+  if(from)q.set('from',from);if(to)q.set('to',to);
+  const source=query.get('source')||'';if(source){q.set('source',source);q.set('sourceExact','1');}else if(extra.source)q.set('source',extra.source);
+  const stage=query.get('stage')||'';if(stage&&!extra.stage&&!extra.stageGroup)q.set('stage',stage);
+  const employee=extra.employee||query.get('reportEmployee')||'';
+  if(employee){
+   q.set('employee',employee);
+   const person=stateData?.employees.find(item=>item.id===employee)||stateData?.dashboard?.employees.find(item=>item.id===employee);
+   const name=extra.employeeName||person?.name||'';const username=extra.employeeUser||person?.username||'';
+   if(name)q.set('employeeName',name);if(username)q.set('employeeUser',username);
+  }
+  for(const [key,value] of Object.entries(extra)){if(!value||key==='employee'||key==='employeeName'||key==='employeeUser'||(key==='source'&&source))continue;q.set(key,value);}
+  return '/crm?'+q.toString();
+ }
 
  function groupChartData(){
   if(!report)return null;
@@ -150,7 +176,6 @@ export default function ReportsPanel({role}:{role:string}){
  const followupsSummary=stateData?.summaries?.find(s=>s.id==='followups');
  const transactionsSummary=stateData?.summaries?.find(s=>s.id==='transactions');
  const leadsSummary=stateData?.summaries?.find(s=>s.id==='leads');
- const stageBars=clientsOk?.byStage.map(s=>({label:s.label,count:s.count,stage:s.stage}))||[];
  const neighborhoodBars=propsOk?.byNeighborhood.slice(0,8).map(n=>({label:n.label,count:n.count}))||[];
  const salesGroups=report?.groups?.sales||[];
 
@@ -164,64 +189,22 @@ export default function ReportsPanel({role}:{role:string}){
   :(leadsSummary?.status==='ok'?leadsSummary.total:null);
  const employeesCount=stateData?.employees.length??null;
 
- const stagePieData=stageBars.map(s=>({name:s.label,value:s.count}));
  const moduleBars=(stateData?.summaries||[])
   .filter(s=>s.status==='ok'&&s.total!==null)
   .map(s=>({name:s.label,value:s.total as number}));
 
- const perfRows=(()=>{
-  if(salesGroups.length>0){
-   const total=salesGroups.reduce((n,g)=>n+g.count,0)||1;
-   return salesGroups.map((g,i)=>({
-    rank:i+1,
-    name:g.label,
-    id:'',
-    clients:g.count as number|null,
-    pct:Math.round((g.count/total)*100) as number|null,
-    linkEmployee:''
-   }));
-  }
-  const emps=stateData?.employees||[];
-  return emps.slice(0,40).map((emp,i)=>({
-   rank:i+1,
-   name:emp.name,
-   id:emp.id,
-   clients:null as number|null,
-   pct:null as number|null,
-   linkEmployee:emp.id
-  }));
- })();
-
+ const dash=stateData?.dashboard;
+ const stageLegend=(dash?.byStage||[]).map((stage,index)=>({...stage,color:CHART_COLORS[index%CHART_COLORS.length]}));
+ const perfRows=(dash?.employees||[]).map((employee,index)=>({...employee,rank:index+1}));
  const alerts=(()=>{
-  const rows:{tone:'info'|'warn'|'muted';tag:string;message:string;time:string}[]=[];
+  const rows:{tone:'info'|'warn'|'muted';tag:string;message:string;time:string;href:string}[]=[];
   const gen=stateData?.generatedAt?new Date(stateData.generatedAt):new Date();
   const timeLabel=gen.toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Riyadh'});
-  if(followupsSummary?.status==='ok'&&followupsSummary.total!==null){
-   const overdue=followupsSummary.metrics?.find(m=>/متأخر|قبل اليوم/i.test(m.label));
-   if(overdue&&isNumericValue(overdue.value)&&numericOf(overdue.value)>0){
-    rows.push({tone:'warn',tag:'تنبيه',message:`${fmt(numericOf(overdue.value))} مواعيد متابعة متأخرة تحتاج انتباهاً.`,time:timeLabel});
-   }else if(followupsSummary.total>0){
-    rows.push({tone:'info',tag:'معلومات',message:`${fmt(followupsSummary.total)} تذكيرات/متابعات ضمن النطاق الحالي.`,time:timeLabel});
-   }
-  }
-  if(completedDeals===0){
-   rows.push({tone:'warn',tag:'تنبيه',message:'لا توجد صفقات مكتملة أو معاملات مسجّلة ضمن المرشحات الحالية.',time:timeLabel});
-  }
-  if(clientsOk&&clientsOk.notInterested>0){
-   rows.push({tone:'muted',tag:'ملاحظة',message:`${fmt(clientsOk.notInterested)} عميل مصنّف غير مهتم في اللقطة الحالية.`,time:timeLabel});
-  }
-  if(stateData?.canExport){
-   rows.push({tone:'info',tag:'معلومات',message:'تصدير CSV متاح للإدارة من التقارير التفصيلية وبنفس المرشحات.',time:timeLabel});
-  }else{
-   rows.push({tone:'muted',tag:'ملاحظة',message:'التصدير مقصور على الإدارة؛ يمكنك عرض التفاصيل والطباعة ضمن نطاقك.',time:timeLabel});
-  }
-  if(snap?.clients.status==='unavailable'){
-   rows.push({tone:'warn',tag:'تنبيه',message:`لقطة العملاء غير متاحة: ${snap.clients.error}`,time:timeLabel});
-  }
-  if(snap?.properties.status==='unavailable'){
-   rows.push({tone:'warn',tag:'تنبيه',message:`لقطة العقارات غير متاحة: ${snap.properties.error}`,time:timeLabel});
-  }
-  return rows.slice(0,5);
+  if(dash)for(const alert of dash.alerts)rows.push({tone:alert.tone,tag:alert.tag,message:alert.message,time:timeLabel,href:alert.href});
+  else if(stateData?.dashboardError)rows.push({tone:'warn',tag:'تنبيه',message:stateData.dashboardError,time:timeLabel,href:''});
+  if(snap?.clients.status==='unavailable')rows.push({tone:'warn',tag:'تنبيه',message:`لقطة العملاء غير متاحة: ${snap.clients.error}`,time:timeLabel,href:''});
+  if(snap?.properties.status==='unavailable')rows.push({tone:'warn',tag:'تنبيه',message:`لقطة العقارات غير متاحة: ${snap.properties.error}`,time:timeLabel,href:''});
+  return rows.slice(0,12);
  })();
 
  const isOverview=selectedModule==='overview';
@@ -262,7 +245,7 @@ export default function ReportsPanel({role}:{role:string}){
      :<select name="stage" defaultValue={stageFilterValue(query.get('stage')||'')}><option value="">كل المراحل</option>{stageChoices().map(([key,label])=><option key={key} value={label}>{label}</option>)}{stageFilterExtra(query.get('stage')||'')}</select>
     }</label>
     <label>مصدر العميل<input name="source" placeholder="كل المصادر" defaultValue={query.get('source')||''}/></label>
-    <label>الموظف<select name="reportEmployee" defaultValue={query.get('reportEmployee')||''}><option value="">{role==='admin'?'جميع الموظفين':'نطاقي فقط'}</option>{stateData?.employees.map(e=><option key={e.id} value={e.id}>{e.name} — {e.id}</option>)}</select></label>
+    <label>الموظف<select name="reportEmployee" defaultValue={query.get('reportEmployee')||''}><option value="">{role==='admin'?'جميع الموظفين':'نطاقي فقط'}</option>{stateData?.employees.map(e=><option key={e.id} value={e.id}>{e.username?`${e.name} (${e.username})`:e.name}</option>)}</select></label>
     <label>الوحدة التقريرية<select name="module" defaultValue={selectedModule}><option value="overview">نظرة عامة — كل المسموح</option>{modules.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
     {!isOverview?(
      <>
@@ -294,25 +277,29 @@ export default function ReportsPanel({role}:{role:string}){
      <KpiCard value={fmt(employeesCount)} label="عدد الموظفين" icon={<Users size={18}/>} chip={employeesCount!=null?`نطاق ${role==='admin'?'الإدارة':'المستخدم'}`:undefined}/>
      <KpiCard value={fmt(scheduledFollowups)} label="معاينات / متابعات مجدولة" icon={<Calendar size={18}/>} chip={scheduledFollowups!=null&&clientsOk&&clientsOk.total>0?`${Math.round((scheduledFollowups/clientsOk.total)*100)}% من العملاء`:undefined}/>
      <KpiCard value={fmt(completedDeals)} label="المعاملات / الصفقات المكتملة" icon={<CheckCircle2 size={18}/>} chip={signedCount!=null&&clientsOk&&clientsOk.total>0?`${Math.round((signedCount/clientsOk.total)*100)}% وقع/أفرغ`:undefined}/>
-     <KpiCard value={fmt(newClientsCount)} label="عدد العملاء" icon={<ClipboardList size={18}/>} chip={clientsOk?`${fmt(clientsOk.interested)} مهتم`:undefined}/>
+     <KpiCard value={fmt(dash?.total??newClientsCount)} label="عدد العملاء" icon={<ClipboardList size={18}/>} chip={dash?`${fmt(dash.interested)} مهتم`:clientsOk?`${fmt(clientsOk.interested)} مهتم`:undefined}/>
      <KpiCard value={fmt(propsOk?.total)} label="عقارات الكتالوج" icon={<Building2 size={18}/>} chip={propsOk?`${fmt(propsOk.byNeighborhood.length)} أحياء`:undefined}/>
     </div>
 
     <div className="reports-charts" aria-label="رسوم بيانية">
-     <div className="reports-chart-card panel report-chart">
+     <div className="reports-chart-card panel report-chart reports-stage-card">
       <h4><PieIcon size={16} aria-hidden="true"/> توزيع مراحل العملاء</h4>
-      {stagePieData.length>0?(
-       <ResponsiveContainer width="100%" height={280}>
-        <PieChart>
-         <Pie data={stagePieData} dataKey="value" nameKey="name" innerRadius={58} outerRadius={92} paddingAngle={2}>
-          {stagePieData.map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]}/>)}
-         </Pie>
-         <Tooltip/>
-         <Legend layout="vertical" align="right" verticalAlign="middle" wrapperStyle={{fontSize:12}}/>
-        </PieChart>
-       </ResponsiveContainer>
-      ):<div className="reports-chart-empty" role="status"><p>لا تتوفر بيانات مراحل حالياً.</p></div>}
-      {clientsOk?<p className="subtle reports-chart-caption">إجمالي العملاء: {fmt(clientsOk.total)}</p>:null}
+      {stageLegend.some(stage=>stage.count>0)?(
+       <div className="reports-stage-layout">
+        <div className="reports-stage-pie">
+         <ResponsiveContainer width="100%" height={260}>
+          <PieChart>
+           <Pie data={stageLegend.filter(stage=>stage.count>0)} dataKey="count" nameKey="label" innerRadius={52} outerRadius={84} paddingAngle={2} onClick={item=>{const stage=String((item?.payload as {stage?:string}|undefined)?.stage||'');if(stage)navigateCrm(clientListHref({stage}));}}>
+            {stageLegend.filter(stage=>stage.count>0).map(stage=><Cell key={stage.stage} fill={stage.color} style={{cursor:'pointer'}}/>)}
+           </Pie>
+           <Tooltip formatter={(value, _name, item)=>{const count=Number(value)||0;const pct=(item?.payload as {pct?:number}|undefined)?.pct??0;return [`${fmt(count)} (${pct}%)`,'العملاء'];}}/>
+          </PieChart>
+         </ResponsiveContainer>
+        </div>
+        <StageLegend items={stageLegend} hrefFor={stage=>clientListHref({stage})}/>
+       </div>
+      ):<div className="reports-chart-empty" role="status"><p>{stateData?.dashboardError||'لا تتوفر بيانات مراحل حالياً.'}</p></div>}
+      <p className="subtle reports-chart-caption">إجمالي العملاء ضمن الفلاتر: {fmt(dash?.total)} · اضغط المرحلة لفتح قائمة العملاء. {dash?.definitions.interested||COHORT_DEFINITIONS.interested}</p>
      </div>
 
      {neighborhoodBars.length>0?(
@@ -362,11 +349,54 @@ export default function ReportsPanel({role}:{role:string}){
      </div>
     </div>
 
+    {dash&&(
+     <div className="reports-sources panel" aria-label="أداء المصادر">
+      <div className="reports-perf-head">
+       <div>
+        <h3>أداء المصادر</h3>
+        <p className="subtle">{dash.definitions.interested} {dash.definitions.conversion}</p>
+       </div>
+      </div>
+      <div className="report-table-scroll" tabIndex={0} aria-label="جدول المصادر">
+       <table className="reports-perf-table">
+        <thead>
+         <tr>
+          <th>المصدر</th>
+          <th>العملاء</th>
+          <th title={dash.definitions.interested}>مهتم</th>
+          <th title={dash.definitions.notInterested}>غير مهتم</th>
+          <th title={dash.definitions.signed}>وقع / إفراغ</th>
+          <th title={dash.definitions.closed}>مغلق</th>
+          <th title={dash.definitions.unassignedNew}>جدد غير مسندين</th>
+          <th title={dash.definitions.conversion}>التحويل</th>
+         </tr>
+        </thead>
+        <tbody>
+         {dash.sources.length===0?(
+          <tr><td colSpan={8}>لا توجد مصادر ضمن الفلاتر.</td></tr>
+         ):dash.sources.map(source=>(
+          <tr key={source.key}>
+           <th scope="row">{source.label}</th>
+           <td><NumLink href={clientListHref({source:source.key})}>{fmt(source.total)}</NumLink></td>
+           <td><NumLink href={clientListHref({source:source.key,stageGroup:'interested'})}>{fmt(source.interested)}</NumLink></td>
+           <td><NumLink href={clientListHref({source:source.key,stageGroup:'not_interested'})}>{fmt(source.notInterested)}</NumLink></td>
+           <td><NumLink href={clientListHref({source:source.key,stageGroup:'signed'})}>{fmt(source.signed)}</NumLink></td>
+           <td><NumLink href={clientListHref({source:source.key,stageGroup:'closed'})}>{fmt(source.closed)}</NumLink></td>
+           <td><NumLink href={clientListHref({source:source.key,stageGroup:'unassigned_new'})}>{fmt(source.unassignedNew)}</NumLink></td>
+           <td><NumLink href={clientListHref({source:source.key,stageGroup:'signed'})}>{source.conversion==null?'—':`${source.conversion}%`}</NumLink></td>
+          </tr>
+         ))}
+        </tbody>
+       </table>
+      </div>
+     </div>
+    )}
+
     <div className="reports-perf panel" aria-label="أداء الموظفين">
      <div className="reports-perf-head">
       <div>
        <h3>أداء الموظفين ضمن النطاق</h3>
-       <p className="subtle">عدد الموظفين: {fmt(employeesCount)}{clientsOk?` · إجمالي العملاء: ${fmt(clientsOk.total)}`:''}</p>
+       <p className="subtle">عدد الموظفين: {fmt(employeesCount)}{dash?` · إجمالي العملاء: ${fmt(dash.total)}`:''}</p>
       </div>
       <CrmLink className="report-secondary-btn reports-perf-all" href="/crm?tab=users">عرض جميع الموظفين</CrmLink>
      </div>
@@ -376,17 +406,21 @@ export default function ReportsPanel({role}:{role:string}){
         <tr>
          <th>#</th>
          <th>الموظف</th>
-         <th>المعرّف</th>
          <th>العملاء</th>
-         <th>نسبة الإنجاز</th>
+         <th title={dash?.definitions.contacted||COHORT_DEFINITIONS.contacted}>تم التواصل</th>
+         <th title={dash?.definitions.interested||COHORT_DEFINITIONS.interested}>مهتم</th>
+         <th title={dash?.definitions.signed||COHORT_DEFINITIONS.signed}>وقع / إفراغ</th>
+         <th title={dash?.definitions.notInterested||COHORT_DEFINITIONS.notInterested}>غير مهتم</th>
+         <th title={dash?.definitions.overdue||COHORT_DEFINITIONS.overdue}>متابعات متأخرة</th>
+         <th title={dash?.definitions.completion||COHORT_DEFINITIONS.completion}>نسبة الإنجاز</th>
          <th></th>
         </tr>
        </thead>
        <tbody>
         {perfRows.length===0?(
-         <tr><td colSpan={6}>لا يوجد موظفون في النطاق.</td></tr>
+         <tr><td colSpan={10}>{stateData?.dashboardError||'لا يوجد موظفون في النطاق.'}</td></tr>
         ):perfRows.map(row=>(
-         <tr key={row.id||row.name+row.rank}>
+         <tr key={row.id}>
           <td>{row.rank}</td>
           <th scope="row">
            <span className="reports-perf-name">
@@ -394,26 +428,27 @@ export default function ReportsPanel({role}:{role:string}){
             {row.name}
            </span>
           </th>
-          <td>{row.id?<bdi>{row.id}</bdi>:'—'}</td>
-          <td>{row.clients!=null?fmt(row.clients):'—'}</td>
+          <td><NumLink href={clientListHref({employee:row.id})}>{fmt(row.assigned)}</NumLink></td>
+          <td><NumLink href={clientListHref({employee:row.id,stageGroup:'contacted'})}>{fmt(row.contacted)}</NumLink></td>
+          <td><NumLink href={clientListHref({employee:row.id,stageGroup:'interested'})}>{fmt(row.interested)}</NumLink></td>
+          <td><NumLink href={clientListHref({employee:row.id,stageGroup:'signed'})}>{fmt(row.signed)}</NumLink></td>
+          <td><NumLink href={clientListHref({employee:row.id,stageGroup:'not_interested'})}>{fmt(row.notInterested)}</NumLink></td>
+          <td><NumLink href={clientListHref({employee:row.id,overdue:'1'})}>{fmt(row.overdue)}</NumLink></td>
           <td>
-           {row.pct!=null?(
-            <div className="reports-progress" title={`${row.pct}%`}>
-             <span className="reports-progress-track"><span className="reports-progress-fill" style={{width:`${row.pct}%`}}/></span>
-             <span className="reports-progress-label">{row.pct}%</span>
+           {row.completion!=null?(
+            <div className="reports-progress" title={dash?.definitions.completion||COHORT_DEFINITIONS.completion}>
+             <span className="reports-progress-track"><span className="reports-progress-fill" style={{width:`${Math.min(row.completion,100)}%`}}/></span>
+             <span className="reports-progress-label">{row.completion}%</span>
             </div>
-           ):'—'}
+           ):<span title={dash?.definitions.completion||COHORT_DEFINITIONS.completion}>—</span>}
           </td>
-          <td>
-           {row.linkEmployee?(
-            <CrmLink href={href({module:'leads',reportEmployee:row.linkEmployee,page:'1'})}>عرض</CrmLink>
-           ):null}
-          </td>
+          <td><CrmLink href={href({module:'leads',reportEmployee:row.id,page:'1'})}>عرض</CrmLink></td>
          </tr>
         ))}
        </tbody>
       </table>
      </div>
+     <p className="subtle reports-chart-caption">{dash?.definitions.completion||COHORT_DEFINITIONS.completion} الإسناد يطابق رقم الموظف أو اسم المستخدم أو الاسم الظاهر.</p>
     </div>
 
     <div className="reports-alerts panel" aria-label="تنبيهات وملاحظات">
@@ -421,16 +456,10 @@ export default function ReportsPanel({role}:{role:string}){
       <h3><Bell size={16} aria-hidden="true"/> التنبيهات والملاحظات</h3>
      </div>
      <ul className="reports-alerts-list">
-      {alerts.map((a,i)=>(
-       <li key={i} className={`reports-alert tone-${a.tone}`}>
-        <span className="reports-alert-icon" aria-hidden="true">
-         {a.tone==='warn'?<AlertCircle size={18}/>:a.tone==='info'?<Info size={18}/>:<Home size={18}/>}
-        </span>
-        <p className="reports-alert-msg">{a.message}</p>
-        <span className="reports-alert-tag">{a.tag}</span>
-        <time className="reports-alert-time">{a.time}</time>
-       </li>
-      ))}
+      {alerts.length===0?<li className="reports-alert tone-muted"><span className="reports-alert-icon" aria-hidden="true"><Info size={18}/></span><p className="reports-alert-msg">لا توجد تنبيهات ضمن الفلاتر الحالية.</p><span className="reports-alert-tag">ملاحظة</span></li>:alerts.map(a=>{
+       const body=<><span className="reports-alert-icon" aria-hidden="true">{a.tone==='warn'?<AlertCircle size={18}/>:a.tone==='info'?<Info size={18}/>:<Home size={18}/>}</span><p className="reports-alert-msg">{a.message}</p><span className="reports-alert-tag">{a.tag}</span><time className="reports-alert-time">{a.time}</time></>;
+       return a.href?<li key={a.href+a.message}><CrmLink className={`reports-alert tone-${a.tone}`} href={a.href}>{body}</CrmLink></li>:<li key={a.message} className={`reports-alert tone-${a.tone}`}>{body}</li>;
+      })}
      </ul>
      {snap?.note?<p className="subtle reports-alerts-note">{snap.note}</p>:null}
     </div>

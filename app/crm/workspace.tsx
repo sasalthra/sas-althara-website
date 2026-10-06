@@ -10,7 +10,7 @@ import {
 import {Star} from 'lucide-react';
 
 import Link from 'next/link';
-import {CrmLink,useCrmQuery,workspaceItems} from './navigation';
+import {CrmLink,navigateCrm,useCrmQuery,workspaceItems} from './navigation';
 import './crm.css';
 import {LogoutButton} from './auth-buttons';
 import UsersPanel from './users-panel';
@@ -31,7 +31,8 @@ import {canBulkSelect} from '@/lib/bulk-lead-access';
 import {canToggleFeatured, compareClients, featuredControlsEnabled, isFeaturedValue, isNewUnassignedLead} from '@/lib/lead-featured';
 import LeadBulkBar from './lead-bulk-bar';
 import NewLeadBadge from '@/components/new-lead-badge';
-import {displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
+import {canonicalStage, displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
+import {createdInPeriod, isInactiveLead, isOverdueFollowUp, isUnassignedNewWaiting, leadMatchesEmployee, leadMatchesSource, leadMatchesStage, leadMatchesStageGroup} from '@/lib/lead-cohorts';
 import {displayLeadPhone, leadPhoneMatchesQuery} from '@/lib/phone';
 
 import {
@@ -166,6 +167,24 @@ export default function CRM({
 
   const [stageFilter, setStageFilter] =
     useState('');
+  const listStage = query.get('stage') || '';
+  const listSource = query.get('source') || '';
+  const listSourceExact = query.get('sourceExact') === '1';
+  const listEmployee = query.get('employee') || '';
+  const listEmployeeName = query.get('employeeName') || '';
+  const listEmployeeUser = query.get('employeeUser') || '';
+  const listOverdue = query.get('overdue') === '1';
+  const listInactive = query.get('inactive') === '1' || query.get('noActivity') === '1';
+  const listWaiting = query.get('waiting') === '1';
+  const listGroup = query.get('stageGroup') || '';
+  const listFrom = query.get('from') || '';
+  const listTo = query.get('to') || '';
+  const selectedStage = (() => {
+    const raw = listStage || stageFilter;
+    if (!raw) return '';
+    const key = canonicalStage(raw) || displayStage(raw);
+    return stageChoices().some(([stageKey]) => stageKey === key) ? key : '';
+  })();
 
   const [leadView, setLeadView] =
     useState<'all' | 'followups'>('all');
@@ -296,7 +315,37 @@ export default function CRM({
         return false;
       }
 
-      if (stageFilter && displayStage(lead.stage) !== stageFilter) {
+      if ((listFrom || listTo) && !createdInPeriod(lead.created_at, listFrom, listTo)) {
+        return false;
+      }
+
+      if (listStage) {
+        if (!leadMatchesStage(lead.stage, listStage)) return false;
+      } else if (stageFilter && displayStage(lead.stage) !== stageFilter) {
+        return false;
+      }
+
+      if (listSource && !leadMatchesSource(lead.source, listSource, listSourceExact)) {
+        return false;
+      }
+
+      if ((listEmployee || listEmployeeName || listEmployeeUser) && !leadMatchesEmployee(lead, [listEmployee, listEmployeeName, listEmployeeUser])) {
+        return false;
+      }
+
+      if (listGroup && !leadMatchesStageGroup(lead.stage, lead.assigned_to, listGroup)) {
+        return false;
+      }
+
+      if (listOverdue && !isOverdueFollowUp(lead.follow_up, lead.stage, riyadhDayKey(new Date()))) {
+        return false;
+      }
+
+      if (listInactive && !isInactiveLead(lead.updated_at, lead.created_at, lead.stage, Date.now())) {
+        return false;
+      }
+
+      if (listWaiting && !isUnassignedNewWaiting(lead.stage, lead.assigned_to, lead.created_at, Date.now())) {
         return false;
       }
 
@@ -429,8 +478,15 @@ export default function CRM({
                   <span className="mb-1 block text-sm text-black">المرحلة</span>
                   <select
                     aria-label="تصفية المرحلة"
-                    value={stageFilter}
-                    onChange={event => setStageFilter(event.target.value)}
+                    value={selectedStage}
+                    onChange={event => {
+                      const value = event.target.value;
+                      setStageFilter(value);
+                      const next = new URLSearchParams(query);
+                      next.set('tab', 'leads');
+                      if (value) next.set('stage', value); else next.delete('stage');
+                      navigateCrm('/crm?' + next.toString());
+                    }}
                     className="w-full rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-black"
                   >
                     <option value="">كل المراحل</option>
@@ -528,6 +584,27 @@ export default function CRM({
                   </button>
                 </p>
               )}
+
+              {(listStage || listSource || listEmployee || listEmployeeName || listOverdue || listInactive || listWaiting || listGroup || listFrom || listTo) ? (
+                <div className="reports-filter-banner" role="status">
+                  <p>
+                    {listOverdue ? 'مواعيد متابعة متأخرة: الموظف في عمود المبيعات، والموعد في عمود المتابعة. ' : ''}
+                    {listWaiting ? 'عملاء جدد غير مسندين منذ أكثر من 24 ساعة. ' : ''}
+                    {listInactive ? 'عملاء بلا تحديث منذ 7 أيام أو أكثر. ' : ''}
+                    {listGroup === 'interested' ? 'المهتمون ومن بعدهم في مسار العمل. ' : ''}
+                    {listGroup === 'not_interested' ? 'غير مهتم أو غير مؤهل. ' : ''}
+                    {listGroup === 'signed' ? 'وقع عقد أو إفراغ. ' : ''}
+                    {listGroup === 'closed' ? 'مرحلة مغلق. ' : ''}
+                    {listGroup === 'unassigned_new' ? 'عملاء جدد بلا إسناد. ' : ''}
+                    {listGroup === 'contacted' ? 'مرحلة تم التواصل. ' : ''}
+                    {listSource ? `المصدر: ${listSource}. ` : ''}
+                    {(listEmployeeName || listEmployeeUser || listEmployee) ? `الموظف: ${listEmployeeName || listEmployeeUser || 'المحدد'}. ` : ''}
+                    {(listFrom || listTo) ? `الفترة: ${listFrom || '…'} — ${listTo || '…'}. ` : ''}
+                    الظاهر {shown.length} عميلاً.
+                  </p>
+                  <CrmLink href="/crm?tab=leads">مسح فلاتر القائمة</CrmLink>
+                </div>
+              ) : null}
 
               {loading ? (
                 <p>
@@ -768,10 +845,14 @@ export default function CRM({
                                     className="truncate"
                                     title={
                                       lead.assigned_name ||
+                                      lead.assigned_username ||
+                                      lead.assigned_to ||
                                       'بدون تعيين'
                                     }
                                   >
                                     {lead.assigned_name ||
+                                      lead.assigned_username ||
+                                      lead.assigned_to ||
                                       'بدون تعيين'}
                                   </div>
                                 </TableCell>

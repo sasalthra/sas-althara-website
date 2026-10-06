@@ -59,6 +59,7 @@ export type Lead = {
   field_last_update_at?: string | null;
 
   created_at?: string;
+  updated_at?: string | null;
   is_featured?: boolean | number | string | null;
   featured_available?: boolean | number | string | null;
 };
