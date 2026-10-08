@@ -5,13 +5,19 @@
 
 import properties from '@/data/properties.json';
 import {
+  ASSIGNMENT_BASIS,
   assembleSnapshot,
   parseCrmInstant,
+  type AlignedReport,
+  type AssignmentToday,
   type AssistantSnapshot,
   type RawLead,
   type RawUser,
   type SpendSummary,
 } from './admin-assistant';
+import {conversionRate} from './lead-cohorts';
+import {riyadhDayKey} from './lead-dates';
+import {parseReportFilters, readAssignmentCounts, readReportDashboard} from './reports';
 
 type Statement = {
   bind(...args: (string | number | null)[]): Statement;
@@ -50,11 +56,11 @@ async function optionalRows(db: AssistantDb, sql: string): Promise<Record<string
 async function leadRows(db: AssistantDb): Promise<RawLead[]> {
   const withNotes = await optionalRows(
     db,
-    `SELECT id, name, phone, stage, source, notes, assigned_to, field_assigned_to, created_at, updated_at FROM leads`
+    `SELECT id, name, phone, stage, source, notes, assigned_to, field_assigned_to, follow_up, created_at, updated_at FROM leads`
   );
   const rows = withNotes ?? await optionalRows(
     db,
-    `SELECT id, name, phone, stage, source, assigned_to, field_assigned_to, created_at, updated_at FROM leads`
+    `SELECT id, name, phone, stage, source, assigned_to, field_assigned_to, follow_up, created_at, updated_at FROM leads`
   ) ?? [];
   return rows.map(row => ({
     id: text(row.id),
@@ -65,17 +71,19 @@ async function leadRows(db: AssistantDb): Promise<RawLead[]> {
     notes: text(row.notes),
     assignedTo: text(row.assigned_to),
     fieldAssignedTo: text(row.field_assigned_to),
+    followUp: row.follow_up,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   })).filter(row => row.id);
 }
 
 async function userRows(db: AssistantDb): Promise<RawUser[]> {
-  const withLogin = await optionalRows(db, 'SELECT id, name, role, active, last_login_at FROM crm_users');
+  const withLogin = await optionalRows(db, 'SELECT id, name, username, role, active, last_login_at FROM crm_users');
   const rows = withLogin ?? await optionalRows(db, 'SELECT id, name, role, active FROM crm_users') ?? [];
   return rows.map(row => ({
     id: text(row.id),
     name: text(row.name),
+    username: text(row.username),
     role: text(row.role),
     active: activeFlag(row.active),
     lastLoginAt: row.last_login_at ?? null,
@@ -133,7 +141,50 @@ async function campaignSpend(db: AssistantDb): Promise<SpendSummary> {
   return {available: false, total: 0};
 }
 
-export async function loadAssistantSnapshot(db: AssistantDb, now = new Date()): Promise<AssistantSnapshot> {
+function alignReport(dash: Awaited<ReturnType<typeof readReportDashboard>>, from: string, to: string): AlignedReport {
+  return {
+    from,
+    to,
+    total: dash.total,
+    overdue: dash.overdue,
+    signed: dash.signed,
+    scheduled: dash.scheduled,
+    employees: dash.employees.map(employee => ({
+      name: employee.name,
+      assigned: employee.assigned,
+      signed: employee.signed,
+      overdue: employee.overdue,
+      conversionPct: conversionRate(employee.assigned, employee.signed),
+    })),
+    stages: dash.byStage.filter(stage => stage.count > 0).map(stage => ({label: stage.label, count: stage.count})),
+    sources: dash.sources.map(source => ({label: source.label, count: source.total, conversion: source.conversion})),
+    field: dash.field,
+  };
+}
+
+export async function loadReportAlignment(db: AssistantDb, now: Date, actor: {userId: string; role: string}, filters?: {from?: string; to?: string; employee?: string; source?: string; stage?: string}): Promise<AlignedReport | null> {
+  const params = new URLSearchParams();
+  if (filters?.from) params.set('from', filters.from);
+  if (filters?.to) params.set('to', filters.to);
+  if (filters?.employee) params.set('employee', filters.employee);
+  if (filters?.source) params.set('source', filters.source);
+  if (filters?.stage) params.set('stage', filters.stage);
+  const parsed = parseReportFilters(params, now);
+  const dash = await readReportDashboard(db as never, actor, parsed, now);
+  return alignReport(dash, parsed.from, parsed.to);
+}
+
+export async function loadAssignments(db: AssistantDb, from: string, to: string, employee = ''): Promise<AssignmentToday> {
+  try {
+    const counts = await readAssignmentCounts(db as never, from, to, employee);
+    return {date: from === to ? from : `${from} — ${to}`, basis: counts.basis || ASSIGNMENT_BASIS, unavailable: counts.unavailable, total: counts.total, byEmployee: counts.byEmployee.map(row => ({name: row.name, count: row.count}))};
+  } catch (error) {
+    console.error('assignment counts unavailable', error);
+    return {date: from === to ? from : `${from} — ${to}`, basis: ASSIGNMENT_BASIS, unavailable: true, total: null, byEmployee: []};
+  }
+}
+
+export async function loadAssistantSnapshot(db: AssistantDb, now = new Date(), actor: {userId: string; role: string} = {userId: 'assistant', role: 'admin'}): Promise<AssistantSnapshot> {
   const [leads, users, activityAt, ids, spend] = await Promise.all([
     leadRows(db),
     userRows(db),
@@ -141,5 +192,13 @@ export async function loadAssistantSnapshot(db: AssistantDb, now = new Date()): 
     propertyIds(db),
     campaignSpend(db),
   ]);
-  return assembleSnapshot({leads, users, activityAt, propertyIds: ids, spend, now});
+  const snapshot = assembleSnapshot({leads, users, activityAt, propertyIds: ids, spend, now});
+  const today = riyadhDayKey(now);
+  try {
+    snapshot.aligned = await loadReportAlignment(db, now, actor) ?? undefined;
+  } catch (error) {
+    console.error('report alignment unavailable', error);
+  }
+  snapshot.assignmentsToday = today ? await loadAssignments(db, today, today) : {date: '', basis: ASSIGNMENT_BASIS, unavailable: true, total: null, byEmployee: []};
+  return snapshot;
 }

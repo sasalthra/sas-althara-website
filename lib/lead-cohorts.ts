@@ -18,7 +18,10 @@ export const COHORT_DEFINITIONS = {
   conversion: 'نسبة التحويل = (وقع عقد + إفراغ) ÷ إجمالي عملاء المصدر × 100.',
   completion: 'نسبة الإنجاز = نسبة العملاء المسندين الذين تجاوزوا مرحلتي «عميل جديد» و«لم يتم الرد».',
   contacted: 'تم التواصل = العميل حالياً في مرحلة «تم التواصل» فقط.',
-  overdue: 'متابعة متأخرة = تاريخ المتابعة قبل اليوم بتوقيت الرياض، والمرحلة ليست «مغلق» ولا المكسب القديم.',
+  overdue: 'متابعة متأخرة = تاريخ المتابعة قبل اليوم بتوقيت الرياض، والمرحلة ليست «مغلق» ولا «غير مهتم» ولا «غير مؤهل» ولا «وقع عقد» ولا «إفراغ».',
+  scheduled: 'معاينات / متابعات مجدولة = عملاء النطاق الذين لديهم تاريخ متابعة مسجّل، ضمن نفس فلاتر الفترة والمصدر والمرحلة والموظف.',
+  period: 'الفترة تُطبَّق على تاريخ تسجيل العميل (created_at) بتوقيت الرياض.',
+  assignment: 'الإسناد يُحسب من وقت الإسناد في lead_activity أو عمود assigned_at بتوقيت الرياض، لا من تاريخ التسجيل.',
   inactive: 'بلا نشاط = لم يُحدَّث سجل العميل منذ 7 أيام أو أكثر، باستثناء «مغلق» و«غير مهتم».',
   unassignedNew: 'جدد غير مسندين = مرحلة «عميل جديد» بلا موظف مبيعات.',
   unassignedWait: 'جديد غير مسند = مرحلة «عميل جديد» بلا موظف مبيعات، ومرّ على تسجيله أكثر من 24 ساعة.',
@@ -67,12 +70,16 @@ export function conversionRate(total: number, signed: number): number | null {
   return Math.round((signed / total) * 100);
 }
 
+const OVERDUE_EXCLUDED = new Set(['closed', 'not_interested', 'unqualified', 'contract_signed', 'transferred']);
+
 export function isOverdueFollowUp(followUp: unknown, stage: unknown, today: string): boolean {
   const due = String(followUp ?? '').trim().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(due) || !today || due >= today) return false;
-  const raw = String(stage ?? '').trim();
-  if (raw === 'won' || raw === 'closed' || stageKeyOf(raw) === 'closed') return false;
-  return true;
+  return !OVERDUE_EXCLUDED.has(stageKeyOf(stage));
+}
+
+export function hasScheduledFollowUp(followUp: unknown): boolean {
+  return Boolean(String(followUp ?? '').trim());
 }
 
 export function isInactiveLead(updatedAt: unknown, createdAt: unknown, stage: unknown, now: number): boolean {
@@ -172,13 +179,99 @@ export type LeadIdentity = {
   assigned_username?: unknown;
   field_assigned_name?: unknown;
   field_assigned_username?: unknown;
+  owner?: unknown;
+  created_by?: unknown;
 };
 
 export function leadMatchesEmployee(lead: LeadIdentity, tokens: string[]): boolean {
   const wanted = new Set(tokens.map(normText).filter(Boolean));
   if (!wanted.size) return true;
-  const fields = [lead.assigned_to, lead.field_assigned_to, lead.assigned_name, lead.assigned_username, lead.field_assigned_name, lead.field_assigned_username];
+  const fields = [lead.assigned_to, lead.field_assigned_to, lead.assigned_name, lead.assigned_username, lead.field_assigned_name, lead.field_assigned_username, lead.owner, lead.created_by];
   return fields.some(value => wanted.has(normText(value)));
+}
+
+export type AssignmentEvent = {leadId: string; at: unknown; assignee: string};
+
+function assignmentInstant(value: unknown): Date | null {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  return crmInstant(typeof value === 'string' ? value : value == null ? '' : String(value));
+}
+
+/** Distinct leads whose assignment timestamp falls in the Riyadh window. created_at is never read. */
+export function countAssignmentEvents(input: {
+  events: AssignmentEvent[];
+  users: DirectoryUser[];
+  from: string;
+  to: string;
+  employeeTokens?: string[];
+}): {total: number; byEmployee: {id: string; name: string; count: number}[]} {
+  const tokens = (input.employeeTokens ?? []).map(normText).filter(Boolean);
+  const wanted = new Set(tokens);
+  const chosen = new Map<string, {at: number; assignee: string}>();
+  for (const event of input.events) {
+    const leadId = String(event.leadId ?? '').trim();
+    if (!leadId) continue;
+    const instant = assignmentInstant(event.at);
+    if (!instant) continue;
+    const day = riyadhDayKey(instant);
+    if (!day || (input.from && day < input.from) || (input.to && day > input.to)) continue;
+    const at = instant.getTime();
+    const prev = chosen.get(leadId);
+    if (!prev || at >= prev.at) chosen.set(leadId, {at, assignee: String(event.assignee ?? '').trim()});
+  }
+  const counts = new Map<string, {id: string; name: string; count: number}>();
+  let total = 0;
+  for (const row of chosen.values()) {
+    const person = matchUser(input.users, row.assignee);
+    const values = [row.assignee, person?.id, person?.username, person?.name].map(normText).filter(Boolean);
+    if (wanted.size && !values.some(value => wanted.has(value))) continue;
+    total++;
+    const id = person?.id || row.assignee || 'غير معيّن';
+    const name = person?.name || row.assignee || 'غير معيّن';
+    const bucket = counts.get(id) || {id, name, count: 0};
+    bucket.count++;
+    counts.set(id, bucket);
+  }
+  return {
+    total,
+    byEmployee: [...counts.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ar')),
+  };
+}
+
+export type ReportLeadFilter = {
+  from?: string;
+  to?: string;
+  stage?: string;
+  source?: string;
+  sourceExact?: boolean;
+  employeeTokens?: string[];
+  stageGroup?: string;
+  overdue?: boolean;
+  inactive?: boolean;
+  waiting?: boolean;
+  scheduled?: boolean;
+  today?: string;
+  nowMs?: number;
+};
+
+/** Same predicates the reports drill-down list uses, so a card count can be checked against the list. */
+export function leadMatchesReportFilters(lead: LeadIdentity & {
+  stage?: unknown;
+  source?: unknown;
+  follow_up?: unknown;
+  created_at?: unknown;
+  updated_at?: unknown;
+}, filters: ReportLeadFilter): boolean {
+  if ((filters.from || filters.to) && !createdInPeriod(lead.created_at, filters.from || '', filters.to || '')) return false;
+  if (filters.stage && !leadMatchesStage(lead.stage, filters.stage)) return false;
+  if (filters.source && !leadMatchesSource(lead.source, filters.source, Boolean(filters.sourceExact))) return false;
+  if (filters.employeeTokens?.some(token => token.trim()) && !leadMatchesEmployee(lead, filters.employeeTokens)) return false;
+  if (filters.stageGroup && !leadMatchesStageGroup(lead.stage, lead.assigned_to, filters.stageGroup)) return false;
+  if (filters.overdue && !isOverdueFollowUp(lead.follow_up, lead.stage, filters.today || '')) return false;
+  if (filters.inactive && !isInactiveLead(lead.updated_at, lead.created_at, lead.stage, filters.nowMs || Date.now())) return false;
+  if (filters.waiting && !isUnassignedNewWaiting(lead.stage, lead.assigned_to, lead.created_at, filters.nowMs || Date.now())) return false;
+  if (filters.scheduled && !hasScheduledFollowUp(lead.follow_up)) return false;
+  return true;
 }
 
 export function orderedStages(): {stage: string; label: string}[] {

@@ -17,7 +17,7 @@ try {
   assert.equal(leadSchema.safeParse({...input,followUp:'2026-02-30'}).success,false);
   console.log('PASS lead Other, source, stages, invalid property and date');
   await build({entryPoints:['lib/transactions.ts'],outfile:join(output,'finance.cjs'),bundle:true,platform:'node',format:'cjs'});
-  const {transactionSchema, confirmedDue, transactionFields} = createRequire(import.meta.url)(join(output,'finance.cjs'));
+  const {transactionSchema, confirmedDue, commissionTotal, transactionFields} = createRequire(import.meta.url)(join(output,'finance.cjs'));
   const finance={leadId:crypto.randomUUID(),debtPayer:'company',debtSettlement:'100.25',brokerage:'20.10'};
   assert.equal(confirmedDue(transactionSchema.parse(finance)),'120.35');
   assert.equal(confirmedDue(transactionSchema.parse({...finance,debtPayer:'client'})),'20.10');
@@ -27,6 +27,15 @@ try {
   assert.equal(transactionSchema.safeParse({...finance,'د=':'99'}).success,false);
   assert.equal(transactionFields.some(f=>f.label==='د='),false);
   assert.equal(transactionSchema.parse(finance).balance,'');
+  assert.equal(transactionFields.some(f=>f.key==='ownerCommission'&&f.label==='العمولة من المالك'),true);
+  assert.equal(transactionFields.some(f=>f.key==='clientCommission'&&f.label==='العمولة من العميل'),true);
+  assert.equal(commissionTotal('10000','2500'),'12500.00');
+  assert.equal(commissionTotal('',''),'0.00');
+  const legacyNote=transactionSchema.parse({...finance,brokerage:'10000 من المالك … العمولة من العميل',ownerCommission:'',clientCommission:''});
+  assert.equal(legacyNote.ownerCommission,'');
+  assert.equal(legacyNote.clientCommission,'');
+  assert.match(legacyNote.brokerage,/من المالك/);
+  assert.equal(confirmedDue(legacyNote),null);
   console.log('PASS confirmed finance rule, precise decimals, manual unknown formulas, excluded column');
   await build({entryPoints:['components/ui/table.tsx'],outfile:join(output,'table.cjs'),bundle:true,platform:'node',format:'cjs',external:['react','react-dom']});
   // Bundle render fixture in repo resolution context (no browser/auth required).
@@ -132,7 +141,7 @@ try {
   console.log('PASS import mapping, Arabic digits, canonical phone dedup, invalid rows and raw preservation');
   console.log('PASS retired won aliases import as contract_signed');
   await build({stdin:{contents:`export {stageChoices, stageWriteAllowed, canonicalStage, stageLabel, editableStage, stageEnumValues, stagePipelineIndex} from './lib/lead-stages.ts';
-export {formatRiyadhDate, riyadhDayKey} from './lib/lead-dates.ts';
+export {formatRiyadhDate, formatRiyadhDateTime, riyadhDayKey} from './lib/lead-dates.ts';
 export {canToggleFeatured, compareClients, featuredControlsEnabled, isNewUnassignedLead, leadListOrderSql} from './lib/lead-featured.ts';`,resolveDir:process.cwd(),loader:'ts'},outfile:join(output,'lead-rules.cjs'),bundle:true,platform:'node',format:'cjs'});
   const rules=createRequire(import.meta.url)(join(output,'lead-rules.cjs'));
   assert.equal(rules.stageChoices('new').some(([key])=>key==='won'),false);
@@ -242,6 +251,7 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled, isNewUnassig
   assert.equal(rules.riyadhDayKey('2026-09-26T21:30:00.000Z'),'2026-09-27');
   assert.equal(rules.riyadhDayKey('2026-09-27T21:00:00.000Z'),'2026-09-28');
   assert.equal(rules.riyadhDayKey('2026-09-27'),'2026-09-27');
+  assert.equal(rules.formatRiyadhDateTime('2026-10-06T09:06:32.626Z'),'2026-10-06 12:06 م');
   assert.match(rules.formatRiyadhDate('2026-09-26T21:30:00.000Z'),/27/);
   assert.match(rules.formatRiyadhDate('2026-09-26T21:30:00.000Z'),/2026/);
   assert.equal(rules.canToggleFeatured({userId:'s',role:'admin'},{assigned_to:''}),true);

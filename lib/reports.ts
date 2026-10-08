@@ -1,6 +1,10 @@
 import {reportCatalog,type ReportColumn,type ReportResult,type ReportRow,type ReportId} from './report-catalog';
 import {retiredStageMap, stageLabel, stageMatchKeys, stagePipelineIndex} from './lead-stages';
-import {COHORT_DEFINITIONS,completionRate,conversionRate,isClosedStage,isContactedStage,isInactiveLead,isInterestedStage,isNotInterestedStage,isOverdueFollowUp,isPastFreshStage,isSignedStage,isUnassignedNew,isUnassignedNewWaiting,matchUser,normalizeSource,orderedStages,stageKeyOf,type DirectoryUser} from './lead-cohorts';
+import {COHORT_DEFINITIONS,countAssignmentEvents,completionRate,conversionRate,hasScheduledFollowUp,isClosedStage,isContactedStage,isInactiveLead,isInterestedStage,isNotInterestedStage,isOverdueFollowUp,isPastFreshStage,isSignedStage,isUnassignedNew,isUnassignedNewWaiting,leadMatchesReportFilters,matchUser,normalizeSource,orderedStages,stageKeyOf,type AssignmentEvent,type DirectoryUser} from './lead-cohorts';
+import {formatRiyadhDateTime} from './lead-dates';
+import {commissionTotal} from './transactions';
+import {asBinary,binEq,binJoin} from './sql-collation';
+export {leadMatchesReportFilters};
 export class ReportError extends Error {constructor(public status:number,message:string){super(message);}}
 type Actor={userId:string;role:string};
 type Database={prepare(sql:string):{bind(...args:(string|number|null)[]):{all():Promise<{results:Record<string,unknown>[]}>}}};
@@ -17,14 +21,7 @@ export function parseReportFilters(query:URLSearchParams,now=new Date()):ReportF
  const positive=(key:string,fallback:number,max:number)=>{const v=query.get(key);if(v===null)return fallback;if(!/^\d+$/.test(v)||Number(v)<1||Number(v)>max)throw new ReportError(400,'صفحة غير صالحة');return Number(v);};
  return {from,to,employee:text('employee'),source:text('source'),stage:text('stage'),funding:text('funding'),page:positive('page',1,10000),pageSize:positive('pageSize',25,100)};
 }
-// CAST(... AS BINARY) on both sides compares bytes and has no collation. HEX(), LOWER(),
-// CONVERT_TZ, and string literals are coercible strings; MySQL/MariaDB error 1267 when two
-// of those use different collations (connection utf8mb4_general_ci vs column/server
-// utf8mb4_unicode_ci, or the inverse). That fired on the user-id join even with no filters.
-function asBinary(expr:string){return `CAST(${expr} AS BINARY)`;}
-function folded(expr:string){return asBinary(`LOWER(TRIM(${expr}))`);}
-function binEq(expr:string){return `${folded(expr)}=${folded('?')}`;}
-function binJoin(left:string,right:string){return `${folded(left)}=${folded(right)}`;}
+// Comparisons go through lib/sql-collation.ts so both sides are CAST AS BINARY.
 function pad2(n:number){return String(n).padStart(2,'0');}
 function nextCalendarDay(day:string){const [y,m,d]=day.split('-').map(Number);const dt=new Date(Date.UTC(y,m-1,d));dt.setUTCDate(dt.getUTCDate()+1);return dt.toISOString().slice(0,10);}
 /** Midnight opening a Riyadh calendar day, as UTC 'YYYY-MM-DD HH:MM:SS'. Saudi Arabia is fixed UTC+3. */
@@ -43,7 +40,7 @@ const specs:Record<Exclude<ReportId,'properties'>,Spec>={
  leads:{select:leadFields,from:leadFrom,date:'l.created_at',lead:true,order:'l.created_at DESC,l.id',columns:[['id','معرف العميل'],['name','العميل'],['source','المصدر'],['stage','المرحلة الحالية'],['sales','المبيعات'],['field','الميدان'],['property_id','معرف العقار'],['property_other','عقار آخر'],['follow_up','المتابعة'],['created_at','الإنشاء UTC']],groups:['source','stage','sales','field']},
  followups:{select:leadFields,from:leadFrom,date:'l.follow_up',lead:true,fixed:`${asBinary('l.follow_up')} <> ${asBinary("''")}`,order:'l.follow_up,l.id',columns:[['id','معرف العميل'],['name','العميل'],['follow_up','الموعد الحالي'],['follow_up_age','عمر المتابعة بتوقيت الرياض'],['stage','المرحلة'],['sales','المبيعات'],['field','الميدان']],groups:['follow_up_age','stage','sales']},
  activity:{select:'a.id,a.lead_id,a.user_id,a.action,CAST(a.created_at AS CHAR) AS created_at',from:`lead_activity a JOIN leads l ON ${binJoin('l.id','a.lead_id')}`,date:'a.created_at',lead:true,order:'a.created_at DESC,a.id',columns:[['id','معرف الحدث'],['lead_id','العميل'],['user_id','الفاعل'],['action','العمل'],['created_at','الوقت المخزن — منطقة DB']],groups:['action','user_id']},
- transactions:{select:'t.id,t.lead_id,t.data,t.confirmed_due,t.updated_at,l.name,l.source,l.stage,l.property_id,s.name AS sales,f.name AS field,l.assigned_to AS assigned_raw,l.field_assigned_to AS field_raw',from:`crm_transactions t JOIN leads l ON ${binJoin('l.id','t.lead_id')} LEFT JOIN crm_users s ON ${binJoin('s.id','l.assigned_to')} LEFT JOIN crm_users f ON ${binJoin('f.id','l.field_assigned_to')}`,date:'t.updated_at',lead:true,order:'t.updated_at DESC,t.id',columns:[],groups:['fundingEntity','debtPayer','requestStage']},
+ transactions:{select:'t.id,t.lead_id,t.data,t.confirmed_due,t.updated_at,t.owner_commission,t.client_commission,l.name,l.source,l.stage,l.property_id,s.name AS sales,f.name AS field,l.assigned_to AS assigned_raw,l.field_assigned_to AS field_raw',from:`crm_transactions t JOIN leads l ON ${binJoin('l.id','t.lead_id')} LEFT JOIN crm_users s ON ${binJoin('s.id','l.assigned_to')} LEFT JOIN crm_users f ON ${binJoin('f.id','l.field_assigned_to')}`,date:'t.updated_at',lead:true,order:'t.updated_at DESC,t.id',columns:[],groups:['fundingEntity','debtPayer','requestStage']},
  attendance:{select:'a.user_id,u.name,a.work_day,a.check_in,a.check_out,a.late_minutes',from:`hr_attendance a LEFT JOIN crm_users u ON ${binJoin('u.id','a.user_id')}`,date:'a.work_day',employee:'a.user_id',order:'a.work_day DESC,a.user_id',columns:[['user_id','الموظف'],['name','الاسم'],['work_day','يوم العمل'],['check_in','الحضور UTC'],['check_out','الانصراف UTC'],['hours','ساعات مكتملة'],['late_minutes','دقائق التأخير المسجلة']],groups:['name']},
  profiles:{select:'p.user_id,u.name,p.job_title,p.department,p.leave_balance,p.updated_at,p.schedule',from:`hr_profiles p LEFT JOIN crm_users u ON ${binJoin('u.id','p.user_id')}`,employee:'p.user_id',order:'p.user_id',columns:[['user_id','الموظف'],['name','الاسم'],['job_title','الوظيفة'],['department','القسم'],['leave_balance','رصيد الإجازة اليدوي'],['schedule_status','الدوام الحالي'],['shift','وقت الدوام الحالي'],['timezone','منطقة الدوام'],['work_days','أيام الدوام الحالي (0 الأحد–6 السبت)'],['grace_minutes','السماح الحالي بالدقائق'],['updated_at','آخر تعديل UTC']],groups:['department','schedule_status']},
  requests:{select:'r.id,r.user_id,u.name,r.type,r.status,r.created_at,r.start_date,r.end_date,r.reviewed_at',from:`hr_requests r LEFT JOIN crm_users u ON ${binJoin('u.id','r.user_id')}`,date:'r.created_at',employee:'r.user_id',order:'r.created_at DESC,r.id',columns:[['id','معرف الطلب'],['user_id','الموظف'],['name','الاسم'],['type','الخدمة'],['status','الحالة الحالية'],['created_at','الطلب UTC'],['start_date','بداية الإجازة'],['end_date','نهاية الإجازة'],['reviewed_at','المراجعة UTC']],groups:['type','status']},
@@ -55,9 +52,10 @@ const specs:Record<Exclude<ReportId,'properties'>,Spec>={
  sheets:{select:"id,last_run,JSON_EXTRACT(config,'$.enabled') AS enabled,JSON_EXTRACT(config,'$.sourceConfirmed') AS sourceConfirmed,JSON_EXTRACT(last_result,'$.error') AS failed,JSON_EXTRACT(last_result,'$.inserted') AS inserted,JSON_EXTRACT(last_result,'$.duplicates') AS duplicates,JSON_EXTRACT(last_result,'$.invalid') AS invalid",from:'crm_integrations',fixed:`${asBinary('id')} = ${asBinary("'sheets'")}`,order:'id',columns:[['id','التكامل'],['enabled','حالة الإعداد'],['sourceConfirmed','اعتماد المصدر'],['last_run','آخر تشغيل UTC'],['health','الحالة المحفوظة'],['inserted','المقبول'],['duplicates','المكرر'],['invalid','غير الصالح']]},
  ai:{select:'user_id,hour_key,requests',from:'ai_usage',date:'hour_key',employee:'user_id',order:'hour_key DESC,user_id',columns:[['user_id','المستخدم'],['hour_key','الساعة UTC'],['requests','محاولات الطلبات']],groups:['user_id']},
 };
-const financeFields=[['brokerage','السعي — مدخل'],['companyDebt','سداد الشركة للمديونية'],['clientDebt','سداد العميل المباشر — ليس تحصيلاً'],['confirmed_due','المستحق المؤكد حسب القاعدة'],['companyDeposit','عربون الشركة — يدوي'],['companyValuation','تقييم الشركة — يدوي'],['companyPayments','دفعات الشركة — يدوي'],['totalPayments','إجمالي مدفوعات — يدوي مستقل'],['brokerageCheque','تحصيل شيك سعي — يدوي'],['ownerCollection','تحصيل المالك — يدوي'],['clientCollection','تحصيل العميل للشركة — يدوي'],['totalCollections','إجمالي متحصلات — يدوي مستقل'],['totalDue','إجمالي مستحق — يدوي مستقل'],['balance','رصيد — يدوي مستقل'],['tax','ضريبة — يدوي'],['netCommission','صافي العمولة — يدوي'],['fundingAmount','تمويل — يدوي'],['propertyValue','قيمة عقار — يدوي'],['refund','استرداد — يدوي'],['brokerCommission','عمولة وسيط — يدوي'],['externalExpenses','مصروفات خارجية — يدوي'],['buyerDeposit','عربون المشتري — يدوي']];
-specs.transactions.columns=[['id','المعاملة'],['lead_id','العميل'],['name','اسم العميل'],['property_id','العقار'],['source','المصدر'],['stage','مرحلة العميل الحالية'],['sales','المبيعات'],['field','الميدان'],['financeEmployeeId','موظف التمويل'],['fundingEntity','جهة التمويل'],['requestStage','مرحلة طلب التمويل'],['debtPayer','جهة سداد الدين'],['updated_at','التحديث UTC'],...financeFields];
-function object(value:unknown):Record<string,unknown>{if(typeof value==='string')return JSON.parse(value);return value&&typeof value==='object'?value as Record<string,unknown>:{};}
+const financeFields=[['ownerCommission','العمولة من المالك'],['clientCommission','العمولة من العميل'],['totalCommission','إجمالي العمولة'],['brokerage','السعي — مدخل'],['companyDebt','سداد الشركة للمديونية'],['clientDebt','سداد العميل المباشر — ليس تحصيلاً'],['confirmed_due','المستحق المؤكد حسب القاعدة'],['companyDeposit','عربون الشركة — يدوي'],['companyValuation','تقييم الشركة — يدوي'],['companyPayments','دفعات الشركة — يدوي'],['totalPayments','إجمالي مدفوعات — يدوي مستقل'],['brokerageCheque','تحصيل شيك سعي — يدوي'],['ownerCollection','تحصيل المالك — يدوي'],['clientCollection','تحصيل العميل للشركة — يدوي'],['totalCollections','إجمالي متحصلات — يدوي مستقل'],['totalDue','إجمالي مستحق — يدوي مستقل'],['balance','رصيد — يدوي مستقل'],['tax','ضريبة — يدوي'],['netCommission','صافي العمولة — يدوي'],['fundingAmount','تمويل — يدوي'],['propertyValue','قيمة عقار — يدوي'],['refund','استرداد — يدوي'],['brokerCommission','عمولة وسيط — يدوي'],['externalExpenses','مصروفات خارجية — يدوي'],['buyerDeposit','عربون المشتري — يدوي']];
+specs.transactions.columns=[['id','المعاملة'],['lead_id','العميل'],['name','اسم العميل'],['property_id','العقار'],['source','المصدر'],['stage','مرحلة العميل الحالية'],['sales','المبيعات'],['field','الميدان'],['financeEmployeeId','موظف التمويل'],['fundingEntity','جهة التمويل'],['requestStage','مرحلة طلب التمويل'],['debtPayer','جهة سداد الدين'],['updated_at','تاريخ التحديث'],['commissionNote','ملاحظة عمولة سابقة'],...financeFields];
+function object(value:unknown):Record<string,unknown>{if(typeof value==='string'){try{return JSON.parse(value);}catch{return {};}}return value&&typeof value==='object'?value as Record<string,unknown>:{};}
+function moneyOrNull(value:unknown):string|null{const text=String(value??'').trim();return /^\d{1,12}(\.\d{1,2})?$/.test(text)?text:null;}
 function cell(value:unknown):string|number|null {if(value==null||value==='')return null;if(value instanceof Date)return value.toISOString();return typeof value==='number'?value:String(value);}
 export function sumDecimal(values:unknown[]):{value:string|null;missing:number}{
  let total=BigInt(0),known=0;for(const v of values){if(v===null||v===undefined||v==='')continue;const s=String(v);if(!/^-?\d{1,15}(\.\d{1,2})?$/.test(s))throw new ReportError(503,'قيمة مالية غير صالحة؛ لم يحسب المجموع');const negative=s.startsWith('-'),[whole,fraction='']=s.replace('-','').split('.');const amount=BigInt(whole)*BigInt(100)+BigInt(fraction.padEnd(2,'0'));total+=negative?-amount:amount;known++;}
@@ -179,7 +177,21 @@ export async function readReport(db:Database,user:Actor,id:string,f:ReportFilter
   const r={...record};
   if(spec.lead)fillAssigneeNames(r,directory);
   if(typeof r.stage==='string'&&r.stage)r.stage=stageLabel(r.stage);
-  if(id==='transactions'){const data=object(r.data);for(const [key] of specs.transactions.columns)if(key in data)r[key]=data[key];r.companyDebt=data.debtPayer==='company'?data.debtSettlement:null;r.clientDebt=data.debtPayer==='client'?data.debtSettlement:null;}
+  if(id==='transactions'){
+   const data=object(r.data);
+   for(const [key] of specs.transactions.columns)if(key in data)r[key]=data[key];
+   const legacy=data.brokerage;
+   r.commissionNote=legacy==null||String(legacy).trim()===''?null:String(legacy);
+   r.brokerage=moneyOrNull(legacy);
+   r.ownerCommission=moneyOrNull(data.ownerCommission??r.owner_commission);
+   r.clientCommission=moneyOrNull(data.clientCommission??r.client_commission);
+   r.totalCommission=commissionTotal(data.ownerCommission??r.owner_commission, data.clientCommission??r.client_commission);
+   r.companyDebt=data.debtPayer==='company'?data.debtSettlement:null;
+   r.clientDebt=data.debtPayer==='client'?data.debtSettlement:null;
+   const stamp=r.updated_at;
+   const shown=formatRiyadhDateTime(stamp instanceof Date||typeof stamp==='string'||stamp==null?stamp:String(stamp));
+   if(shown)r.updated_at=shown;
+  }
   if(id==='followups'){const today=riyadhDay(now),days=Math.round((Date.parse(today+'T00:00:00Z')-Date.parse(String(r.follow_up)+'T00:00:00Z'))/86400000);r.follow_up_age=days<0?'قادمة':days===0?'اليوم':days<=7?'متأخرة 1–7 أيام':days<=30?'متأخرة 8–30 يوماً':'متأخرة أكثر من 30 يوماً';}
   if(id==='attendance'){const ms=r.check_out?Date.parse(String(r.check_out))-Date.parse(String(r.check_in)):NaN;r.hours=Number.isFinite(ms)&&ms>=0?(ms/3600000).toFixed(2):null;}
   if(id==='profiles'){const s=object(r.schedule);r.schedule_status=s.start&&s.end&&s.timezone?'مضبوط حالياً — بلا تاريخ':'غير مكتمل';r.shift=s.start&&s.end?`${s.start} — ${s.end}`:null;r.timezone=s.timezone;r.work_days=Array.isArray(s.days)?s.days.join(', '):null;r.grace_minutes=typeof s.grace==='number'?s.grace:null;}
@@ -191,7 +203,7 @@ export async function readReport(db:Database,user:Actor,id:string,f:ReportFilter
   const closed=raw.results.filter(r=>r.check_out&&Number.isFinite(Date.parse(String(r.check_out))-Date.parse(String(r.check_in)))&&Date.parse(String(r.check_out))>=Date.parse(String(r.check_in)));
   metrics.push({label:'ساعات البصمات المكتملة فقط',value:closed.length?(closed.reduce((n,r)=>n+Date.parse(String(r.check_out))-Date.parse(String(r.check_in)),0)/3600000).toFixed(2):null,missing:rows.length-closed.length},{label:'دقائق التأخير المسجلة',value:rows.reduce((n,r)=>n+Number(r.late_minutes||0),0)},{label:'بصمات مفتوحة أو غير صالحة',value:rows.length-closed.length});
  }
- if(id==='followups')metrics.push({label:'مواعيد غير منتهية متأخرة قبل اليوم (الرياض)',value:raw.results.filter(r=>String(r.follow_up)<riyadhDay(now)&&!['won','closed'].includes(String(r.stage))).length});
+ if(id==='followups')metrics.push({label:'مواعيد غير منتهية متأخرة قبل اليوم (الرياض)',value:raw.results.filter(r=>isOverdueFollowUp(r.follow_up,r.stage,riyadhDay(now))).length});
  if(id==='requests')metrics.push({label:'الطلبات المفتوحة حالياً',value:rows.filter(r=>r.status==='pending').length},{label:'طلبات الإجازة ضمن الفترة',value:rows.filter(r=>r.type==='leave').length});
  if(id==='ai'){if(rows.length===0)throw new ReportError(404,'لا توجد بيانات استخدام AI محفوظة ضمن الفترة؛ الاستخدام والتكلفة غير متاحين.');metrics.push({label:'محاولات الطلبات المسجلة',value:rows.reduce((n,r)=>n+Number(r.requests||0),0)});}
  if(id==='imports')metrics.push({label:'الصفوف المقبولة المسجلة في التشغيلات',value:rows.reduce((n,r)=>n+Number(r.inserted||0),0)});
@@ -306,9 +318,10 @@ export type DashboardStage={stage:string;label:string;count:number;pct:number};
 export type DashboardEmployee={id:string;name:string;username:string;assigned:number;contacted:number;interested:number;signed:number;notInterested:number;overdue:number;completion:number|null};
 export type DashboardSource={key:string;label:string;total:number;interested:number;notInterested:number;signed:number;closed:number;unassignedNew:number;conversion:number|null};
 export type DashboardAlert={id:string;tone:'warn'|'info'|'muted';tag:string;message:string;href:string};
+export type DashboardField={inStage:number;assigned:number;unassigned:number;byEmployee:{name:string;count:number}[]};
 export type ReportDashboard={
- total:number;interested:number;notInterested:number;signed:number;closed:number;unassignedNew:number;overdue:number;inactive:number;unassignedWaiting:number;
- byStage:DashboardStage[];employees:DashboardEmployee[];sources:DashboardSource[];alerts:DashboardAlert[];definitions:typeof COHORT_DEFINITIONS;
+ total:number;interested:number;notInterested:number;signed:number;closed:number;unassignedNew:number;overdue:number;inactive:number;unassignedWaiting:number;scheduled:number;
+ byStage:DashboardStage[];employees:DashboardEmployee[];sources:DashboardSource[];alerts:DashboardAlert[];field:DashboardField;definitions:typeof COHORT_DEFINITIONS;
 };
 function listHref(filters:ReportFilters,extra:Record<string,string>,users:DirectoryUser[]){
  const q=new URLSearchParams();q.set('tab','leads');
@@ -334,14 +347,19 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
  const result=await db.prepare(`SELECT l.id,l.stage,l.source,l.assigned_to,l.field_assigned_to,l.follow_up,l.created_at,l.updated_at FROM leads l${w.sql} ORDER BY l.id LIMIT 10001`).bind(...w.args).all();
  if(result.results.length>10000)throw new ReportError(422,'أكثر من 10000 عميل في لوحة التقارير؛ ضيق الفترة أو المرشحات. لم يعرض مجموع جزئي');
  const directory=await loadUsers(db);
- const visible=user.role==='admin'?directory:directory.filter(person=>person.id===user.userId||tokens.includes(person.id)||tokens.includes(person.username)||tokens.includes(person.name));
- const staff=visible.length?visible:[{id:user.userId,name:user.userId,username:''}];
+ const wanted=tokens.length?tokens:[f.employee].filter(Boolean);
+ const matchesEmployee=(person:DirectoryUser)=>wanted.some(token=>matchUser([person],token)?.id===person.id);
+ const visible=f.employee
+  ?directory.filter(matchesEmployee)
+  :user.role==='admin'?directory:directory.filter(person=>person.id===user.userId);
+ const staff=visible.length?visible:f.employee?[{id:f.employee,name:f.employee,username:''}]:[{id:user.userId,name:user.userId,username:''}];
  const stats=new Map<string,DashboardEmployee & {pastFresh:number}>();
  for(const person of staff)stats.set(person.id,{id:person.id,name:person.name,username:person.username,assigned:0,contacted:0,interested:0,signed:0,notInterested:0,overdue:0,pastFresh:0,completion:null});
  const stageCounts=new Map<string,number>();
  const sourceCounts=new Map<string,DashboardSource>();
  const today=riyadhDay(now);const nowMs=now.getTime();
- let interested=0,notInterested=0,signed=0,closed=0,unassignedNew=0,overdue=0,inactive=0,unassignedWaiting=0;
+ let interested=0,notInterested=0,signed=0,closed=0,unassignedNew=0,overdue=0,inactive=0,unassignedWaiting=0,scheduled=0,fieldIn=0,fieldAssigned=0;
+ const fieldCounts=new Map<string,number>();
  for(const row of result.results){
   const key=stageKeyOf(row.stage)||'new';
   stageCounts.set(key,(stageCounts.get(key)||0)+1);
@@ -352,7 +370,17 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
   if(isUnassignedNew(row.stage,row.assigned_to))unassignedNew++;
   if(isUnassignedNewWaiting(row.stage,row.assigned_to,row.created_at,nowMs))unassignedWaiting++;
   if(isOverdueFollowUp(row.follow_up,row.stage,today))overdue++;
+  if(hasScheduledFollowUp(row.follow_up))scheduled++;
   if(isInactiveLead(row.updated_at,row.created_at,row.stage,nowMs))inactive++;
+  if(stageKeyOf(row.stage)==='field_dispatch'){
+   fieldIn++;
+   const fieldPerson=matchUser(directory,row.field_assigned_to);
+   if(fieldPerson||String(row.field_assigned_to??'').trim()){
+    fieldAssigned++;
+    const name=fieldPerson?.name||String(row.field_assigned_to);
+    fieldCounts.set(name,(fieldCounts.get(name)||0)+1);
+   }
+  }
   const source=normalizeSource(row.source);
   const bucket=sourceCounts.get(source.key)||{key:source.key,label:source.label,total:0,interested:0,notInterested:0,signed:0,closed:0,unassignedNew:0,conversion:null};
   bucket.total++;
@@ -390,5 +418,44 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
  for(const source of [...sources].filter(source=>source.total>=5&&source.notInterested/source.total>=0.4).sort((a,b)=>b.notInterested/b.total-a.notInterested/a.total).slice(0,3))alerts.push({id:'source-'+source.key,tone:'warn',tag:'مصدر',message:`مصدر ${source.label}: ${Math.round((source.notInterested/source.total)*100)}% غير مهتم أو غير مؤهل (${source.notInterested} من ${source.total}).`,href:listHref(f,{source:source.key,stageGroup:'not_interested'},directory)});
  if(inactive>0)alerts.push({id:'inactive',tone:'info',tag:'متابعة',message:`${inactive} عميل بلا تحديث منذ 7 أيام أو أكثر.`,href:listHref(f,{inactive:'1'},directory)});
  if(notInterested>0)alerts.push({id:'not-interested',tone:'muted',tag:'ملاحظة',message:`${notInterested} عميل مصنّف غير مهتم أو غير مؤهل ضمن الفلاتر.`,href:listHref(f,{stageGroup:'not_interested'},directory)});
- return {total,interested,notInterested,signed,closed,unassignedNew,overdue,inactive,unassignedWaiting,byStage,employees,sources,alerts,definitions:COHORT_DEFINITIONS};
+ const field={inStage:fieldIn,assigned:fieldAssigned,unassigned:Math.max(0,fieldIn-fieldAssigned),byEmployee:[...fieldCounts.entries()].map(([name,count])=>({name,count})).sort((a,b)=>b.count-a.count||a.name.localeCompare(b.name,'ar'))};
+ return {total,interested,notInterested,signed,closed,unassignedNew,overdue,inactive,unassignedWaiting,scheduled,byStage,employees,sources,alerts,field,definitions:COHORT_DEFINITIONS};
+}
+
+const ASSIGNMENT_ACTIONS=['assigned','assignment','reassigned'];
+export const ASSIGNMENT_BASIS='وقت الإسناد من lead_activity (assigned أو assignment أو reassigned) أو عمود assigned_at، بتقويم الرياض. لا يُستخدم تاريخ التسجيل created_at.';
+export type AssignmentCounts={from:string;to:string;basis:string;unavailable:boolean;total:number|null;byEmployee:{id:string;name:string;count:number}[]};
+function assigneeOf(details:unknown):string{
+ const data=object(details);
+ return String(data.assignedTo??data.assigned_to??data.assignee??'').trim();
+}
+function isMissingColumn(error:unknown,column:string){
+ const message=error instanceof Error?error.message:String(error??'');
+ return new RegExp(column,'i').test(message)||/unknown column|no such column|no such table|doesn't exist|ER_NO_SUCH_TABLE|ER_BAD_FIELD_ERROR/i.test(message);
+}
+export async function readAssignmentCounts(db:Database,from:string,to:string,employee=''):Promise<AssignmentCounts>{
+ const empty={from,to,basis:ASSIGNMENT_BASIS,unavailable:true,total:null as number|null,byEmployee:[] as AssignmentCounts['byEmployee']};
+ const directory=await loadUsers(db).catch(()=>[]);
+ const tokens=employee?await cachedTokens(db,employee):[];
+ let activity:AssignmentEvent[]|null=null;
+ const actionSql=ASSIGNMENT_ACTIONS.map(()=>binEq('a.action')).join(' OR ');
+ const window=dateWindow('a.created_at',from,to);
+ try{
+  const rows=await db.prepare(`SELECT a.lead_id,a.details,a.created_at FROM lead_activity a WHERE (${actionSql}) AND ${window.sql}`).bind(...ASSIGNMENT_ACTIONS,...window.args).all();
+  activity=rows.results.map(row=>({leadId:String(row.lead_id??''),at:row.created_at,assignee:assigneeOf(row.details)})).filter(row=>row.leadId&&row.assignee);
+ }catch(error){
+  if(!isMissingColumn(error,'lead_activity')&&!/lead_activity/i.test(error instanceof Error?error.message:''))throw error;
+ }
+ let fallback:AssignmentEvent[]|null=null;
+ const assignedWindow=dateWindow('l.assigned_at',from,to);
+ try{
+  const rows=await db.prepare(`SELECT l.id,l.assigned_to,l.assigned_at FROM leads l WHERE ${assignedWindow.sql}`).bind(...assignedWindow.args).all();
+  const seen=new Set((activity||[]).map(row=>row.leadId));
+  fallback=rows.results.filter(row=>!seen.has(String(row.id??''))).map(row=>({leadId:String(row.id??''),at:row.assigned_at,assignee:String(row.assigned_to??'').trim()})).filter(row=>row.leadId&&row.assignee);
+ }catch(error){
+  if(!isMissingColumn(error,'assigned_at'))throw error;
+ }
+ if(activity===null&&fallback===null)return empty;
+ const counted=countAssignmentEvents({events:[...(activity||[]),...(fallback||[])],users:directory,from,to,employeeTokens:tokens});
+ return {from,to,basis:ASSIGNMENT_BASIS,unavailable:false,total:counted.total,byEmployee:counted.byEmployee};
 }

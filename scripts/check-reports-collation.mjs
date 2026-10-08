@@ -55,26 +55,38 @@ function schemaSql(database, collation) {
       stage VARCHAR(64) CHARACTER SET utf8mb4 COLLATE ${other} NULL,
       follow_up VARCHAR(40) CHARACTER SET utf8mb4 COLLATE ${collation} NULL,
       created_at VARCHAR(40) CHARACTER SET utf8mb4 COLLATE ${other} NULL,
-      updated_at VARCHAR(40) CHARACTER SET utf8mb4 COLLATE ${collation} NULL
+      updated_at VARCHAR(40) CHARACTER SET utf8mb4 COLLATE ${collation} NULL,
+      assigned_at VARCHAR(40) CHARACTER SET utf8mb4 COLLATE ${other} NULL
+    ) CHARACTER SET utf8mb4 COLLATE ${collation};
+    CREATE TABLE lead_activity (
+      id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+      lead_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE ${other} NULL,
+      action VARCHAR(80) CHARACTER SET utf8mb4 COLLATE ${collation} NULL,
+      details LONGTEXT CHARACTER SET utf8mb4 COLLATE ${other} NULL,
+      created_at VARCHAR(40) CHARACTER SET utf8mb4 COLLATE ${collation} NULL
     ) CHARACTER SET utf8mb4 COLLATE ${collation};
     CREATE TABLE crm_transactions (
       id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
       lead_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE ${other} NULL,
       data LONGTEXT CHARACTER SET utf8mb4 COLLATE ${collation} NULL,
       confirmed_due VARCHAR(40) CHARACTER SET utf8mb4 COLLATE ${collation} NULL,
-      updated_at VARCHAR(40) CHARACTER SET utf8mb4 COLLATE ${other} NULL
+      updated_at VARCHAR(40) CHARACTER SET utf8mb4 COLLATE ${other} NULL,
+      owner_commission VARCHAR(40) CHARACTER SET utf8mb4 COLLATE ${collation} NULL,
+      client_commission VARCHAR(40) CHARACTER SET utf8mb4 COLLATE ${other} NULL
     ) CHARACTER SET utf8mb4 COLLATE ${collation};
     INSERT INTO crm_users (id, name, username, role, active, created_at) VALUES
       ('alice','Alice','alice.user','sales',1,'2026-01-01'),
       ('ahmad','أحمد','ahmad','sales',1,'2026-01-01');
-    INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, property_id, property_other, source, stage, follow_up, created_at, updated_at) VALUES
-      ('l1','alice','alice','alice','','عميل','p','','tiktok','contacted','2026-09-10','2026-09-01 00:00:00','2026-09-01 00:00:00'),
-      ('l2','alice','alice','alice.user','','باسم','p','','تيك توك','interested','2026-09-11','2026-09-11T00:00:00.000Z','2026-09-04 00:00:00'),
-      ('l3','root','root','أحمد','','بالاسم','p','','whatsapp','new','','2026-09-10T00:00:00.000Z','2026-09-10T00:00:00.000Z'),
-      ('l4','alice','alice','','alice','ميدان','p','','website','new','2026-09-01','2026-09-30 20:59:59','2026-09-12 00:00:00'),
-      ('l5','bob','bob','bob','','خارج','p','','web','won','2026-09-10','2026-09-30 21:00:00','2026-09-30 21:00:00');
+    INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, property_id, property_other, source, stage, follow_up, created_at, updated_at, assigned_at) VALUES
+      ('l1','alice','alice','alice','','عميل','p','','tiktok','contacted','2026-09-10','2026-09-01 00:00:00','2026-09-01 00:00:00',NULL),
+      ('l2','alice','alice','alice.user','','باسم','p','','تيك توك','interested','2026-09-11','2026-09-11T00:00:00.000Z','2026-09-04 00:00:00',NULL),
+      ('l3','root','root','أحمد','','بالاسم','p','','whatsapp','new','','2026-09-10T00:00:00.000Z','2026-09-10T00:00:00.000Z','2026-09-15T08:00:00.000Z'),
+      ('l4','alice','alice','','alice','ميدان','p','','website','new','2026-09-01','2026-09-30 20:59:59','2026-09-12 00:00:00',NULL),
+      ('l5','bob','bob','bob','','خارج','p','','web','won','2026-09-10','2026-09-30 21:00:00','2026-09-30 21:00:00',NULL);
     INSERT INTO crm_transactions (id, lead_id, data, confirmed_due, updated_at) VALUES
       ('t1','l1','{"financeEmployeeId":"alice","fundingEntity":"بنك اختبار","requestStage":"اعتماد"}','1.00','2026-09-02 00:00:00');
+    INSERT INTO lead_activity (id, lead_id, action, details, created_at) VALUES
+      ('act1','l2','assigned','{"assignedTo":"alice.user"}','2026-09-15T08:00:00.000Z');
   `;
 }
 
@@ -106,7 +118,7 @@ function adapter(conn) {
 
 const out = mkdtempSync(join(tmpdir(), 'sas-collation-'));
 await build({entryPoints: ['lib/reports.ts'], outfile: join(out, 'reports.cjs'), bundle: true, platform: 'node', format: 'cjs', external: ['mysql2/promise']});
-const {readReport, readReportDashboard} = createRequire(import.meta.url)(join(out, 'reports.cjs'));
+const {readReport, readReportDashboard, readAssignmentCounts} = createRequire(import.meta.url)(join(out, 'reports.cjs'));
 let failures = 0;
 const fail = message => { failures++; console.log('✗ ' + message); };
 const ok = message => console.log('✓ ' + message);
@@ -149,6 +161,13 @@ try {
         assert.equal((await readReport(db, admin, 'transactions', {...filters, employee: 'alice', funding: 'بنك اختبار', stage: 'اعتماد'})).total, 1);
         const day = await readReportDashboard(db, admin, {...filters, from: '2026-09-30', to: '2026-09-30'}, new Date('2026-09-30T12:00:00.000Z'));
         assert.equal(day.total, 1, 'Riyadh day excludes 21:00 UTC');
+        const assigned = await readAssignmentCounts(db, '2026-09-15', '2026-09-15', '');
+        assert.equal(assigned.unavailable, false);
+        assert.equal(assigned.total, 2, 'activity username plus assigned_at, not created_at');
+        assert.equal((await readAssignmentCounts(db, '2026-09-15', '2026-09-15', 'alice')).total, 1);
+        assert.equal((await readAssignmentCounts(db, '2026-09-15', '2026-09-15', 'أحمد')).total, 1);
+        const filtered = await readReportDashboard(db, admin, {...filters, employee: 'alice', stage: 'تم التواصل'}, new Date('2026-09-20T12:00:00.000Z'));
+        assert.equal(filtered.employees.length, 1);
         ok(label);
       } catch (error) {
         fail(`${label}: ${error instanceof Error ? error.message : error} errno=${errnoOf(error) ?? ''}`);

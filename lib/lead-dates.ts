@@ -47,3 +47,21 @@ export function riyadhDayKey(value?: string | Date | null): string {
   const instant = instantOf(value);
   return instant ? riyadhDay.format(instant) : '';
 }
+
+/** Riyadh wall time, e.g. "2026-10-06 12:06 م". */
+export function formatRiyadhDateTime(value?: string | Date | null): string {
+  const instant = instantOf(value);
+  if (!instant) return '';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Riyadh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h12',
+  }).formatToParts(instant);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? '';
+  const suffix = /am/i.test(get('dayPeriod')) ? 'ص' : 'م';
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')} ${suffix}`;
+}

@@ -26,6 +26,9 @@
  * ai_settings / ai_usage are created the same way so provider-key save does not
  * depend on a manual migration. crm_users.last_login_at is added once and left
  * null until a real sign-in writes it.
+ * crm_transactions.owner_commission and client_commission are added once and
+ * left null. A previous free-text brokerage value is not copied into either
+ * column.
  * crm_sheet_sources / crm_sheet_rows / crm_sheet_sync_lock are created the same
  * way, with DDL that MySQL 5.7+, MySQL 8, and MariaDB 10.4 accept. TEXT cannot
  * be a primary key there (ER_BLOB_KEY_WITHOUT_LENGTH), JSON and a long utf8mb4
@@ -921,6 +924,11 @@ export async function seedTiktokSheetSourceIfEmpty(executor?: SqlExecutor) {
   }
 }
 
+async function ensureFinanceCommissions(executor: SqlExecutor) {
+  await ensureColumn(executor, 'crm_transactions', 'owner_commission', 'VARCHAR(40) NULL');
+  await ensureColumn(executor, 'crm_transactions', 'client_commission', 'VARCHAR(40) NULL');
+}
+
 async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
   try {
     await ensureSheetSchema(executor);
@@ -946,6 +954,11 @@ async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
     await ensureAiSchema(executor);
   } catch (error) {
     console.error('ai settings schema check failed', error);
+  }
+  try {
+    await ensureFinanceCommissions(executor);
+  } catch (error) {
+    console.error('crm_transactions commission columns were not added', error);
   }
   let featured = false;
   const existing = await hasFeaturedColumn(executor);
