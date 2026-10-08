@@ -261,7 +261,11 @@ export default function SheetSourcesPanel() {
       const probe = data.insert === 'rolled-back' && !data.persisted
         ? 'تم إدراج صف تجريبي ثم التراجع عنه'
         : `الإدراج التجريبي: ${data.insert || 'غير معروف'}${data.persisted ? '، وبقي الصف بعد التراجع' : ''}`;
-      setMessage(`إصدار قاعدة البيانات: ${data.version || 'غير معروف'}. ${list}. ${probe}.`);
+      const issues = Array.isArray(data.schemaIssues) ? data.schemaIssues as {area?: string; detail?: string}[] : [];
+      const schemaNote = issues.length
+        ? ` تحذيرات المخطط: ${issues.slice(0, 6).map(issue => `${issue.area || 'schema'}: ${issue.detail || ''}`).join(' — ')}.`
+        : '';
+      setMessage(`إصدار قاعدة البيانات: ${data.version || 'غير معروف'}. ${list}. ${probe}.${schemaNote}`);
       await load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'تعذر فحص قاعدة البيانات');

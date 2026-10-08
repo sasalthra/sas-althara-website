@@ -1,6 +1,6 @@
 import {actor, endpoint, reply} from '@/lib/secure-api';
 import {publicSiteOrigin, safeTelegramError, telegramMethod} from '@/lib/telegram-bot';
-import {lastTelegramSchemaError} from '@/lib/lead-schema';
+import {lastTelegramSchemaError, schemaDiagnostics} from '@/lib/lead-schema';
 import {telegramDbError} from '@/lib/telegram-sql';
 import {listTelegramChats, recentTelegramSync} from '@/lib/telegram-sync';
 
@@ -70,6 +70,7 @@ export async function GET(req: Request) {
       seenChats,
       lastChat: seenChats[0] ?? null,
       dbError,
+      schemaIssues: schemaDiagnostics(),
     });
   });
 }

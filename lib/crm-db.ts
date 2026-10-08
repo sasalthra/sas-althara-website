@@ -1,5 +1,6 @@
 import mysql, {type Pool, type RowDataPacket, type ResultSetHeader} from 'mysql2/promise';
 import {ensureLeadSchema, ensureSheetSchema} from './lead-schema';
+import {publicSyncError} from './sheet-sync-config';
 let pool: Pool | undefined;
 function database() {
   if (!pool) {
@@ -13,6 +14,14 @@ function database() {
       connectTimeout: 10000, multipleStatements: false,
       ...(process.env.DB_SSL === 'true' ? {ssl: {rejectUnauthorized: true}} : {}),
     });
+    // A dropped Hostinger connection emits 'error'. With no listener Node treats
+    // that as a fatal exception and the site serves the generic server error page.
+    const events = pool as unknown as {on?: (event: string, listener: (error: unknown) => void) => void};
+    if (typeof events.on === 'function') {
+      events.on('error', error => {
+        console.error('mysql pool connection failed', publicSyncError(error));
+      });
+    }
   }
   return pool;
 }

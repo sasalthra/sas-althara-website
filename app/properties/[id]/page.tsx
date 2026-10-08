@@ -64,7 +64,12 @@ export default async function PropertyDetailPage({
 }: {
   params: Promise<{id: string}>;
 }) {
-  const admin = await getAdmin();
+  let admin: Awaited<ReturnType<typeof getAdmin>> = null;
+  try {
+    admin = await getAdmin();
+  } catch (error) {
+    console.error('property admin session was not read', error);
+  }
   const {id} = await params;
   const property = await loadPublishedProperty(id);
   if (!property) {

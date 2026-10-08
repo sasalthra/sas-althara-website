@@ -6,6 +6,17 @@ import {join} from 'node:path';
 import assert from 'node:assert/strict';
 const out=mkdtempSync(join(tmpdir(),'sas-ui-'));
 try {
+ const pageError=readFileSync('app/error.tsx','utf8');
+ const globalError=readFileSync('app/global-error.tsx','utf8');
+ for (const source of [pageError, globalError]) {
+  assert.match(source, /#3F1A44/);
+  assert.match(source, /تعذر تحميل الصفحة/);
+  assert.match(source, /error\.digest/);
+  assert.match(source, /تفاصيل للمسؤول/);
+  assert.match(source, /dir="rtl"/);
+ }
+ assert.match(globalError, /<html/);
+ assert.match(globalError, /<body/);
  const usersPanel=readFileSync('app/crm/users-panel.tsx','utf8');
  assert.match(usersPanel,/تعديل بيانات الموظف/);
  assert.doesNotMatch(usersPanel,/تعديل الاسم والبريد والجوال/);

@@ -1,6 +1,6 @@
 import 'server-only';
 import {crmPool} from './crm-db';
-import {ensureSheetSchema} from './lead-schema';
+import {ensureSheetSchema, schemaDiagnostics} from './lead-schema';
 import {sheetRowKeyHash, sheetSourceKey} from './sheet-keys';
 import {publicSyncError} from './sheet-sync-config';
 
@@ -12,6 +12,7 @@ export type SheetDiagnostics = {
   tables: Record<(typeof TABLES)[number], boolean>;
   insert: string;
   persisted: boolean;
+  schemaIssues: ReturnType<typeof schemaDiagnostics>;
 };
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -94,5 +95,6 @@ export async function diagnoseSheetDatabase(): Promise<SheetDiagnostics> {
     tables,
     insert,
     persisted,
+    schemaIssues: schemaDiagnostics(),
   };
 }

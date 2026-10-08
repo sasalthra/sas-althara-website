@@ -8,6 +8,7 @@ import {ensureLeadSchema, isMissingFeaturedColumn} from '@/lib/lead-schema';
 import {leadListOrderSql} from '@/lib/lead-featured';
 import {stageWriteAllowed} from '@/lib/lead-stages';
 import {displayLeadPhone, normalizeLeadPhone} from '@/lib/phone';
+import {binJoin} from '@/lib/sql-collation';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -127,8 +128,8 @@ function leadSelect() {
         )
         FROM lead_activity AS activity
         INNER JOIN crm_users AS activity_user
-          ON activity_user.id = activity.user_id
-        WHERE activity.lead_id = leads.id
+          ON ${binJoin('activity_user.id', 'activity.user_id')}
+        WHERE ${binJoin('activity.lead_id', 'leads.id')}
           AND activity_user.role = 'sales'
           AND JSON_EXTRACT(
             activity.details,
@@ -142,8 +143,8 @@ function leadSelect() {
         SELECT activity.created_at
         FROM lead_activity AS activity
         INNER JOIN crm_users AS activity_user
-          ON activity_user.id = activity.user_id
-        WHERE activity.lead_id = leads.id
+          ON ${binJoin('activity_user.id', 'activity.user_id')}
+        WHERE ${binJoin('activity.lead_id', 'leads.id')}
           AND activity_user.role = 'sales'
           AND JSON_EXTRACT(
             activity.details,
@@ -162,8 +163,8 @@ function leadSelect() {
         )
         FROM lead_activity AS activity
         INNER JOIN crm_users AS activity_user
-          ON activity_user.id = activity.user_id
-        WHERE activity.lead_id = leads.id
+          ON ${binJoin('activity_user.id', 'activity.user_id')}
+        WHERE ${binJoin('activity.lead_id', 'leads.id')}
           AND activity_user.role = 'field'
           AND JSON_EXTRACT(
             activity.details,
@@ -177,8 +178,8 @@ function leadSelect() {
         SELECT activity.created_at
         FROM lead_activity AS activity
         INNER JOIN crm_users AS activity_user
-          ON activity_user.id = activity.user_id
-        WHERE activity.lead_id = leads.id
+          ON ${binJoin('activity_user.id', 'activity.user_id')}
+        WHERE ${binJoin('activity.lead_id', 'leads.id')}
           AND activity_user.role = 'field'
           AND JSON_EXTRACT(
             activity.details,
@@ -191,10 +192,10 @@ function leadSelect() {
     FROM leads
 
     LEFT JOIN crm_users AS sales_user
-      ON sales_user.id = leads.assigned_to
+      ON ${binJoin('sales_user.id', 'leads.assigned_to')}
 
     LEFT JOIN crm_users AS field_user
-      ON field_user.id = leads.field_assigned_to
+      ON ${binJoin('field_user.id', 'leads.field_assigned_to')}
   `;
 }
 
