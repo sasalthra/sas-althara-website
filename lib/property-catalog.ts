@@ -1,6 +1,7 @@
 import {cache} from 'react';
 import properties from '@/data/properties.json';
 import {crmDb} from './crm-db';
+import {asBinary} from './sql-collation';
 import type {CatalogProperty} from './property-types';
 
 type StaticProperty = (typeof properties)[number];
@@ -77,7 +78,7 @@ async function readPublished(): Promise<CatalogProperty[]> {
     const result = await crmDb()
       .prepare(
         `SELECT id, title, price, area, beds, baths, city, address, type, purpose, street_width, facade, age, description, images, status
-         FROM site_properties WHERE status = ? ORDER BY updated_at DESC, id DESC`
+         FROM site_properties WHERE ${asBinary('status')} = ${asBinary('?')} ORDER BY updated_at DESC, id DESC`
       )
       .bind('published')
       .all();

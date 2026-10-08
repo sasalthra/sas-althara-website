@@ -90,13 +90,13 @@ curl -fsS -m 60 -H "Authorization: Bearer YOUR_CRON_SECRET" "https://sasalthra.s
 
 ## مزامنة عروض تيليجرام
 
-العروض الجديدة في قناة تيليجرام تُنشر مباشرة على الموقع (ليست مسودات). الدليل الكامل في [docs/telegram-sync.md](docs/telegram-sync.md).
+العروض الجديدة في قناة أو جروب تيليجرام تُنشر مباشرة على الموقع (ليست مسودات). الدليل الكامل في [docs/telegram-sync.md](docs/telegram-sync.md).
 
 في متغيرات تطبيق Node.js أضف:
 
-- TELEGRAM_BOT_TOKEN من @BotFather. البوت يجب أن يكون مشرفًا في القناة.
+- TELEGRAM_BOT_TOKEN من @BotFather. في القناة يكون البوت مشرفًا. في الجروب أوقف الخصوصية عبر `/setprivacy` أو اجعله مشرفًا.
 - TELEGRAM_WEBHOOK_SECRET نصًا عشوائيًا من 8 أحرف على الأقل (إنجليزي وأرقام و `_` و `-` فقط).
-- TELEGRAM_CHANNEL_ID اختياري، مثل `-1001234567890`، لقبول تلك القناة فقط.
+- TELEGRAM_CHANNEL_ID اختياري، لمعرّف قناة أو جروب واحد، مثل `-1001234567890`.
 
 NEXTAUTH_URL يجب أن يبقى أصل الموقع https (مثل https://sasalthra.sa) لأن تسجيل الويب هوك يبني عليه الرابط `/api/telegram/webhook`. بعد حفظ المتغيرات أعد تشغيل التطبيق، ادخل كمدير، وافتح «مزامنة التليجرام» ثم «تسجيل الويب هوك».
 
