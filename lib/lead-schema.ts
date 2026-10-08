@@ -310,6 +310,7 @@ const PROPERTY_COLUMNS: [string, string][] = [
   ['telegram_message_ids', 'TEXT NULL'],
   ['telegram_source_key', 'VARCHAR(255) NULL'],
   ['telegram_source_hash', 'CHAR(64) NULL'],
+  ['price_from', 'INTEGER NULL'],
   ['created_at', 'TEXT NULL'],
   ['updated_at', 'TEXT NULL'],
 ];
@@ -378,6 +379,7 @@ export const SITE_PROPERTIES_DDL = `CREATE TABLE IF NOT EXISTS site_properties (
   telegram_message_ids TEXT NULL,
   telegram_source_key VARCHAR(255) NULL,
   telegram_source_hash CHAR(64) NULL,
+  price_from INTEGER NULL,
   created_at VARCHAR(40) NULL,
   updated_at VARCHAR(40) NULL
 )`;
@@ -401,6 +403,35 @@ export const TELEGRAM_SEEN_CHATS_DDL = `CREATE TABLE IF NOT EXISTS telegram_seen
   last_seen_at VARCHAR(40) NULL
 )`;
 
+/**
+ * One row per incoming update. id is VARCHAR (chat + message), never TEXT —
+ * a TEXT primary key is error 1170. raw_body is the update payload and is not indexed.
+ * The (chat_id, message_id) unique key is 96 characters, under the 767-byte MySQL 5.7 limit.
+ */
+export const TELEGRAM_MESSAGES_DDL = `CREATE TABLE IF NOT EXISTS telegram_messages (
+  id VARCHAR(96) NOT NULL PRIMARY KEY,
+  chat_id VARCHAR(64) NOT NULL,
+  message_id VARCHAR(32) NOT NULL,
+  message_date VARCHAR(20) NULL,
+  media_group_id VARCHAR(64) NULL,
+  kind VARCHAR(16) NOT NULL,
+  body TEXT NULL,
+  file_id VARCHAR(191) NULL,
+  file_unique_id VARCHAR(128) NULL,
+  raw_body LONGTEXT NULL,
+  created_at VARCHAR(40) NULL
+)`;
+
+/** Old fragment URLs point here so /properties/<old id> can 301 to the merged offer. */
+export const TELEGRAM_REDIRECTS_DDL = `CREATE TABLE IF NOT EXISTS telegram_redirects (
+  id VARCHAR(191) NOT NULL PRIMARY KEY,
+  target_id VARCHAR(191) NOT NULL,
+  created_at VARCHAR(40) NULL
+)`;
+
+export const TELEGRAM_MESSAGES_INDEX_DDL = 'CREATE UNIQUE INDEX IF NOT EXISTS telegram_messages_chat_message ON telegram_messages (chat_id, message_id)';
+export const TELEGRAM_MESSAGES_INDEX_ALTER = 'ALTER TABLE telegram_messages ADD UNIQUE INDEX telegram_messages_chat_message (chat_id, message_id)';
+
 export const TELEGRAM_SOURCE_INDEX_DDL = 'CREATE UNIQUE INDEX IF NOT EXISTS site_properties_tg_key ON site_properties (telegram_source_hash)';
 export const TELEGRAM_SOURCE_INDEX_ALTER = 'ALTER TABLE site_properties ADD UNIQUE INDEX site_properties_tg_key (telegram_source_hash)';
 
@@ -416,7 +447,7 @@ async function ensureTelegramSchema(executor: SqlExecutor) {
     console.error('telegram table was not created', error);
     if (!fatal) fatal = error;
   };
-  for (const sql of [SITE_PROPERTIES_DDL, TELEGRAM_SYNC_LOG_DDL, TELEGRAM_SEEN_CHATS_DDL]) {
+  for (const sql of [SITE_PROPERTIES_DDL, TELEGRAM_SYNC_LOG_DDL, TELEGRAM_SEEN_CHATS_DDL, TELEGRAM_MESSAGES_DDL, TELEGRAM_REDIRECTS_DDL]) {
     try {
       await run(executor, sql);
     } catch (error) {
@@ -431,6 +462,11 @@ async function ensureTelegramSchema(executor: SqlExecutor) {
       await ensureUniqueIndex(executor, TELEGRAM_SOURCE_INDEX_DDL, TELEGRAM_SOURCE_INDEX_ALTER, 'telegram');
     } catch (error) {
       console.error('telegram source index was not added', error);
+    }
+    try {
+      await ensureUniqueIndex(executor, TELEGRAM_MESSAGES_INDEX_DDL, TELEGRAM_MESSAGES_INDEX_ALTER, 'telegram messages');
+    } catch (error) {
+      console.error('telegram message index was not added', error);
     }
   }
   telegramSchemaError = fatal;

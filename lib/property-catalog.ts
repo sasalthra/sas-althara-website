@@ -1,7 +1,9 @@
 import {cache} from 'react';
 import properties from '@/data/properties.json';
 import {crmDb} from './crm-db';
+import {ensureTelegramTables} from './lead-schema';
 import {asBinary} from './sql-collation';
+import {redirectLookupSql} from './telegram-sql';
 import type {CatalogProperty} from './property-types';
 
 type StaticProperty = (typeof properties)[number];
@@ -35,6 +37,7 @@ export function staticCatalog(): CatalogProperty[] {
     id: String(property.id),
     title: property.title,
     price: numberOrNull(property.price),
+    priceFrom: false,
     area: numberOrNull(property.area),
     beds: textOrNull(property.beds),
     baths: textOrNull(property.baths),
@@ -56,6 +59,7 @@ function fromRow(row: Record<string, unknown>): CatalogProperty {
     id: String(row.id ?? ''),
     title: textOrNull(row.title) || 'عرض عقاري',
     price: numberOrNull(row.price),
+    priceFrom: row.price_from === 1 || row.price_from === true || String(row.price_from) === '1',
     area: numberOrNull(row.area),
     beds: textOrNull(row.beds),
     baths: textOrNull(row.baths),
@@ -77,7 +81,7 @@ async function readPublished(): Promise<CatalogProperty[]> {
   try {
     const result = await crmDb()
       .prepare(
-        `SELECT id, title, price, area, beds, baths, city, address, type, purpose, street_width, facade, age, description, images, status
+        `SELECT id, title, price, price_from, area, beds, baths, city, address, type, purpose, street_width, facade, age, description, images, status
          FROM site_properties WHERE ${asBinary('status')} = ${asBinary('?')} ORDER BY updated_at DESC, id DESC`
       )
       .bind('published')
@@ -96,4 +100,28 @@ export const loadPublishedProperties = cache(readPublished);
 export async function loadPublishedProperty(id: string) {
   const properties = await loadPublishedProperties();
   return properties.find(item => item.id === id) ?? null;
+}
+
+/** Follow fragment → merged listing redirects. Returns null when this id is not a redirect. */
+export async function loadPropertyRedirect(id: string): Promise<string | null> {
+  if (!/^[A-Za-z0-9_-]{1,191}$/.test(id)) return null;
+  try {
+    await ensureTelegramTables();
+    let current = id;
+    const seen = new Set<string>();
+    for (let hop = 0; hop < 5; hop += 1) {
+      if (seen.has(current)) return null;
+      seen.add(current);
+      const row = await crmDb().prepare(redirectLookupSql()).bind(current).first<{target_id?: unknown}>();
+      const target = row?.target_id == null ? '' : String(row.target_id);
+      if (!target || target === current || !/^[A-Za-z0-9_-]{1,191}$/.test(target)) {
+        return hop === 0 ? null : current;
+      }
+      current = target;
+    }
+    return current === id ? null : current;
+  } catch (error) {
+    console.error('property redirect was not read', error);
+    return null;
+  }
 }

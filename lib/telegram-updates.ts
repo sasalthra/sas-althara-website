@@ -19,6 +19,11 @@ export type ParsedTelegramUpdate = {
   accepted: boolean;
   service: boolean;
   photo: TelegramFile | null;
+  /** text, photo, sticker, or anything else (service, empty, deleted). */
+  kind: 'text' | 'photo' | 'sticker' | 'other';
+  /** Original Telegram unix seconds. Edits keep this value so offer gaps stay stable. */
+  date: number | null;
+  files: TelegramFile[];
 };
 
 const SERVICE_KEYS = [
@@ -46,7 +51,9 @@ type TgMessage = {
   chat?: {id?: number | string; title?: string; type?: string; username?: string};
   text?: unknown;
   caption?: unknown;
+  date?: number | string;
   photo?: TgPhoto[];
+  sticker?: {file_id?: string; file_unique_id?: string};
   document?: {file_id?: string; file_unique_id?: string; mime_type?: string; file_name?: string};
 } & Record<string, unknown>;
 
@@ -66,6 +73,18 @@ function largestPhoto(photos: TgPhoto[]) {
     const rightSize = right.file_size ?? (right.width ?? 0) * (right.height ?? 0);
     return rightSize - leftSize;
   })[0];
+}
+
+function unixDate(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) return Number(value.trim());
+  return null;
+}
+
+function stickerOf(message: TgMessage): TelegramFile | null {
+  const sticker = message.sticker;
+  if (!sticker?.file_id || !sticker.file_unique_id) return null;
+  return {fileId: sticker.file_id, fileUniqueId: sticker.file_unique_id, fileName: 'sticker.webp'};
 }
 
 function photoOf(message: TgMessage): TelegramFile | null {
@@ -119,8 +138,19 @@ export function parseTelegramUpdate(update: unknown): ParsedTelegramUpdate | nul
   if (!chatId || !messageId) return null;
   const text = plainText(message.text).trim() ? plainText(message.text) : plainText(message.caption);
   const photo = photoOf(message);
-  const service = SERVICE_KEYS.some(key => message[key] != null) && !text.trim() && !photo;
+  const sticker = stickerOf(message);
+  const stickerMessage = Boolean(message.sticker && typeof message.sticker === 'object');
+  const service = SERVICE_KEYS.some(key => message[key] != null) && !text.trim() && !photo && !stickerMessage;
   const mediaGroupId = message.media_group_id == null || message.media_group_id === '' ? null : String(message.media_group_id);
+  const messageKind: ParsedTelegramUpdate['kind'] = stickerMessage
+    ? 'sticker'
+    : service
+      ? 'other'
+      : photo
+        ? 'photo'
+        : text.trim()
+          ? 'text'
+          : 'other';
   return {
     chatId,
     chatTitle: typeof message.chat?.title === 'string' ? message.chat.title.trim().slice(0, 255) : '',
@@ -132,6 +162,9 @@ export function parseTelegramUpdate(update: unknown): ParsedTelegramUpdate | nul
     accepted: accepts(kind, type, chatId),
     service,
     photo,
+    kind: messageKind,
+    date: unixDate(message.date),
+    files: photo ? [photo] : sticker ? [sticker] : [],
   };
 }
 

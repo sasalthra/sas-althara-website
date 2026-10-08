@@ -5,6 +5,8 @@ export function exactEq(left: string, right: string) {
   return `${asBinary(left)} = ${asBinary(right)}`;
 }
 
+export {asBinary};
+
 export function propertyLookupSql(likeCount: number) {
   const likes = Array.from({length: likeCount}, () => `${asBinary('telegram_message_ids')} LIKE ${asBinary('?')}`).join(' OR ');
   const byKey = `(${exactEq('telegram_source_hash', '?')} OR ${exactEq('telegram_source_key', '?')})`;
@@ -47,6 +49,32 @@ export function seenChatUpdateSql() {
 
 export function propertyIdWhere() {
   return exactEq('id', '?');
+}
+
+/** Offer republish matches the canonical id or its source hash, not a fragment row that happens to share a message id. */
+export function propertyByOfferSql() {
+  return `SELECT id, description, image_meta, telegram_message_ids, telegram_media_group_id, telegram_source_key
+    FROM site_properties
+    WHERE ${exactEq('telegram_source_hash', '?')} OR ${exactEq('id', '?')}
+    LIMIT 1 FOR UPDATE`;
+}
+
+export function messageLookupSql() {
+  return `SELECT id, message_date FROM telegram_messages WHERE ${exactEq('chat_id', '?')} AND ${exactEq('message_id', '?')} LIMIT 1`;
+}
+
+export function messagesByChatSql() {
+  return `SELECT chat_id, message_id, message_date, media_group_id, kind, body, file_id, file_unique_id
+     FROM telegram_messages
+     WHERE ${exactEq('chat_id', '?')}`;
+}
+
+export function redirectLookupSql() {
+  return `SELECT target_id FROM telegram_redirects WHERE ${exactEq('id', '?')} LIMIT 1`;
+}
+
+export function deletePropertySql() {
+  return `DELETE FROM site_properties WHERE ${exactEq('id', '?')}`;
 }
 
 /** Admin-facing sync-log failure. Code and errno only — no SQL, host, or password. */
