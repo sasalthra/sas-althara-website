@@ -15,7 +15,9 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import {getAdmin} from '@/lib/admin';
-import {loadPublishedProperty} from '@/lib/property-catalog';
+import {redirectPermanent} from '@/lib/http-redirect';
+import {loadPropertyRedirect, loadPublishedProperty} from '@/lib/property-catalog';
+import {formatListedPrice} from '@/lib/property-price';
 import type {CatalogProperty} from '@/lib/property-types';
 import PublicLeadForm from '@/components/public-lead-form';
 import LeadForm from '../../lead-form';
@@ -38,11 +40,6 @@ export async function generateMetadata({
     title: `${property.title} | ساس الثراء`,
     description: property.description?.slice(0, 140) || property.title,
   };
-}
-
-function money(value: number | null) {
-  if (value == null) return 'عند الطلب';
-  return value.toLocaleString('ar-SA');
 }
 
 function internalFacilities(property: Property) {
@@ -70,7 +67,11 @@ export default async function PropertyDetailPage({
   const admin = await getAdmin();
   const {id} = await params;
   const property = await loadPublishedProperty(id);
-  if (!property) notFound();
+  if (!property) {
+    const target = await loadPropertyRedirect(id);
+    if (target && target !== id) redirectPermanent(`/properties/${target}`);
+    notFound();
+  }
 
   const images = property.images?.length ? property.images : ['/brand/logo.png'];
   const thumbs = images.slice(0, 5);
@@ -168,7 +169,7 @@ export default async function PropertyDetailPage({
           <div className="listing-meta-info">
             <span>معرض يضم {images.length} صورة</span>
             <strong>
-              {purpose} {money(property.price)} ر.س
+              {purpose} {formatListedPrice(property.price, property.priceFrom)} ر.س
             </strong>
           </div>
           <div className="listing-meta-actions">

@@ -10,6 +10,8 @@ export type ExportMessage = {
   mime_type?: string;
   media_group_id?: string | number;
   grouped_id?: string | number;
+  /** Telegram Desktop sets this to "sticker" for the separator the team posts between offers. */
+  media_type?: string;
 };
 
 export function exportText(value: unknown): string {
@@ -40,6 +42,14 @@ export function messagePhotoPaths(message: ExportMessage): string[] {
   push(message.photo);
   if (!message.mime_type || String(message.mime_type).startsWith('image/')) push(message.file);
   return paths;
+}
+
+export function exportMessageKind(message: ExportMessage): 'text' | 'photo' | 'sticker' | 'other' {
+  if (!message || message.type === 'service' || message.type === 'unsupported') return 'other';
+  if (String(message.media_type || '') === 'sticker') return 'sticker';
+  if (messagePhotoPaths(message).length) return 'photo';
+  if (messageText(message).trim()) return 'text';
+  return 'other';
 }
 
 function groupIdOf(message: ExportMessage): string {

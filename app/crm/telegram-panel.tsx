@@ -13,6 +13,15 @@ type SyncRow = {
   messageId: string | null;
 };
 
+type MergeFragment = {id: string; title: string};
+type MergePreview = {
+  targetId: string;
+  title: string;
+  messageCount: number;
+  photoCount: number;
+  fragments: MergeFragment[];
+};
+
 type SeenChat = {
   chatId: string;
   title: string | null;
@@ -39,6 +48,26 @@ type Status = {
 
 const fieldClass = 'w-full rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-black';
 
+function offerRows(rows: SyncRow[]) {
+  const seen = new Set<string>();
+  const posts: SyncRow[] = [];
+  for (const row of rows) {
+    if (row.action !== 'created' && row.action !== 'updated' && row.action !== 'import') continue;
+    const key = row.propertyId || row.id;
+    if (row.propertyId && seen.has(key)) continue;
+    if (row.propertyId) seen.add(key);
+    posts.push(row);
+  }
+  return posts;
+}
+
+function isProblemRow(row: SyncRow) {
+  if (row.action === 'separator' || row.note === 'فاصل بين العروض') return false;
+  if (row.action === 'import') return false;
+  if (row.action === 'created' || row.action === 'updated') return Boolean(row.note && row.note.includes('تعذر'));
+  return row.action === 'error' || row.action === 'skipped' || Boolean(row.note);
+}
+
 function flag(ok: boolean) {
   return ok ? 'مضبوط' : 'غير مضبوط';
 }
@@ -54,6 +83,7 @@ export default function TelegramPanel() {
   const [status, setStatus] = useState<Status | null>(null);
   const [message, setMessage] = useState('');
   const [summary, setSummary] = useState('');
+  const [preview, setPreview] = useState<MergePreview[] | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function refresh() {
@@ -83,6 +113,33 @@ export default function TelegramPanel() {
     }
   }
 
+  async function regroup(apply: boolean) {
+    setBusy(true);
+    setMessage('');
+    try {
+      const response = await fetch('/api/telegram/regroup', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({apply}),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'تعذر إعادة تجميع العروض');
+      const plans = Array.isArray(body.plans) ? body.plans as MergePreview[] : [];
+      setPreview(plans);
+      if (apply) {
+        setMessage(plans.length ? `تم تجميع ${body.applied ?? plans.length} عرض. الروابط القديمة تفتح على الإعلان المدمج.` : 'لا توجد عروض بحاجة إلى تجميع.');
+        setPreview(plans.length ? plans : []);
+        await refresh();
+      } else if (!plans.length) {
+        setMessage('لا توجد عروض مكررة بين الفواصل. كل إعلان منشور هو عرض واحد.');
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'تعذر إعادة تجميع العروض');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function upload(file: File) {
     setBusy(true);
     setMessage('');
@@ -103,8 +160,8 @@ export default function TelegramPanel() {
     }
   }
 
-  const posts = (status?.recent ?? []).filter(row => row.action === 'created' || row.action === 'updated' || row.action === 'import');
-  const errors = (status?.recent ?? []).filter(row => row.action === 'error' || row.action === 'skipped' || Boolean(row.note && row.action !== 'import'));
+  const posts = offerRows(status?.recent ?? []);
+  const errors = (status?.recent ?? []).filter(isProblemRow);
 
   return (
     <section dir="rtl" className="panel space-y-4 text-black">
@@ -115,6 +172,8 @@ export default function TelegramPanel() {
         في متغيرات Hostinger ضع TELEGRAM_BOT_TOKEN وTELEGRAM_WEBHOOK_SECRET (8 أحرف على الأقل من الإنجليزية والأرقام و _ و -)،
         واختياريًا TELEGRAM_CHANNEL_ID لمعرّف قناة أو جروب واحد مثل -100xxxxxxxxxx. تأكد أن NEXTAUTH_URL هو https://sasalthra.sa ثم اضغط تسجيل الويب هوك.
         بعد هذا التحديث سجّل الويب هوك مرة أخرى ليستقبل رسائل الجروب.
+        الملصق (ستكر) بين العروض يغلق العرض الحالي، والنص والصور بين ملصقين تصبح إعلانًا واحدًا.
+        بعد النشر اضغط إعادة تجميع العروض لترى الإعلانات التي ستُدمج، ثم طبّق التجميع. الروابط القديمة تفتح على الإعلان المدمج.
       </p>
       <p className="text-black">
         لاستيراد السجل: من Telegram Desktop افتح القناة أو الجروب، ثم النقاط الثلاث، ثم Export chat history، واختر JSON مع الصور.
@@ -128,6 +187,9 @@ export default function TelegramPanel() {
         </button>
         <button type="button" className="rounded-lg border border-[#d1d5db] bg-[#3F1A44] px-4 py-2 text-white" disabled={busy} onClick={() => void register()}>
           تسجيل الويب هوك
+        </button>
+        <button type="button" className="rounded-lg bg-[#3F1A44] px-4 py-2 text-white" disabled={busy} onClick={() => void regroup(false)}>
+          إعادة تجميع العروض
         </button>
       </div>
       <p role="status" className="text-black">{message}</p>
@@ -179,6 +241,26 @@ export default function TelegramPanel() {
         </label>
       </form>
       {summary ? <p className="text-black">{summary}</p> : null}
+      {preview ? (
+        <div className="space-y-2 rounded-lg border border-[#d1d5db] bg-white p-3 text-black">
+          <h3>معاينة التجميع</h3>
+          {preview.length ? preview.map(plan => (
+            <div key={plan.targetId}>
+              <p>{plan.title} — {plan.messageCount} رسائل، {plan.photoCount} صور</p>
+              <ul className="list-disc pe-5">
+                {plan.fragments.map(fragment => (
+                  <li key={fragment.id}>{fragment.title || fragment.id} — {fragment.id}</li>
+                ))}
+              </ul>
+            </div>
+          )) : <p>لا توجد إعلانات ستُدمج.</p>}
+          {preview.length ? (
+            <button type="button" className="rounded-lg bg-[#3F1A44] px-4 py-2 text-white" disabled={busy} onClick={() => void regroup(true)}>
+              تطبيق التجميع
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <div>
         <h3 className="mb-2 text-black">آخر العروض المتزامنة</h3>
         <div className="overflow-x-auto rounded-lg border border-[#d1d5db]">
@@ -186,6 +268,7 @@ export default function TelegramPanel() {
             <thead>
               <tr className="border-b border-[#d1d5db]">
                 <th className="p-2 text-start">العرض</th>
+                <th className="p-2 text-start">الرسائل والصور</th>
                 <th className="p-2 text-start">الحالة</th>
                 <th className="p-2 text-start">الوقت</th>
               </tr>
@@ -196,11 +279,12 @@ export default function TelegramPanel() {
                   <td className="p-2">
                     {row.propertyId ? <a className="underline" href={`/properties/${row.propertyId}`}>{row.title || row.propertyId}</a> : (row.note || 'استيراد')}
                   </td>
+                  <td className="p-2">{row.note && row.note.startsWith('مدمج:') ? row.note.replace(/^مدمج:\s*/, '') : '—'}</td>
                   <td className="p-2">{row.action === 'created' ? 'منشور جديد' : row.action === 'updated' ? 'تحديث' : 'استيراد'}</td>
                   <td className="p-2">{when(row.createdAt)}</td>
                 </tr>
               )) : (
-                <tr><td className="p-2" colSpan={3}>لا توجد عروض متزامنة بعد</td></tr>
+                <tr><td className="p-2" colSpan={4}>لا توجد عروض متزامنة بعد</td></tr>
               )}
             </tbody>
           </table>

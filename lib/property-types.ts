@@ -3,6 +3,8 @@ export type CatalogProperty = {
   id: string;
   title: string;
   price: number | null;
+  /** Several prices were listed. `price` is the lowest and the card says يبدأ من. */
+  priceFrom?: boolean;
   area: number | null;
   beds: string | null;
   baths: string | null;

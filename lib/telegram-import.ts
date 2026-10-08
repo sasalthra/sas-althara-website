@@ -7,8 +7,9 @@ import {pipeline} from 'node:stream/promises';
 import Busboy from 'busboy';
 import yauzl from 'yauzl';
 import type {Entry, ZipFile} from 'yauzl';
-import {combinedText, groupExportMessages, messagePhotoPaths, messageText, readExportChats, supportedExportType, type ExportChat, type ExportMessage} from './telegram-export';
-import {exportChatId, sourceKeyFor} from './telegram-ids';
+import {exportMessageKind, messagePhotoPaths, messageText, readExportChats, supportedExportType, type ExportChat, type ExportMessage} from './telegram-export';
+import {exportChatId, offerPropertyId, offerSourceKey} from './telegram-ids';
+import {brandingFileIds, galleryPhotos, groupChatOffers, unixTime, type OfferMessage} from './telegram-offers';
 import {mediaTarget} from './telegram-media';
 import {publishTelegramOffer, recordTelegramEvent} from './telegram-sync';
 import type {StoredImage} from './telegram-media';
@@ -102,54 +103,75 @@ function chatsFromExport(value: unknown): ExportChat[] {
   return chats;
 }
 
+function exportOfferMessages(chatId: string, messages: ExportMessage[], skipped: {count: number}): OfferMessage[] {
+  const list: OfferMessage[] = [];
+  for (const message of messages) {
+    const kind = exportMessageKind(message);
+    const id = String(message.id ?? '').replace(/\D/g, '');
+    if (!id || kind === 'other') {
+      skipped.count += 1;
+      continue;
+    }
+    if (kind === 'sticker') skipped.count += 1;
+    const explicit = message.media_group_id ?? message.grouped_id;
+    const paths = messagePhotoPaths(message);
+    list.push({
+      chatId,
+      messageId: id,
+      date: unixTime(message.date_unixtime == null ? null : String(message.date_unixtime)) ?? unixTime(typeof message.date === 'string' ? message.date : null),
+      mediaGroupId: explicit == null || String(explicit) === '' ? null : String(explicit),
+      kind,
+      text: messageText(message),
+      files: paths.map(relative => ({fileId: relative, fileUniqueId: `export:${relative}`})),
+    });
+  }
+  return list;
+}
+
 async function publishGroups(root: ExportChat, loadPhoto: (relative: string, messageId: string) => Promise<StoredImage | null>) {
   const summary: ImportSummary = {created: 0, updated: 0, skipped: 0, errors: []};
   const chatId = exportChatId(root.id, root.type);
   if (!chatId) throw new ImportError('ملف التصدير بلا معرف القناة أو الجروب');
-  const usable: ExportMessage[] = [];
-  for (const message of root.messages) {
-    if (!message || message.type === 'service' || message.type === 'unsupported') {
-      summary.skipped += 1;
-      continue;
-    }
-    if (!messageText(message).trim() && !messagePhotoPaths(message).length) {
-      summary.skipped += 1;
-      continue;
-    }
-    usable.push(message);
-  }
+  const skipped = {count: 0};
+  const messages = exportOfferMessages(chatId, root.messages, skipped);
+  summary.skipped += skipped.count;
+  const offers = groupChatOffers(messages);
+  const branding = brandingFileIds(offers.map(offer => ({
+    key: offer.firstMessageId,
+    fileUniqueIds: offer.photos.map(photo => photo.file.fileUniqueId),
+  })));
   let missingPhotos = 0;
-  for (const group of groupExportMessages(usable)) {
-    const ids = group.map(message => String(message.id ?? '').replace(/\D/g, '')).filter(Boolean);
-    if (!ids.length) {
+  for (const offer of offers) {
+    const photos = galleryPhotos(offer.photos.map(photo => ({...photo, fileUniqueId: photo.file.fileUniqueId})), branding);
+    const images: StoredImage[] = [];
+    for (const photo of photos) {
+      const relative = photo.file.fileId;
+      if (!relative || relative.startsWith('export:')) continue;
+      try {
+        const saved = await loadPhoto(relative, photo.messageId);
+        if (saved) images.push({...saved, fileUniqueId: photo.file.fileUniqueId || saved.fileUniqueId});
+        else missingPhotos += 1;
+      } catch (error) {
+        missingPhotos += 1;
+        if (summary.errors.length < 12) summary.errors.push(error instanceof Error ? error.message : 'تعذر حفظ صورة');
+      }
+    }
+    if (!offer.text.trim() && !images.length) {
       summary.skipped += 1;
       continue;
-    }
-    const explicit = group.map(message => message.media_group_id ?? message.grouped_id).find(value => value != null && String(value) !== '');
-    const mediaGroupId = explicit == null ? (group.length > 1 ? `x${ids[0]}` : null) : String(explicit);
-    const images: StoredImage[] = [];
-    for (const message of group) {
-      const messageId = String(message.id ?? '').replace(/\D/g, '');
-      for (const relative of messagePhotoPaths(message)) {
-        try {
-          const saved = await loadPhoto(relative, messageId);
-          if (saved) images.push(saved);
-          else missingPhotos += 1;
-        } catch (error) {
-          missingPhotos += 1;
-          if (summary.errors.length < 12) summary.errors.push(error instanceof Error ? error.message : 'تعذر حفظ صورة');
-        }
-      }
     }
     try {
       const saved = await publishTelegramOffer({
         chatId,
-        messageIds: ids,
-        mediaGroupId,
-        sourceKey: sourceKeyFor(chatId, ids[0] || '0', mediaGroupId),
-        text: combinedText(group),
+        messageIds: offer.messageIds,
+        mediaGroupId: offer.mediaGroupId,
+        sourceKey: offerSourceKey(chatId, offer.firstMessageId),
+        propertyId: offerPropertyId(chatId, offer.firstMessageId),
+        text: offer.text,
         images,
         edited: false,
+        replaceImages: true,
+        keepFileIds: images.map(image => image.fileUniqueId),
       });
       summary[saved.action] += 1;
     } catch (error) {

@@ -45,6 +45,22 @@ export function propertyIdFor(chatId: string, messageId: string, mediaGroupId: s
   return `tg-${chat}-m-${messageId.replace(/[^0-9]/g, '')}`;
 }
 
+/** One listing for every message between two sticker separators. */
+export function offerPropertyId(chatId: string, firstMessageId: string): string {
+  const chat = normalizeChatId(chatId).replace(/[^0-9]/g, '') || '0';
+  const message = firstMessageId.replace(/[^0-9]/g, '') || '0';
+  return `tg-${chat}-o-${message}`;
+}
+
+export function offerSourceKey(chatId: string, firstMessageId: string): string {
+  return `${normalizeChatId(chatId)}:o:${firstMessageId.replace(/[^0-9]/g, '')}`;
+}
+
+/** VARCHAR primary key. Chat id plus message id stays under 96 characters. */
+export function messageRowId(chatId: string, messageId: string): string {
+  return `${normalizeChatId(chatId)}:${messageId.replace(/[^0-9]/g, '')}`.slice(0, 96);
+}
+
 export function packMessageIds(ids: string[]): string {
   const clean = [...new Set(ids.filter(id => /^\d+$/.test(id)))];
   return clean.length ? `,${clean.join(',')},` : '';

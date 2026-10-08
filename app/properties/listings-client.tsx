@@ -10,12 +10,14 @@ import {
   Search,
   X,
 } from 'lucide-react';
+import {formatListedPrice} from '@/lib/property-price';
 import SiteHeader from '../site-header';
 
 export type ListingProperty = {
   id: string;
   title: string;
   price: number | null;
+  priceFrom?: boolean;
   area: number | null;
   beds: string | null;
   baths: string | null;
@@ -25,11 +27,6 @@ export type ListingProperty = {
   description: string;
   images: string[];
 };
-
-function money(value: number | null) {
-  if (value == null) return 'عند الطلب';
-  return value.toLocaleString('ar-SA');
-}
 
 function PropertyCard({property}: {property: ListingProperty}) {
   const available = true;
@@ -83,7 +80,7 @@ function PropertyCard({property}: {property: ListingProperty}) {
           </div>
         </div>
         <div className="offer-price">
-          <strong>{money(property.price)}</strong>
+          <strong>{formatListedPrice(property.price, property.priceFrom)}</strong>
           <small>ر.س</small>
         </div>
       </div>

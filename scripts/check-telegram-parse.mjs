@@ -11,7 +11,7 @@ const output = mkdtempSync(join(tmpdir(), 'sas-telegram-'));
 const require = createRequire(import.meta.url);
 try {
   await build({
-    entryPoints: ['lib/telegram-parse.ts', 'lib/telegram-export.ts', 'lib/telegram-ids.ts', 'lib/telegram-bot.ts', 'lib/telegram-updates.ts', 'lib/telegram-sql.ts'],
+    entryPoints: ['lib/telegram-parse.ts', 'lib/telegram-export.ts', 'lib/telegram-ids.ts', 'lib/telegram-bot.ts', 'lib/telegram-updates.ts', 'lib/telegram-sql.ts', 'lib/telegram-offers.ts', 'lib/property-price.ts'],
     outdir: output,
     bundle: true,
     platform: 'node',
@@ -20,11 +20,14 @@ try {
   });
   const {parseOffer} = require(join(output, 'telegram-parse.cjs'));
   const {groupExportMessages, messageText} = require(join(output, 'telegram-export.cjs'));
-  const {normalizeChatId, sourceKeyFor, sourceKeyHash, propertyIdFor, exportChatId} = require(join(output, 'telegram-ids.cjs'));
+  const {normalizeChatId, sourceKeyFor, sourceKeyHash, propertyIdFor, exportChatId, offerPropertyId, offerSourceKey} = require(join(output, 'telegram-ids.cjs'));
   const {webhookAuthorized} = require(join(output, 'telegram-bot.cjs'));
   const {parseTelegramUpdate, groupIncomingMessages, collapseAlbum, chatAllowed} = require(join(output, 'telegram-updates.cjs'));
   const {readExportChats, supportedExportType} = require(join(output, 'telegram-export.cjs'));
-  const {propertyLookupSql, recentSyncSql, seenChatLookupSql, seenChatUpdateSql, telegramDbError} = require(join(output, 'telegram-sql.cjs'));
+  const {propertyLookupSql, propertyByOfferSql, messageLookupSql, messagesByChatSql, redirectLookupSql, deletePropertySql, recentSyncSql, seenChatLookupSql, seenChatUpdateSql, telegramDbError} = require(join(output, 'telegram-sql.cjs'));
+  const {groupChatOffers, brandingFileIds, galleryPhotos, planOfferMerges, isDetailsText, OFFER_GAP_SECONDS} = require(join(output, 'telegram-offers.cjs'));
+  const {exportMessageKind} = require(join(output, 'telegram-export.cjs'));
+  const {formatListedPrice} = require(join(output, 'property-price.cjs'));
 
   const villa = `
 ♦️ فيلًا .
@@ -60,7 +63,11 @@ try {
   assert.equal(parsedVilla.streetWidth, null);
   assert.equal(parsedVilla.facade, null);
   assert.equal(parsedVilla.age, null);
-  assert.equal(parsedVilla.description, villa);
+  assert.match(parsedVilla.description, /فيل/);
+  assert.match(parsedVilla.description, /1,170,000/);
+  assert.doesNotMatch(parsedVilla.description, /♦️/);
+  assert.equal(parsedVilla.projectNumber, null);
+  assert.equal(parsedVilla.priceFrom, false);
   assert.equal(parsedVilla.title, 'فيلا حي الرياض جدة');
 
   const apartment = 'شقة للبيع في حي الزهراء بجدة\n4 غرف\n3 دورات مياه\nالمساحة 180م\nالسعر ٢٫٥ مليون';
@@ -135,6 +142,46 @@ try {
   assert.equal(parseOffer('شقة للبيع\nالسعر: 1.170.000').price, 1170000);
   assert.equal(parseOffer('عمارة للبيع في حي الشاطئ جدة\nالسعر 3 مليون').type, 'عمارة');
 
+  const projectExample = `
+مشروع sh / 1083
+شقة
+📌
+📍 الموقع : حي التيسير .
+📝 مواصفات الشقة :
+◾️ عدد الوحدات : 7
+◾️ عدد الغرف : 4
+◾️ عدد الصالات : 1
+◾️ دورات المياه : 3
+◾️ المطبخ : 1
+◾️ مساحة الشقة : 125
+◾️ السعر الاماميه: 430,000
+◾️ السعر الخلفيه : 420,000
+`;
+  const parsedProject = parseOffer(projectExample);
+  assert.equal(parsedProject.title, 'شقة حي التيسير جدة مشروع رقم 1083');
+  assert.equal(parsedProject.type, 'شقق');
+  assert.equal(parsedProject.address, 'التيسير');
+  assert.equal(parsedProject.city, 'جدة');
+  assert.equal(parsedProject.projectNumber, '1083');
+  assert.equal(parsedProject.beds, '4');
+  assert.equal(parsedProject.baths, '3');
+  assert.equal(parsedProject.area, 125);
+  assert.equal(parsedProject.price, 420000);
+  assert.equal(parsedProject.priceFrom, true);
+  assert.match(parsedProject.description, /430,000/);
+  assert.match(parsedProject.description, /420,000/);
+  assert.match(parsedProject.description, /عدد الغرف/);
+  assert.doesNotMatch(parsedProject.description, /📌|📍/);
+  assert.equal(parseOffer('مشروع رقم 102\nفيلا\n📍 الموقع : حي الرياض').title, 'فيلا حي الرياض جدة مشروع رقم 102');
+  assert.equal(parseOffer('مشروع رقم ١٠٢\nفيلا\nالموقع: حي الرياض').projectNumber, '102');
+  assert.equal(parseOffer('شقة\nحي النعيم\nالسعر: ٢٠٠ ألف').price, 200000);
+  assert.equal(parseOffer('شقة\nحي النعيم\nالسعر: ٢٠٠ ألف').city, 'جدة');
+  assert.equal(parseOffer('روف للبيع\nحي الشاطئ جدة\nالسعر مليون').type, 'روف');
+  assert.equal(parseOffer('تاون هاوس\nحي الحمدانية\nالسعر 900,000').type, 'تاون هاوس');
+  assert.match(formatListedPrice(420000, true), /^يبدأ من /);
+  assert.equal(formatListedPrice(null, true), 'عند الطلب');
+  assert.doesNotMatch(formatListedPrice(420000, false), /يبدأ من/);
+
   const messages = [
     {id: 1, type: 'message', date_unixtime: '10', photo: 'photos/a.jpg', text: ''},
     {id: 2, type: 'message', date_unixtime: '10', photo: 'photos/b.jpg', text: [{type: 'plain', text: 'شقة للبيع'}]},
@@ -205,6 +252,101 @@ try {
   assert.equal(sourceKeyFor(album.chatId, album.messageIds[0], album.mediaGroupId), sourceKeyFor(album.chatId, '11', '555'));
   assert.deepEqual(albumGroups[1].map(item => item.messageId), ['12']);
 
+  const chat = '-1003903377074';
+  const details = 'مشروع sh / 1083\nشقة\nالموقع : حي التيسير\nعدد الغرف : 4\nالسعر الاماميه: 430,000\nالسعر الخلفيه : 420,000';
+  const brand = {fileId: 'brand', fileUniqueId: 'brand-card'};
+  const photo = (id, unique) => ({fileId: unique, fileUniqueId: unique});
+  const msg = (messageId, kind, extra = {}) => ({
+    chatId: chat,
+    messageId,
+    date: extra.date ?? 1_700_000_000,
+    mediaGroupId: extra.mediaGroupId ?? null,
+    kind,
+    text: extra.text ?? '',
+    files: extra.files ?? [],
+    edited: extra.edited ?? false,
+  });
+  const grouped = groupChatOffers([
+    msg('10791', 'photo', {files: [photo('10791', 'real-a')], date: 1_700_000_100}),
+    msg('10786', 'text', {text: details, date: 1_700_000_000}),
+    msg('10792', 'photo', {files: [photo('10792', 'real-b')], mediaGroupId: '14331668265179332', date: 1_700_000_120}),
+    msg('10793', 'photo', {files: [photo('10793', 'real-c')], mediaGroupId: '14331668265179332', date: 1_700_000_121}),
+    msg('10794', 'sticker', {files: [brand], date: 1_700_000_200}),
+    msg('10810', 'text', {text: 'مشروع رقم 102\nفيلا\nالموقع : حي الرياض\nالسعر : 900,000', date: 1_700_000_300}),
+  ]);
+  assert.equal(grouped.length, 2);
+  assert.deepEqual(grouped[0].messageIds, ['10786', '10791', '10792', '10793']);
+  assert.equal(grouped[0].firstMessageId, '10786');
+  assert.equal(grouped[0].text.includes('مشروع'), true);
+  assert.equal(grouped[0].photos.map(item => item.file.fileUniqueId).join(','), 'real-a,real-b,real-c');
+  assert.equal(grouped[0].closed, true);
+  assert.equal(grouped[1].messageIds.join(','), '10810');
+  assert.equal(grouped[1].closed, false);
+  assert.equal(offerPropertyId(chat, grouped[0].firstMessageId), 'tg-1003903377074-o-10786');
+  assert.equal(offerSourceKey(chat, '10786'), '-1003903377074:o:10786');
+  const edited = groupChatOffers([
+    msg('5', 'text', {text: 'شقة\nالموقع: حي الصفا\nالسعر 1'}),
+    msg('5', 'text', {text: 'شقة\nالموقع: حي الصفا\nعدد الغرف : 5\nالسعر 680,000', edited: true}),
+    msg('6', 'photo', {files: [photo('6', 'room')]}),
+  ]);
+  assert.equal(edited.length, 1);
+  assert.match(edited[0].text, /680,000/);
+  assert.equal(edited[0].firstMessageId, '5');
+  const gap = groupChatOffers([
+    msg('1', 'text', {text: details, date: 1_000}),
+    msg('2', 'photo', {files: [photo('2', 'late-photo')], date: 1_000 + OFFER_GAP_SECONDS + 5}),
+    msg('3', 'text', {text: 'مشروع رقم 7\nدور\nالموقع: حي السلامة\nالسعر 300,000', date: 1_000 + (OFFER_GAP_SECONDS * 2) + 20}),
+  ]);
+  assert.equal(gap.length, 2, 'details text after 45 minutes opens a new offer');
+  assert.deepEqual(gap[0].messageIds, ['1', '2']);
+  assert.deepEqual(gap[1].messageIds, ['3']);
+  assert.equal(isDetailsText('صورة فقط'), false);
+  const offersForBrand = [0, 1, 2].map(index => ({
+    key: String(index),
+    fileUniqueIds: ['brand-card', `room-${index}`],
+  }));
+  const branding = brandingFileIds(offersForBrand);
+  assert.equal(branding.has('brand-card'), true);
+  assert.equal(branding.has('room-0'), false);
+  const cover = galleryPhotos([
+    {fileUniqueId: 'brand-card', path: '/media/brand.jpg'},
+    {fileUniqueId: 'room-0', path: '/media/room.jpg'},
+  ], branding);
+  assert.equal(cover.length, 1);
+  assert.equal(cover[0].fileUniqueId, 'room-0');
+  assert.equal(exportMessageKind({id: 9, type: 'message', media_type: 'sticker', text: ''}), 'sticker');
+  const legacy = planOfferMerges({
+    messages: [],
+    logs: [
+      {chatId: chat, messageId: '10780', createdAt: 1_700_000_000, note: 'رسالة بلا نص ولا صورة', action: 'skipped', propertyId: null},
+      {chatId: chat, messageId: '10820', createdAt: 1_700_000_900, note: 'رسالة بلا نص ولا صورة', action: 'skipped', propertyId: null},
+    ],
+    fragments: [
+      {id: 'tg-1003903377074-m-10786', chatId: chat, messageIds: ['10786'], mediaGroupId: null, title: 'شقة حي الصفا جدة', description: details, images: [], createdAt: 1_700_000_100},
+      {id: 'tg-1003903377074-m-10791', chatId: chat, messageIds: ['10791'], mediaGroupId: null, title: 'عرض عقاري', description: '', images: [{messageId: '10791', fileUniqueId: 'real-a', path: '/media/a.jpg'}], createdAt: 1_700_000_160},
+      {id: 'tg-1003903377074-g-14331668265179332', chatId: chat, messageIds: ['10792', '10793'], mediaGroupId: '14331668265179332', title: 'عرض عقاري', description: '', images: [{messageId: '10792', fileUniqueId: 'real-b', path: '/media/b.jpg'}], createdAt: 1_700_000_180},
+    ],
+  });
+  assert.equal(legacy.length, 1);
+  assert.equal(legacy[0].targetId, 'tg-1003903377074-o-10786');
+  assert.deepEqual(legacy[0].fragments.map(item => item.id).sort(), [
+    'tg-1003903377074-g-14331668265179332',
+    'tg-1003903377074-m-10786',
+    'tg-1003903377074-m-10791',
+  ].sort());
+  assert.equal(legacy[0].title, 'شقة حي التيسير جدة مشروع رقم 1083');
+  assert.equal(legacy[0].photoCount, 2);
+  const split = planOfferMerges({
+    messages: [],
+    logs: [{chatId: chat, messageId: '10790', createdAt: 1_700_000_140, note: 'رسالة بلا نص ولا صورة', action: 'skipped', propertyId: null}],
+    fragments: [
+      {id: 'tg-1003903377074-m-10786', chatId: chat, messageIds: ['10786'], mediaGroupId: null, title: 'أ', description: details, images: [], createdAt: 1_700_000_100},
+      {id: 'tg-1003903377074-m-10791', chatId: chat, messageIds: ['10791'], mediaGroupId: null, title: 'ب', description: details, images: [], createdAt: 1_700_000_160},
+    ],
+  });
+  assert.equal(split.length, 0);
+  assert.equal(planOfferMerges({messages: [], logs: [], fragments: legacy[0] ? [] : []}).length, 0);
+
   const basicGroup = parseTelegramUpdate({message: {message_id: 3, chat: {id: -42, type: 'group', title: 'جروب صغير'}, text: 'أرض للبيع'}});
   assert.equal(basicGroup.chatId, '-42');
   assert.equal(basicGroup.accepted, true);
@@ -229,7 +371,7 @@ try {
   assert.equal(chatAllowed('-42', '-10042'), false);
   assert.equal(chatAllowed('-10042', ''), true);
 
-  for (const sql of [propertyLookupSql(0), propertyLookupSql(2), recentSyncSql(40), seenChatLookupSql()]) {
+  for (const sql of [propertyLookupSql(0), propertyLookupSql(2), propertyByOfferSql(), messageLookupSql(), messagesByChatSql(), redirectLookupSql(), deletePropertySql(), recentSyncSql(40), seenChatLookupSql()]) {
     assertCollationSafe(sql);
   }
   const seenUpdate = seenChatUpdateSql();
@@ -250,6 +392,13 @@ try {
   assert.match(panel, /lastChat/);
   assert.match(panel, /seenChats/);
   assert.match(panel, /private_supergroup/);
+  assert.match(panel, /إعادة تجميع العروض/);
+  assert.match(panel, /تطبيق التجميع/);
+  assert.match(panel, /فاصل بين العروض/);
+  assert.match(readFileSync('app/properties/[id]/page.tsx', 'utf8'), /redirectPermanent/);
+  assert.match(readFileSync('proxy.ts', 'utf8'), /NextResponse\.redirect\([\s\S]*301/);
+  assert.match(readFileSync('app/properties/listings-client.tsx', 'utf8'), /formatListedPrice/);
+  assert.match(readFileSync('lib/telegram-sync.ts', 'utf8'), /فاصل بين العروض|SEPARATOR_NOTE/);
   const botSource = readFileSync('lib/telegram-bot.ts', 'utf8');
   assert.match(botSource, /channel_post/);
   assert.match(botSource, /edited_channel_post/);
@@ -289,6 +438,9 @@ try {
     SITE_PROPERTIES_DDL,
     TELEGRAM_SYNC_LOG_DDL,
     TELEGRAM_SEEN_CHATS_DDL,
+    TELEGRAM_MESSAGES_DDL,
+    TELEGRAM_REDIRECTS_DDL,
+    TELEGRAM_MESSAGES_INDEX_DDL,
     TELEGRAM_SOURCE_INDEX_DDL,
     TELEGRAM_SOURCE_INDEX_ALTER,
   } = require(join(output, 'lead-schema.cjs'));
@@ -312,6 +464,8 @@ try {
   }
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='telegram_sync_log'").get().name, 'telegram_sync_log');
   assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='telegram_seen_chats'").get().name, 'telegram_seen_chats');
+  assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='telegram_messages'").get().name, 'telegram_messages');
+  assert.equal(mem.prepare("SELECT name FROM sqlite_master WHERE name='telegram_redirects'").get().name, 'telegram_redirects');
   const hash = sourceKeyHash('-1001:m:9');
   mem.prepare("INSERT INTO site_properties (id, title, beds, baths, status, telegram_chat_id, telegram_message_id, telegram_source_key, telegram_source_hash, created_at, updated_at) VALUES (?, ?, NULL, NULL, 'published', ?, ?, ?, ?, ?, ?)").run('tg-1', 'عرض', '-1001', '9', '-1001:m:9', hash, '2026-01-01', '2026-01-01');
   assert.equal(mem.prepare("SELECT beds FROM site_properties WHERE id='tg-1'").get().beds, null);
@@ -324,7 +478,7 @@ try {
   assert.equal(mem.prepare("SELECT beds FROM site_properties WHERE id='tg-1'").get().beds, null);
   mem.close();
 
-  const ddl = [SITE_PROPERTIES_DDL, TELEGRAM_SYNC_LOG_DDL, TELEGRAM_SEEN_CHATS_DDL, TELEGRAM_SOURCE_INDEX_DDL].join('\n');
+  const ddl = [SITE_PROPERTIES_DDL, TELEGRAM_SYNC_LOG_DDL, TELEGRAM_SEEN_CHATS_DDL, TELEGRAM_MESSAGES_DDL, TELEGRAM_REDIRECTS_DDL, TELEGRAM_MESSAGES_INDEX_DDL, TELEGRAM_SOURCE_INDEX_DDL].join('\n');
   assert.doesNotMatch(ddl, /TEXT\s+PRIMARY\s+KEY/i);
   assert.doesNotMatch(ddl, /\bJSON\b/);
   assert.doesNotMatch(ddl, /\bDATETIME\b/i);
@@ -332,6 +486,12 @@ try {
   assert.match(SITE_PROPERTIES_DDL, /telegram_source_hash CHAR\(64\)/);
   assert.match(TELEGRAM_SYNC_LOG_DDL, /id VARCHAR\(40\)/);
   assert.match(TELEGRAM_SEEN_CHATS_DDL, /chat_id VARCHAR\(64\)/);
+  assert.match(TELEGRAM_MESSAGES_DDL, /id VARCHAR\(96\)/);
+  assert.match(TELEGRAM_MESSAGES_DDL, /raw_body LONGTEXT/);
+  assert.match(TELEGRAM_REDIRECTS_DDL, /id VARCHAR\(191\)/);
+  assert.match(TELEGRAM_MESSAGES_INDEX_DDL, /\(chat_id, message_id\)/);
+  assert.doesNotMatch(TELEGRAM_MESSAGES_DDL, /\bJSON\b/);
+  assert.ok(96 * 4 < 767);
   assert.match(TELEGRAM_SOURCE_INDEX_DDL, /\(telegram_source_hash\)/);
   assert.doesNotMatch(TELEGRAM_SOURCE_INDEX_DDL, /telegram_source_key\)/);
   assert.ok(191 * 4 < 767);
@@ -361,6 +521,9 @@ try {
   assert.ok(mysqlCalls.some(sql => sql.startsWith('CREATE TABLE IF NOT EXISTS site_properties') && /VARCHAR\(191\)/.test(sql)));
   assert.ok(mysqlCalls.some(sql => sql.startsWith('CREATE TABLE IF NOT EXISTS telegram_sync_log') && /VARCHAR\(40\)/.test(sql)));
   assert.ok(mysqlCalls.some(sql => sql.startsWith('CREATE TABLE IF NOT EXISTS telegram_seen_chats')));
+  assert.ok(mysqlCalls.some(sql => sql.startsWith('CREATE TABLE IF NOT EXISTS telegram_messages') && /VARCHAR\(96\)/.test(sql)));
+  assert.ok(mysqlCalls.some(sql => sql.startsWith('CREATE TABLE IF NOT EXISTS telegram_redirects')));
+  assert.ok(mysqlCalls.some(sql => sql === 'ALTER TABLE telegram_messages ADD UNIQUE INDEX telegram_messages_chat_message (chat_id, message_id)'));
   assert.ok(mysqlCalls.some(sql => sql === TELEGRAM_SOURCE_INDEX_ALTER));
   assert.equal(mysqlCalls.some(sql => /TEXT\s+PRIMARY\s+KEY/i.test(sql)), false);
   resetLeadSchemaCache();

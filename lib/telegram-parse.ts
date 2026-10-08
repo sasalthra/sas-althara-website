@@ -11,6 +11,9 @@ export type ParsedOffer = {
   streetWidth: string | null;
   facade: string | null;
   age: string | null;
+  projectNumber: string | null;
+  /** True when the post lists more than one price. The stored price is the lowest. */
+  priceFrom: boolean;
   description: string;
 };
 
@@ -38,6 +41,8 @@ const CITIES: {test: RegExp; label: string}[] = [
 ];
 
 const TYPES: {re: RegExp; type: string}[] = [
+  {re: /تاون\s*هاوس|تاونهاوس/, type: 'تاون هاوس'},
+  {re: /(?<![ا-ي])روف(?![ا-ي])/, type: 'روف'},
   {re: /شقق|شقه/, type: 'شقق'},
   {re: /فلل|فيلا/, type: 'فلل'},
   {re: /(?<![ا-ي])ارض(?![ا-ي])|اراضي/, type: 'أرض'},
@@ -101,22 +106,53 @@ function parseAmount(segment: string): number | null {
   return Math.round(amount);
 }
 
-function parsePrice(original: string): number | null {
-  const normalized = normalizeDigits(original);
-  const labeled = normalized.match(/(?:السعر|سعر)\s*[:\-]?\s*([^\n]{0,140})/);
-  if (labeled?.[1] && /[\d٠-٩۰-۹]/.test(labeled[1])) {
-    const amount = parseAmount(labeled[1]);
-    if (amount != null) return amount;
+/** Drop decorative emoji. The Arabic text, digits, and price lines stay. */
+export function cleanOfferText(input: string): string {
+  const stripped = input
+    .replace(/\p{Extended_Pictographic}/gu, '')
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, '')
+    .replace(/[\u2500-\u257F\u25A0-\u25FF]/g, '')
+    .replace(/[•●▪▫◦‣⁃◽◾◼◻■□◆◇♦▲▼►◄★☆✅✔️]/g, '');
+  const lines = stripped
+    .split('\n')
+    .map(line => line.replace(/[ \t]{2,}/g, ' ').trim());
+  const compacted: string[] = [];
+  for (const line of lines) {
+    if (!line && compacted[compacted.length - 1] === '') continue;
+    compacted.push(line);
   }
+  return compacted.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** Digits after مشروع. A letter prefix such as «sh /» is not part of the number. */
+export function parseProjectNumber(original: string): string | null {
   const folded = foldArabic(original);
-  if (!/مليون|الف/.test(folded)) return null;
-  const window = folded.match(/([^\n]{0,48}(?:مليون|الف))/);
-  return window ? parseAmount(window[1]) : null;
+  const match = folded.match(/مشروع(?:\s*رقم)?\s*[:\-]?\s*(?:[a-z]+\s*[\/\\\-]\s*)?(\d+)/i);
+  if (!match?.[1]) return null;
+  return match[1].replace(/^0+(?=\d)/, '');
+}
+
+function parsePriceInfo(original: string): {price: number | null; priceFrom: boolean} {
+  const amounts: number[] = [];
+  for (const line of original.split(/\n/)) {
+    if (!/سعر/.test(foldArabic(line))) continue;
+    const amount = parseAmount(line);
+    if (amount != null) amounts.push(amount);
+  }
+  if (!amounts.length) {
+    const folded = foldArabic(original);
+    if (!/مليون|الف/.test(folded) || /سعر/.test(folded)) return {price: null, priceFrom: false};
+    const window = folded.match(/([^\n]{0,48}(?:مليون|الف))/);
+    const amount = window ? parseAmount(window[1]) : null;
+    return {price: amount, priceFrom: false};
+  }
+  const unique = new Set(amounts);
+  return {price: Math.min(...amounts), priceFrom: unique.size > 1};
 }
 
 function parseArea(original: string): number | null {
   const folded = stripThousands(foldArabic(original));
-  const labeled = folded.match(/(?:المساحه|مساحه)\s*[:\-]?\s*(\d+(?:\.\d+)?)/);
+  const labeled = folded.match(/(?:المساحه|مساحه)[^\d\n]{0,40}(\d+(?:\.\d+)?)/);
   if (labeled) {
     const area = Number(labeled[1]);
     if (area > 0 && area < 1_000_000) return area;
@@ -231,13 +267,14 @@ function parseAge(original: string, folded: string): string | null {
 }
 
 function buildTitle(
-  fields: Pick<ParsedOffer, 'type' | 'purpose' | 'address' | 'city'>,
+  fields: Pick<ParsedOffer, 'type' | 'address' | 'city' | 'projectNumber'>,
   original: string,
 ): string {
   const typeWord = fields.type === 'فلل' ? 'فيلا' : fields.type === 'شقق' ? 'شقة' : fields.type;
-  const purposeWord = fields.purpose === 'بيع' ? 'للبيع' : fields.purpose === 'إيجار' ? 'للإيجار' : '';
-  const parts = [typeWord, purposeWord, fields.address ? `حي ${fields.address}` : '', fields.city].filter(Boolean);
-  if (parts.length) return parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 180);
+  const district = fields.address ? `حي ${fields.address}` : '';
+  const project = fields.projectNumber ? `مشروع رقم ${fields.projectNumber}` : '';
+  const parts = [typeWord, district, fields.city, project].filter(part => part && part !== 'حي undefined');
+  if (parts.length && (typeWord || district || project)) return parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 180);
   const line = original
     .split(/\n/)
     .map(item => item.trim())
@@ -249,20 +286,26 @@ export function parseOffer(original: string): ParsedOffer {
   const text = typeof original === 'string' ? original : '';
   const folded = foldArabic(text);
   const place = parsePlace(text, folded);
+  const projectNumber = parseProjectNumber(text);
+  const type = parseType(folded);
+  const priced = parsePriceInfo(text);
+  const city = place.city || (type || place.address || projectNumber ? 'جدة' : null);
   const fields: ParsedOffer = {
     title: '',
-    type: parseType(folded),
+    type,
     purpose: parsePurpose(folded),
-    price: parsePrice(text),
+    price: priced.price,
     area: parseArea(text),
-    city: place.city,
+    city,
     address: place.address,
     beds: parseBeds(folded),
     baths: parseBaths(folded),
     streetWidth: parseStreet(folded),
     facade: parseFacade(text),
     age: parseAge(text, folded),
-    description: text,
+    projectNumber,
+    priceFrom: priced.priceFrom,
+    description: cleanOfferText(text) || text.trim(),
   };
   fields.title = buildTitle(fields, text);
   return fields;
