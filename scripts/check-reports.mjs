@@ -11,7 +11,7 @@ assert.ok(existsSync('lib/reports.ts'),'Reports engine must exist');
 const out=mkdtempSync(join(tmpdir(),'sas-reports-'));
 try {
  await build({entryPoints:['lib/reports.ts'],outfile:join(out,'reports.cjs'),bundle:true,platform:'node',format:'cjs',external:['mysql2/promise']});
- const {parseReportFilters,readReport,readReportDashboard,reportCsv,propertyNeighborhood,buildPropertiesSnapshot,readClientsSnapshot,readReportSnapshots}=createRequire(import.meta.url)(join(out,'reports.cjs'));
+ const {parseReportFilters,readReport,readReportDashboard,readAssignmentCounts,reportCsv,propertyNeighborhood,buildPropertiesSnapshot,readClientsSnapshot,readReportSnapshots,leadMatchesReportFilters}=createRequire(import.meta.url)(join(out,'reports.cjs'));
  const sql=new DatabaseSync(':memory:');
  sql.function('JSON_UNQUOTE',v=>v);
  const bounded=parseReportFilters(new URLSearchParams(),new Date('2026-09-15T22:30:00.000Z'));
@@ -94,11 +94,11 @@ try {
   const alias=await readReport(db,admin,'leads',{...filters,stage:'مكسب'});
   assert.ok(alias.rows.some(r=>r.id==='won-row'));
  }
- sql.exec(`CREATE TABLE crm_transactions(id TEXT,lead_id TEXT,data TEXT,confirmed_due TEXT,updated_at TEXT);
+ sql.exec(`CREATE TABLE crm_transactions(id TEXT,lead_id TEXT,data TEXT,confirmed_due TEXT,updated_at TEXT,owner_commission TEXT,client_commission TEXT);
  CREATE TABLE hr_attendance(user_id TEXT,work_day TEXT,check_in TEXT,check_out TEXT,late_minutes INTEGER);
  CREATE TABLE hr_profiles(user_id TEXT,job_title TEXT,department TEXT,leave_balance TEXT,schedule TEXT,updated_at TEXT);
  CREATE TABLE crm_integrations(id TEXT,last_run TEXT,last_result TEXT,config TEXT DEFAULT '{}');`);
- const tx=sql.prepare('INSERT INTO crm_transactions VALUES (?,?,?,?,?)');
+ const tx=sql.prepare('INSERT INTO crm_transactions (id,lead_id,data,confirmed_due,updated_at) VALUES (?,?,?,?,?)');
  tx.run('t1','a',JSON.stringify({brokerage:'0.10',debtPayer:'company',debtSettlement:'900000000000.01',balance:'-0.10'}),'900000000000.11','2026-09-01');
  tx.run('t2','b',JSON.stringify({brokerage:'0.20',debtPayer:'client',debtSettlement:'800.99',clientCollection:'0.10',balance:'-0.20'}),'0.20','2026-09-02');
  report=await readReport(db,admin,'transactions',filters);
@@ -148,5 +148,61 @@ try {
  assert.ok(dash.alerts.some(a=>a.href.includes('waiting=1')));
  assert.ok(dash.alerts.some(a=>a.href.includes('overdue=1')&&a.href.includes('tab=leads')));
  assert.equal(dash.alerts.some(a=>/تصدير CSV/.test(a.message)),false);
+ sql.prepare(`INSERT INTO crm_users (id,name,role,active,created_at,username) VALUES ('ohoud','عهود','sales',1,'2026-01-01','ohoud.user')`).run();
+ const ohoudRows=[
+  ['o1','root','root','ohoud','','o1','p','','tiktok','contacted','2026-09-01','2026-09-23T00:00:00.000Z','2026-09-23T00:00:00.000Z'],
+  ['o2','root','root','ohoud.user','','o2','p','','website','contacted','','2026-10-07T18:00:00.000Z','2026-10-07T18:00:00.000Z'],
+  ['o3','root','root','عهود','','o3','p','','tiktok','interested','','2026-09-25T00:00:00.000Z','2026-09-25T00:00:00.000Z'],
+  ['o4','root','root','ohoud','','o4','p','','tiktok','contacted','2026-09-01','2026-09-22T12:00:00.000Z','2026-09-22T12:00:00.000Z'],
+  ['o5','root','root','bob','','o5','p','','tiktok','contacted','','2026-09-24T00:00:00.000Z','2026-09-24T00:00:00.000Z'],
+  ['o6','root','root','ohoud','','o6','p','','tiktok','won','2026-09-01','2026-09-28T00:00:00.000Z','2026-09-28T00:00:00.000Z'],
+ ];
+ for(const row of ohoudRows)put.run(...row);
+ const comboFilters={...filters,from:'2026-09-23',to:'2026-10-07',employee:'ohoud',stage:'تم التواصل',source:'',pageSize:50};
+ const ohoudDash=await readReportDashboard(db,admin,comboFilters,new Date('2026-10-07T12:00:00.000Z'));
+ assert.equal(ohoudDash.employees.length,1,'choosing one employee leaves a single employee row');
+ assert.equal(ohoudDash.employees[0].name,'عهود');
+ assert.equal(ohoudDash.total,2,'employee + stage + period');
+ assert.equal(ohoudDash.scheduled,1);
+ assert.equal(ohoudDash.signed,0);
+ assert.equal(ohoudDash.byStage.filter(s=>s.count>0).every(s=>s.stage==='contacted'),true);
+ assert.equal(ohoudDash.sources.reduce((n,s)=>n+s.total,0),ohoudDash.total);
+ const tokens=['ohoud','عهود','ohoud.user'];
+ const listed=sql.prepare('SELECT * FROM leads').all().filter(row=>leadMatchesReportFilters(row,{from:comboFilters.from,to:comboFilters.to,stage:comboFilters.stage,employeeTokens:tokens,sourceExact:true,today:'2026-10-07',nowMs:Date.parse('2026-10-07T12:00:00.000Z')}));
+ assert.equal(listed.length,ohoudDash.total,'drill-down count equals the filtered card count');
+ const broad=await readReport(db,admin,'leads',{...comboFilters,stage:''});
+ assert.ok(broad.rows.some(r=>r.id==='o1'),'assigned_to id matches');
+ assert.ok(broad.rows.some(r=>r.id==='o2'),'assigned_to username matches');
+ assert.ok(broad.rows.some(r=>r.id==='o3'),'assigned_to display name matches');
+ assert.equal(broad.rows.some(r=>r.id==='o4'),false,'registration day before the period is excluded');
+ assert.equal(broad.rows.some(r=>r.id==='o5'),false);
+ assert.equal(broad.total,4);
+ assert.equal((await readReportDashboard(db,admin,{...comboFilters,stage:''},new Date('2026-10-07T12:00:00.000Z'))).signed,1);
+ sql.exec(`CREATE TABLE lead_activity(id TEXT,lead_id TEXT,action TEXT,details TEXT,created_at TEXT); ALTER TABLE leads ADD COLUMN assigned_at TEXT;`);
+ sql.prepare('INSERT INTO lead_activity VALUES (?,?,?,?,?)').run('act-o1','o1','assigned',JSON.stringify({assignedTo:'ohoud'}),'2026-10-07T10:00:00.000Z');
+ sql.prepare('INSERT INTO lead_activity VALUES (?,?,?,?,?)').run('act-name','ghost','assigned',JSON.stringify({assignedTo:'عهود'}),'2026-10-07T11:00:00.000Z');
+ sql.prepare('INSERT INTO lead_activity VALUES (?,?,?,?,?)').run('act-old','o4','assigned',JSON.stringify({assignedTo:'ohoud'}),'2026-09-01T10:00:00.000Z');
+ sql.prepare(`UPDATE leads SET assigned_at=?, created_at=? WHERE id='o5'`).run('2026-10-07T10:00:00.000Z','2026-09-24T00:00:00.000Z');
+ const assignedToday=await readAssignmentCounts(db,'2026-10-07','2026-10-07','');
+ assert.equal(assignedToday.unavailable,false);
+ assert.equal(assignedToday.total,3,'activity id, activity display name, and assigned_at; created_at is not an assignment');
+ const assignedOhoud=await readAssignmentCounts(db,'2026-10-07','2026-10-07','ohoud');
+ assert.equal(assignedOhoud.total,2,'username and display name resolve to the same employee');
+ assert.equal(assignedOhoud.byEmployee.every(row=>row.name==='عهود'),true);
+ const legacy=await readReport(db,admin,'transactions',filters);
+ assert.equal(legacy.rows.find(r=>r.id==='t1').brokerage,'0.10');
+ assert.equal(legacy.rows.find(r=>r.id==='t1').commissionNote,'0.10');
+ assert.equal(legacy.rows.find(r=>r.id==='t1').ownerCommission,null);
+ assert.match(String(legacy.rows.find(r=>r.id==='t1').updated_at),/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} [صم]$/);
+ assert.equal(legacy.columns.some(c=>c.key==='ownerCommission'&&c.label==='العمولة من المالك'),true);
+ assert.equal(legacy.columns.some(c=>c.key==='totalCommission'),true);
+ assert.equal(legacy.columns.some(c=>c.label==='ملاحظة عمولة سابقة'),true);
+ sql.prepare(`UPDATE crm_transactions SET owner_commission=?, client_commission=? WHERE id='t2'`).run('1000','250.50');
+ const split=await readReport(db,admin,'transactions',filters);
+ const splitRow=split.rows.find(r=>r.id==='t2');
+ assert.equal(splitRow.ownerCommission,'1000');
+ assert.equal(splitRow.clientCommission,'250.50');
+ assert.equal(splitRow.totalCommission,'1250.50');
+ assert.equal(split.metrics.find(m=>m.label.includes('إجمالي العمولة')).value,'1250.50');
  sql.close();console.log('PASS reports date bounds, aggregation, scope, bound SQL, CSV injection and read-only execution');
 } finally {rmSync(out,{recursive:true,force:true});}

@@ -1283,7 +1283,10 @@ form.report-filters,
   box-shadow:0 6px 16px rgba(17,24,39,.03);
   position:relative;
   min-width:0;
+  color:inherit;
+  text-decoration:none;
 }
+a.reports-kpi-card:hover{border-color:#3F1A44;}
 .reports-kpi-icon{
   width:40px;height:40px;border-radius:999px;
   display:grid;place-items:center;

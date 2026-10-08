@@ -1,7 +1,7 @@
 import {z} from 'zod';
 import {crmDb, crmTransaction} from '@/lib/crm-db';
 import {actor, body, endpoint, reply} from '@/lib/secure-api';
-import {loadAssistantSnapshot} from '@/lib/admin-assistant-data';
+import {loadAssignments, loadAssistantSnapshot, loadReportAlignment} from '@/lib/admin-assistant-data';
 import {
   ASSISTANT_ROLES,
   OVERDUE_RULE,
@@ -9,6 +9,7 @@ import {
   modelFacts,
   redactPhones,
 } from '@/lib/admin-assistant';
+import {riyadhDayKey} from '@/lib/lead-dates';
 import {displayLeadPhone} from '@/lib/phone';
 import {completeFromAggregates, ProviderCallError} from '@/lib/ai-complete';
 import {credentialsFromRow, readEnvAi} from '@/lib/ai-env.server';
@@ -38,7 +39,7 @@ function localAlerts(snapshot: Awaited<ReturnType<typeof loadAssistantSnapshot>>
 export async function GET() {
   return endpoint(async () => {
     const user = await actor(undefined, roles);
-    const snapshot = await loadAssistantSnapshot(crmDb());
+    const snapshot = await loadAssistantSnapshot(crmDb(), new Date(), user);
     const env = readEnvAi();
     let configured = Boolean(env);
     if (!env) {
@@ -88,7 +89,21 @@ export async function POST(req: Request) {
     const user = await actor(req, roles);
     const input = questionSchema.parse(await body(req, 8000));
     const db = crmDb();
-    const snapshot = await loadAssistantSnapshot(db);
+    const snapshot = await loadAssistantSnapshot(db, new Date(), user);
+    const executeTool = async (name: string, args: Record<string, unknown>) => {
+      const text = (key: string) => typeof args[key] === 'string' ? String(args[key]) : '';
+      const today = riyadhDayKey(new Date());
+      if (name === 'assignments') return loadAssignments(db, text('from') || today, text('to') || today, text('employee'));
+      if (name !== 'lead_counts' && name !== 'overdue_clients') return {unavailable: true, error: 'أداة غير معروفة'};
+      const aligned = await loadReportAlignment(db, new Date(), user, {from: text('from'), to: text('to'), employee: text('employee'), source: text('source'), stage: text('stage')});
+      if (!aligned) return {unavailable: true};
+      if (name === 'overdue_clients') return {unavailable: false, overdue: aligned.overdue, byEmployee: aligned.employees.filter(row => row.overdue > 0).map(row => ({name: row.name, overdue: row.overdue})), rule: OVERDUE_RULE};
+      const group = text('groupBy') || 'total';
+      if (group === 'stage') return {unavailable: false, total: aligned.total, stages: aligned.stages, period: {from: aligned.from, to: aligned.to}};
+      if (group === 'source') return {unavailable: false, total: aligned.total, sources: aligned.sources, period: {from: aligned.from, to: aligned.to}};
+      if (group === 'employee') return {unavailable: false, total: aligned.total, employees: aligned.employees, period: {from: aligned.from, to: aligned.to}};
+      return {unavailable: false, total: aligned.total, signed: aligned.signed, overdue: aligned.overdue, scheduled: aligned.scheduled, period: {from: aligned.from, to: aligned.to}};
+    };
     const local = redactPhones(answerDeterministic(input.question, snapshot));
     const env = readEnvAi();
     const config = env ? null : await db
@@ -114,6 +129,7 @@ export async function POST(req: Request) {
         apiKey: credentials.apiKey,
         question: input.question,
         facts: modelFacts(snapshot),
+        executeTool,
       });
       return reply({answer, source: 'model'});
     } catch (error) {

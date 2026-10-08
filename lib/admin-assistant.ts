@@ -3,13 +3,20 @@
  * Client names and phones stay out of anything this module marks as model-safe.
  */
 
+import {conversionRate, countAssignmentEvents, isOverdueFollowUp, isSignedStage, matchUser, type DirectoryUser} from './lead-cohorts';
+export {countAssignmentEvents};
+import {riyadhDayKey} from './lead-dates';
 import {displayStage, stageLabel} from './lead-stages';
 
 export const OVERDUE_AFTER_DAYS = 3;
 export const ASSISTANT_ROLES = ['admin', 'supervisor'] as const;
 
 export const OVERDUE_RULE =
-  'يُعد العميل متأخراً إذا بقي في مرحلة مفتوحة دون أي نشاط أو متابعة لأكثر من 3 أيام. مراحل الخروج (غير مؤهل، غير مهتم، مغلق) ومراحل التحويل (وقع عقد، دفع عربون، إفراغ) لا تدخل في هذا التنبيه.';
+  'يُعد العميل متأخراً إذا كان تاريخ المتابعة قبل اليوم بتوقيت الرياض، والمرحلة ليست «مغلق» ولا «غير مهتم» ولا «غير مؤهل» ولا «وقع عقد» ولا «إفراغ».';
+
+export const CONVERSION_RULE = 'نسبة التحويل = (وقع عقد + إفراغ) ÷ العملاء المسندين. دفع العربون لا يُحسب تحويلاً.';
+
+export const ASSIGNMENT_BASIS = 'وقت الإسناد من lead_activity أو عمود assigned_at بتوقيت الرياض، وليس تاريخ التسجيل created_at.';
 
 export const SUGGESTED_QUESTIONS = [
   'حلل أداء الموظفين',
@@ -20,7 +27,6 @@ export const SUGGESTED_QUESTIONS = [
   'حالة التفويج الميداني',
 ] as const;
 
-const CONVERSION_STAGES = new Set(['contract_signed', 'deposit_paid', 'transferred', 'won']);
 const EXIT_STAGES = new Set(['unqualified', 'not_interested', 'closed']);
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -81,6 +87,8 @@ export type AssistantSnapshot = {
   leadCount: number;
   alerts: AlertRow[];
   alertsTotal: number;
+  aligned?: AlignedReport;
+  assignmentsToday?: AssignmentToday;
 };
 
 export type RawLead = {
@@ -92,6 +100,7 @@ export type RawLead = {
   notes: string;
   assignedTo: string;
   fieldAssignedTo: string;
+  followUp?: unknown;
   createdAt: unknown;
   updatedAt: unknown;
 };
@@ -99,9 +108,31 @@ export type RawLead = {
 export type RawUser = {
   id: string;
   name: string;
+  username?: string;
   role: string;
   active: boolean;
   lastLoginAt: unknown;
+};
+
+export type AlignedReport = {
+  from: string;
+  to: string;
+  total: number;
+  overdue: number;
+  signed: number;
+  scheduled: number;
+  employees: {name: string; assigned: number; signed: number; overdue: number; conversionPct: number | null}[];
+  stages: {label: string; count: number}[];
+  sources: {label: string; count: number; conversion: number | null}[];
+  field: AssistantSnapshot['field'];
+};
+
+export type AssignmentToday = {
+  date: string;
+  basis: string;
+  unavailable: boolean;
+  total: number | null;
+  byEmployee: {name: string; count: number}[];
 };
 
 export function parseCrmInstant(value: unknown): number | null {
@@ -127,8 +158,7 @@ export function ageInDays(thenMs: number, nowMs: number): number {
 }
 
 export function isConversionStage(stage: string): boolean {
-  const shown = displayStage(stage) || stage;
-  return CONVERSION_STAGES.has(stage) || CONVERSION_STAGES.has(shown);
+  return isSignedStage(stage);
 }
 
 export function isOpenStage(stage: string): boolean {
@@ -186,6 +216,8 @@ export function assembleSnapshot(input: {
   const now = input.now ?? new Date();
   const nowMs = now.getTime();
   const usersById = new Map(input.users.map(user => [user.id, user]));
+  const directory: DirectoryUser[] = input.users.map(user => ({id: user.id, name: user.name, username: user.username || ''}));
+  const today = riyadhDayKey(now);
   const stageCounts = new Map<string, number>();
   const sourceCounts = new Map<string, number>();
   const campaignCounts = new Map<string, number>();
@@ -217,19 +249,15 @@ export function assembleSnapshot(input: {
     const campaign = campaignFromNotes(lead.notes);
     if (campaign) bump(campaignCounts, campaign);
 
-    const converted = isConversionStage(lead.stage);
+    const converted = isSignedStage(lead.stage);
     if (converted) conversions += 1;
-    const open = isOpenStage(lead.stage);
-    const activityMs = input.activityAt.get(lead.id) ?? null;
-    const leadMs = [activityMs, parseCrmInstant(lead.updatedAt), parseCrmInstant(lead.createdAt)]
-      .filter((value): value is number => value != null)
-      .reduce((max, value) => Math.max(max, value), Number.NEGATIVE_INFINITY);
-    const days = Number.isFinite(leadMs) ? ageInDays(leadMs, nowMs) : OVERDUE_AFTER_DAYS + 1;
-    const late = open && days > OVERDUE_AFTER_DAYS;
+    const late = isOverdueFollowUp(lead.followUp, lead.stage, today);
+    const dueDay = String(lead.followUp ?? '').trim().slice(0, 10);
+    const days = /^\d{4}-\d{2}-\d{2}$/.test(dueDay) && today ? Math.max(0, Math.round((Date.parse(today + 'T00:00:00Z') - Date.parse(dueDay + 'T00:00:00Z')) / 86_400_000)) : 0;
     if (late) {
       overdue += 1;
       bump(overdueStageCounts, stageLabel(shown));
-      const sales = lead.assignedTo ? usersById.get(lead.assignedTo) : undefined;
+      const sales = matchUser(directory, lead.assignedTo);
       alerts.push({
         id: lead.id,
         name: lead.name || 'بدون اسم',
@@ -245,12 +273,13 @@ export function assembleSnapshot(input: {
       fieldInStage += 1;
       if (lead.fieldAssignedTo) {
         fieldAssigned += 1;
-        const fieldUser = usersById.get(lead.fieldAssignedTo);
+        const fieldUser = matchUser(directory, lead.fieldAssignedTo);
         bump(fieldCounts, fieldUser?.name || 'ميداني');
       }
     }
 
-    const ownerIds = [...new Set([lead.assignedTo, lead.fieldAssignedTo].filter(Boolean))];
+    const owners = [matchUser(directory, lead.assignedTo), matchUser(directory, lead.fieldAssignedTo)].filter((person): person is DirectoryUser => Boolean(person));
+    const ownerIds = [...new Set(owners.map(person => person.id))];
     if (!ownerIds.length) {
       unassignedLeads += 1;
       if (late) unassignedOverdue += 1;
@@ -277,7 +306,7 @@ export function assembleSnapshot(input: {
       leads: row.leads,
       overdue: row.overdue,
       conversions: row.conversions,
-      conversionPct: percent(row.conversions, row.leads),
+      conversionPct: row.leads ? (conversionRate(row.leads, row.conversions) ?? 0) : 0,
       lastLoginDays: loginMs == null ? null : Math.max(0, ageInDays(loginMs, nowMs)),
     };
   }).sort((a, b) => b.overdue - a.overdue || b.leads - a.leads || a.name.localeCompare(b.name, 'ar'));
@@ -311,6 +340,10 @@ export function assembleSnapshot(input: {
 
 export type ModelFacts = {
   overdueRule: string;
+  conversionRule: string;
+  assignmentBasis: string;
+  period: {from: string; to: string; basis: string} | null;
+  assignmentsToday: AssignmentToday;
   kpis: {
     overdueLeads: number;
     conversions: number;
@@ -321,7 +354,7 @@ export type ModelFacts = {
     name: string;
     leads: number;
     overdue: number;
-    conversionPct: number;
+    conversionPct: number | null;
     lastLoginDays: number | null;
   }[];
   stages: {label: string; count: number}[];
@@ -333,27 +366,94 @@ export type ModelFacts = {
   unassignedOverdue: number;
 };
 
+export const ASSISTANT_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'assignments',
+      description: 'عدد العملاء الذين أُسندوا خلال فترة، حسب وقت الإسناد في lead_activity أو assigned_at بتوقيت الرياض. لا يستخدم تاريخ التسجيل.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          from: {type: 'string', description: 'YYYY-MM-DD بتوقيت الرياض'},
+          to: {type: 'string', description: 'YYYY-MM-DD بتوقيت الرياض'},
+          employee: {type: 'string', description: 'معرف الموظف أو اسم المستخدم أو الاسم الظاهر. فارغ يعني الكل.'},
+        },
+        required: ['from', 'to'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'lead_counts',
+      description: 'أعداد العملاء بنفس فلاتر التقارير: الفترة على created_at بتوقيت الرياض، والمرحلة والمصدر والموظف.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          from: {type: 'string'},
+          to: {type: 'string'},
+          stage: {type: 'string'},
+          source: {type: 'string'},
+          employee: {type: 'string'},
+          groupBy: {type: 'string', enum: ['total', 'stage', 'source', 'employee']},
+        },
+        required: ['groupBy'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'overdue_clients',
+      description: 'عدد المتأخرين: تاريخ المتابعة قبل اليوم بتوقيت الرياض والمرحلة ليست مغلقاً ولا غير مهتم ولا غير مؤهل ولا وقع عقد ولا إفراغ. بلا أسماء عملاء.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          from: {type: 'string'},
+          to: {type: 'string'},
+          employee: {type: 'string'},
+        },
+      },
+    },
+  },
+] as const;
+
 /** Aggregates safe to send to an external model. No client names or phones. */
 export function modelFacts(snapshot: AssistantSnapshot): ModelFacts {
-  return {
-    overdueRule: OVERDUE_RULE,
-    kpis: {
-      overdueLeads: snapshot.kpis.overdue,
-      conversions: snapshot.kpis.conversions,
-      properties: snapshot.kpis.properties,
-      campaignSpend: snapshot.kpis.campaignSpend.available ? snapshot.kpis.campaignSpend.total : null,
-    },
-    employees: snapshot.employees.map(employee => ({
+  const view = snapshot.aligned;
+  const employees = view
+    ? view.employees.map(employee => {
+      const known = snapshot.employees.find(row => row.name === employee.name);
+      return {name: employee.name, leads: employee.assigned, overdue: employee.overdue, conversionPct: employee.assigned ? employee.conversionPct : null, lastLoginDays: known?.lastLoginDays ?? null};
+    })
+    : snapshot.employees.map(employee => ({
       name: employee.name,
       leads: employee.leads,
       overdue: employee.overdue,
-      conversionPct: employee.conversionPct,
+      conversionPct: employee.leads ? employee.conversionPct : null,
       lastLoginDays: employee.lastLoginDays,
-    })),
-    stages: snapshot.stages,
-    sources: snapshot.sources,
+    }));
+  return {
+    overdueRule: OVERDUE_RULE,
+    conversionRule: CONVERSION_RULE,
+    assignmentBasis: ASSIGNMENT_BASIS,
+    period: view ? {from: view.from, to: view.to, basis: 'created_at Asia/Riyadh'} : null,
+    assignmentsToday: snapshot.assignmentsToday ?? {date: '', basis: ASSIGNMENT_BASIS, unavailable: true, total: null, byEmployee: []},
+    kpis: {
+      overdueLeads: view ? view.overdue : snapshot.kpis.overdue,
+      conversions: view ? view.signed : snapshot.kpis.conversions,
+      properties: snapshot.kpis.properties,
+      campaignSpend: snapshot.kpis.campaignSpend.available ? snapshot.kpis.campaignSpend.total : null,
+    },
+    employees,
+    stages: view ? view.stages : snapshot.stages,
+    sources: view ? view.sources.map(source => ({label: source.label, count: source.count})) : snapshot.sources,
     campaigns: snapshot.campaigns,
-    fieldDispatch: snapshot.field,
+    fieldDispatch: view ? view.field : snapshot.field,
     overdueByStage: snapshot.overdueByStage,
     unassignedLeads: snapshot.unassignedLeads,
     unassignedOverdue: snapshot.unassignedOverdue,
@@ -365,7 +465,8 @@ function loginText(days: number | null): string {
 }
 
 export function employeeLine(employee: EmployeeStat): string {
-  return `${employee.name}: ${employee.leads} عميل، ${employee.overdue} متأخر، تحويل ${employee.conversionPct}%، ${loginText(employee.lastLoginDays)}`;
+  const conversion = employee.leads ? `${employee.conversionPct}%` : 'غير متاح';
+  return `${employee.name}: ${employee.leads} عميل، ${employee.overdue} متأخر، تحويل ${conversion}، ${loginText(employee.lastLoginDays)}`;
 }
 
 function companyConversion(snapshot: AssistantSnapshot): number {
@@ -379,7 +480,7 @@ function shortfalls(snapshot: AssistantSnapshot): string[] {
     const reasons: string[] = [];
     if (employee.overdue > 0) {
       const noun = employee.overdue === 1 ? 'عميل' : 'عملاء';
-      reasons.push(`لديه ${employee.overdue} ${noun} بلا متابعة منذ أكثر من 3 أيام`);
+      reasons.push(`لديه ${employee.overdue} ${noun} بمتابعة قبل اليوم`);
     }
     if (employee.leads >= 3 && employee.conversionPct + 10 < company) {
       reasons.push(`نسبة التحويل ${employee.conversionPct}% أقل من متوسط الفريق ${company}%`);
@@ -461,10 +562,11 @@ function fieldAnswer(snapshot: AssistantSnapshot): string {
   return lines.join('\n');
 }
 
-export type AssistantIntent = 'team' | 'stages' | 'sources' | 'overdue' | 'field' | 'overview';
+export type AssistantIntent = 'team' | 'stages' | 'sources' | 'overdue' | 'field' | 'assignments' | 'overview';
 
 export function assistantIntent(question: string): AssistantIntent {
   const text = question.trim();
+  if (/اسناد|إسناد|أسناد|اسناده|إسناده/.test(text)) return 'assignments';
   if (/ميدان|تفويج/.test(text)) return 'field';
   if (/مصدر|حمل/.test(text)) return 'sources';
   if (/مرحل/.test(text)) return 'stages';
@@ -473,13 +575,74 @@ export function assistantIntent(question: string): AssistantIntent {
   return 'overview';
 }
 
+function reportView(snapshot: AssistantSnapshot): AlignedReport | null {
+  return snapshot.aligned ?? null;
+}
+
+function assignmentAnswer(snapshot: AssistantSnapshot): string {
+  const row = snapshot.assignmentsToday;
+  if (!row || row.unavailable || row.total == null) return 'بيانات الإسناد غير متاحة. لا يُحسب الإسناد من تاريخ التسجيل.';
+  const lines = [`تم إسناد ${row.total} عميل بتاريخ ${row.date} بتوقيت الرياض.`, row.basis];
+  if (!row.byEmployee.length) lines.push(row.total === 0 ? 'لا توجد إسنادات في هذا اليوم.' : 'لا يوجد تفصيل موظفين.');
+  for (const employee of row.byEmployee) lines.push(`- ${employee.name}: ${employee.count}`);
+  return lines.join('\n');
+}
+
+function alignedTeam(snapshot: AssistantSnapshot): string | null {
+  const view = reportView(snapshot);
+  if (!view) return null;
+  const lines = view.employees.length ? view.employees.map(employee => {
+    const known = snapshot.employees.find(row => row.name === employee.name);
+    const stat: EmployeeStat = {
+      id: known?.id || employee.name,
+      name: employee.name,
+      leads: employee.assigned,
+      overdue: employee.overdue,
+      conversions: employee.signed,
+      conversionPct: employee.conversionPct ?? 0,
+      lastLoginDays: known?.lastLoginDays ?? null,
+    };
+    return employeeLine(stat);
+  }) : ['لا يوجد موظفون نشطون في النظام.'];
+  return [`الفترة ${view.from} — ${view.to} حسب تاريخ التسجيل created_at بتوقيت الرياض.`, CONVERSION_RULE, lines.join('\n'), '', 'أسباب القصور', shortfalls(snapshot).length ? shortfalls(snapshot).join('\n') : '- لا قصور ظاهر حسب قاعدة التأخير والتحويل الحالية.', '', 'إجراءات مقترحة', actions(snapshot).join('\n')].join('\n');
+}
+
 export function answerDeterministic(question: string, snapshot: AssistantSnapshot): string {
   const intent = assistantIntent(question);
-  if (intent === 'team') return teamAnswer(snapshot);
-  if (intent === 'stages') return stageAnswer(snapshot);
-  if (intent === 'sources') return sourceAnswer(snapshot);
-  if (intent === 'overdue') return overdueAnswer(snapshot);
-  if (intent === 'field') return fieldAnswer(snapshot);
+  const view = reportView(snapshot);
+  if (intent === 'assignments') return assignmentAnswer(snapshot);
+  if (intent === 'team') return alignedTeam(snapshot) || teamAnswer(snapshot);
+  if (intent === 'stages') {
+    if (view) return [`توزيع المراحل خلال ${view.from} — ${view.to} (تاريخ التسجيل created_at بتوقيت الرياض)`, ...view.stages.map(row => `- ${row.label}: ${row.count}`)].join('\n');
+    return stageAnswer(snapshot);
+  }
+  if (intent === 'sources') {
+    if (view) {
+      const parts = [`المصادر خلال ${view.from} — ${view.to} (تاريخ التسجيل created_at بتوقيت الرياض)`, CONVERSION_RULE];
+      parts.push(...(view.sources.length ? view.sources.map(row => `- ${row.label}: ${row.count}${row.conversion == null ? '' : `، تحويل ${row.conversion}%`}`) : ['- لا توجد مصادر']));
+      parts.push('', 'الحملات المذكورة في التسجيل');
+      parts.push(...(snapshot.campaigns.length ? snapshot.campaigns.map(row => `- ${row.label}: ${row.count}`) : ['- لا توجد حملات مسجّلة في ملاحظات التسجيل']));
+      parts.push('', snapshot.kpis.campaignSpend.available ? `مصروف الحملات: ${snapshot.kpis.campaignSpend.total}` : 'مصروف الحملات: غير مسجّل في قاعدة البيانات');
+      return parts.join('\n');
+    }
+    return sourceAnswer(snapshot);
+  }
+  if (intent === 'overdue') {
+    if (view) {
+      const byEmployee = view.employees.filter(employee => employee.overdue > 0);
+      return [`العملاء المتأخرون: ${view.overdue}.`, `الفترة ${view.from} — ${view.to} حسب تاريخ التسجيل created_at بتوقيت الرياض.`, OVERDUE_RULE, byEmployee.length ? byEmployee.map(employee => `- ${employee.name}: ${employee.overdue} متأخر`).join('\n') : '- لا موظف لديه عملاء متأخرون.'].join('\n');
+    }
+    return overdueAnswer(snapshot);
+  }
+  if (intent === 'field') {
+    if (view) {
+      const lines = [`في مرحلة التفويج: ${view.field.inStage}.`, `معيّن لميداني: ${view.field.assigned}.`, `بانتظار تعيين ميداني: ${view.field.unassigned}.`, `الفترة ${view.from} — ${view.to} حسب تاريخ التسجيل created_at بتوقيت الرياض.`];
+      for (const row of view.field.byEmployee) lines.push(`- ${row.name}: ${row.count} عميل في التفويج`);
+      if (!view.field.byEmployee.length) lines.push('- لا توزيع ميداني حالي.');
+      return lines.join('\n');
+    }
+    return fieldAnswer(snapshot);
+  }
   const spend = snapshot.kpis.campaignSpend.available
     ? String(snapshot.kpis.campaignSpend.total)
     : 'غير مسجّل';

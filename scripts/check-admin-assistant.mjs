@@ -57,20 +57,20 @@ try {
   const assistant = createRequire(import.meta.url)(join(out, 'assistant.cjs'));
   const now = new Date('2026-09-20T00:00:00.000Z');
   const leads = [
-    {id: 'late', name: 'عميل_سري', phone: '0551112233', stage: 'new', source: 'meta', notes: 'حملة: الربيع', assignedTo: 'sales', fieldAssignedTo: '', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-10T00:00:00.000Z'},
-    {id: 'edge', name: 'عميل_حد', phone: '0552223344', stage: 'contacted', source: 'manual', notes: '', assignedTo: 'sales', fieldAssignedTo: '', createdAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z'},
-    {id: 'fresh', name: 'عميل_حديث', phone: '0553334455', stage: 'negotiation', source: 'website', notes: '', assignedTo: 'sales', fieldAssignedTo: '', createdAt: '2026-09-19T00:00:00.000Z', updatedAt: '2026-09-19T00:00:00.000Z'},
-    {id: 'won', name: 'عميل_عقد', phone: '0554445566', stage: 'contract_signed', source: 'excel', notes: '', assignedTo: 'sales', fieldAssignedTo: '', createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z'},
-    {id: 'paid', name: 'عميل_عربون', phone: '0555556677', stage: 'deposit_paid', source: 'manual', notes: '', assignedTo: 'sales', fieldAssignedTo: '', createdAt: '2026-08-02T00:00:00.000Z', updatedAt: '2026-08-02T00:00:00.000Z'},
-    {id: 'hand', name: 'عميل_افراغ', phone: '0556667788', stage: 'transferred', source: 'manual', notes: '', assignedTo: 'sales', fieldAssignedTo: '', createdAt: '2026-08-03T00:00:00.000Z', updatedAt: '2026-08-03T00:00:00.000Z'},
-    {id: 'shut', name: 'عميل_مغلق', phone: '0557778899', stage: 'closed', source: 'manual', notes: '', assignedTo: 'sales', fieldAssignedTo: '', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z'},
-    {id: 'field', name: 'عميل_ميدان', phone: '0558889900', stage: 'field_dispatch', source: 'manual', notes: 'الحملة: معرض الرياض', assignedTo: '', fieldAssignedTo: 'field', createdAt: '2026-09-18T00:00:00.000Z', updatedAt: '2026-09-18T00:00:00.000Z'},
-    {id: 'loose', name: 'عميل_بلا', phone: '0559990011', stage: 'postponed', source: 'manual', notes: '', assignedTo: '', fieldAssignedTo: '', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z'},
+    {id: 'late', name: 'عميل_سري', phone: '0551112233', stage: 'new', source: 'meta', notes: 'حملة: الربيع', assignedTo: 'sales', fieldAssignedTo: '', followUp: '2026-09-01', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-10T00:00:00.000Z'},
+    {id: 'edge', name: 'عميل_حد', phone: '0552223344', stage: 'contacted', source: 'manual', notes: '', assignedTo: 'sales', fieldAssignedTo: '', followUp: '2026-09-20', createdAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z'},
+    {id: 'fresh', name: 'عميل_حديث', phone: '0553334455', stage: 'negotiation', source: 'website', notes: '', assignedTo: 'نورة', fieldAssignedTo: '', followUp: '', createdAt: '2026-09-19T00:00:00.000Z', updatedAt: '2026-09-19T00:00:00.000Z'},
+    {id: 'won', name: 'عميل_عقد', phone: '0554445566', stage: 'contract_signed', source: 'excel', notes: '', assignedTo: 'sales', fieldAssignedTo: '', followUp: '2026-08-01', createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z'},
+    {id: 'paid', name: 'عميل_عربون', phone: '0555556677', stage: 'deposit_paid', source: 'manual', notes: '', assignedTo: 'sales', fieldAssignedTo: '', followUp: '2026-08-02', createdAt: '2026-08-02T00:00:00.000Z', updatedAt: '2026-08-02T00:00:00.000Z'},
+    {id: 'hand', name: 'عميل_افراغ', phone: '0556667788', stage: 'transferred', source: 'manual', notes: '', assignedTo: 'sales', fieldAssignedTo: '', followUp: '2026-08-03', createdAt: '2026-08-03T00:00:00.000Z', updatedAt: '2026-08-03T00:00:00.000Z'},
+    {id: 'shut', name: 'عميل_مغلق', phone: '0557778899', stage: 'closed', source: 'manual', notes: '', assignedTo: 'sales', fieldAssignedTo: '', followUp: '2026-01-01', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z'},
+    {id: 'field', name: 'عميل_ميدان', phone: '0558889900', stage: 'field_dispatch', source: 'manual', notes: 'الحملة: معرض الرياض', assignedTo: '', fieldAssignedTo: 'field', followUp: '2026-09-18', createdAt: '2026-09-18T00:00:00.000Z', updatedAt: '2026-09-18T00:00:00.000Z'},
+    {id: 'loose', name: 'عميل_بلا', phone: '0559990011', stage: 'postponed', source: 'manual', notes: '', assignedTo: '', fieldAssignedTo: '', followUp: '2026-08-01', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z'},
   ];
   const users = [
-    {id: 'sales', name: 'نورة', role: 'sales', active: true, lastLoginAt: '2026-09-18T00:00:00.000Z'},
-    {id: 'field', name: 'خالد', role: 'field', active: true, lastLoginAt: null},
-    {id: 'idle', name: 'ليان', role: 'sales', active: true, lastLoginAt: '2026-09-01T00:00:00.000Z'},
+    {id: 'sales', name: 'نورة', username: 'noura', role: 'sales', active: true, lastLoginAt: '2026-09-18T00:00:00.000Z'},
+    {id: 'field', name: 'خالد', username: 'khaled', role: 'field', active: true, lastLoginAt: null},
+    {id: 'idle', name: 'ليان', username: 'layan', role: 'sales', active: true, lastLoginAt: '2026-09-01T00:00:00.000Z'},
   ];
   const activityAt = new Map([
     ['fresh', Date.parse('2026-09-19T00:00:00.000Z')],
@@ -79,10 +79,11 @@ try {
   const snapshot = assistant.assembleSnapshot({
     leads, users, activityAt, propertyIds: ['p1', 'p1', 'p2'], spend: {available: false, total: 0}, now,
   });
-  assert.equal(snapshot.kpis.overdue, 2, 'only open leads with no activity for more than 3 days');
-  assert.equal(snapshot.alerts.some(alert => alert.id === 'edge'), false, 'exactly 3 days is not overdue');
-  assert.equal(snapshot.alerts.some(alert => alert.id === 'fresh' || alert.id === 'shut' || alert.id === 'won'), false);
-  assert.equal(snapshot.kpis.conversions, 3, 'contract, payment, and handover');
+  assert.equal(snapshot.kpis.overdue, 4, 'follow-up before today, excluding closed and signed stages');
+  assert.equal(snapshot.alerts.some(alert => alert.id === 'edge'), false, 'follow-up on today is not overdue');
+  assert.equal(snapshot.alerts.some(alert => alert.id === 'fresh' || alert.id === 'shut' || alert.id === 'won' || alert.id === 'hand'), false);
+  assert.equal(snapshot.alerts.some(alert => alert.id === 'paid'), true, 'deposit with a past follow-up is still overdue');
+  assert.equal(snapshot.kpis.conversions, 2, 'contract and handover only; deposit is not a conversion');
   assert.equal(snapshot.kpis.properties, 2);
   assert.equal(snapshot.kpis.campaignSpend.available, false);
   assert.equal(snapshot.alerts[0].id, 'loose');
@@ -97,13 +98,29 @@ try {
   const layan = snapshot.employees.find(employee => employee.name === 'ليان');
   assert.ok(nora && khaled && layan);
   assert.equal(nora.leads, 7);
-  assert.equal(nora.overdue, 1);
-  assert.equal(nora.conversions, 3);
-  assert.equal(nora.conversionPct, 43);
+  assert.equal(nora.overdue, 2);
+  assert.equal(nora.conversions, 2);
+  assert.equal(nora.conversionPct, 29);
   assert.equal(nora.lastLoginDays, 2);
   assert.equal(khaled.lastLoginDays, null);
-  assert.equal(assistant.employeeLine(nora), 'نورة: 7 عميل، 1 متأخر، تحويل 43%، آخر دخول 2 يوم');
-  assert.equal(assistant.employeeLine(khaled), 'خالد: 1 عميل، 0 متأخر، تحويل 0%، آخر دخول غير مسجل');
+  assert.equal(assistant.employeeLine(nora), 'نورة: 7 عميل، 2 متأخر، تحويل 29%، آخر دخول 2 يوم');
+  const named = assistant.countAssignmentEvents({
+    events: [
+      {leadId: 'today-user', at: '2026-10-08T05:00:00.000Z', assignee: 'noura'},
+      {leadId: 'today-name', at: '2026-10-08T06:00:00.000Z', assignee: 'نورة'},
+      {leadId: 'today-id', at: '2026-10-08T07:00:00.000Z', assignee: 'sales'},
+      {leadId: 'yesterday', at: '2026-10-07T07:00:00.000Z', assignee: 'sales'},
+    ],
+    users: [{id: 'sales', name: 'نورة', username: 'noura'}],
+    from: '2026-10-08',
+    to: '2026-10-08',
+    employeeTokens: ['sales', 'نورة', 'noura'],
+  });
+  assert.equal(named.total, 3);
+  assert.equal(named.byEmployee[0].count, 3);
+  assert.match(assistant.answerDeterministic('كم عميل تم اسناده للمبيعات اليوم؟', {...snapshot, assignmentsToday: {date: '2026-10-08', basis: assistant.ASSIGNMENT_BASIS, unavailable: false, total: 3, byEmployee: [{name: 'نورة', count: 3}]}}), /تم إسناد 3/);
+  assert.match(assistant.answerDeterministic('كم عميل تم اسناده للمبيعات اليوم؟', {...snapshot, assignmentsToday: {date: '2026-10-08', basis: assistant.ASSIGNMENT_BASIS, unavailable: true, total: null, byEmployee: []}}), /غير متاحة/);
+  assert.equal(assistant.employeeLine(khaled), 'خالد: 1 عميل، 1 متأخر، تحويل 0%، آخر دخول غير مسجل');
   for (const question of ['حلل أداء الموظفين', 'ملخص الفريق']) {
     const answer = assistant.answerDeterministic(question, snapshot);
     for (const employee of snapshot.employees) assert.match(answer, new RegExp(assistant.employeeLine(employee).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -134,12 +151,12 @@ try {
   });
   const data = createRequire(import.meta.url)(join(out, 'data.cjs'));
   const mem = new DatabaseSync(':memory:');
-  mem.exec(`CREATE TABLE leads(id TEXT PRIMARY KEY, name TEXT, phone TEXT, stage TEXT, source TEXT, notes TEXT, assigned_to TEXT, field_assigned_to TEXT, created_at TEXT, updated_at TEXT);
+  mem.exec(`CREATE TABLE leads(id TEXT PRIMARY KEY, name TEXT, phone TEXT, stage TEXT, source TEXT, notes TEXT, assigned_to TEXT, field_assigned_to TEXT, follow_up TEXT, created_at TEXT, updated_at TEXT);
     CREATE TABLE crm_users(id TEXT PRIMARY KEY, name TEXT, role TEXT, active INTEGER, last_login_at TEXT);
     CREATE TABLE lead_activity(lead_id TEXT, created_at TEXT);
     CREATE TABLE site_properties(id TEXT);`);
-  mem.prepare('INSERT INTO leads VALUES (?,?,?,?,?,?,?,?,?,?)').run('late', 'عميل_سري', '0551112233', 'new', 'meta', 'حملة: الربيع', 'sales', '', '2026-09-01T00:00:00.000Z', '2026-09-10T00:00:00.000Z');
-  mem.prepare('INSERT INTO leads VALUES (?,?,?,?,?,?,?,?,?,?)').run('fresh', 'عميل_حديث', '0553334455', 'new', 'manual', '', 'sales', '', '2026-09-19T00:00:00.000Z', '2026-09-19T00:00:00.000Z');
+  mem.prepare('INSERT INTO leads VALUES (?,?,?,?,?,?,?,?,?,?,?)').run('late', 'عميل_سري', '0551112233', 'new', 'meta', 'حملة: الربيع', 'sales', '', '2026-09-01', '2026-09-01T00:00:00.000Z', '2026-09-10T00:00:00.000Z');
+  mem.prepare('INSERT INTO leads VALUES (?,?,?,?,?,?,?,?,?,?,?)').run('fresh', 'عميل_حديث', '0553334455', 'new', 'manual', '', 'sales', '', '2026-09-20', '2026-09-19T00:00:00.000Z', '2026-09-19T00:00:00.000Z');
   mem.prepare('INSERT INTO crm_users VALUES (?,?,?,?,?)').run('sales', 'نورة', 'sales', 1, '2026-09-18T00:00:00.000Z');
   mem.prepare('INSERT INTO lead_activity VALUES (?,?)').run('fresh', '2026-09-19T00:00:00.000Z');
   mem.prepare('INSERT INTO site_properties VALUES (?)').run('assistant-only-property');
@@ -179,15 +196,24 @@ try {
   await schema.ensureLeadSchema(sqliteExecutor(schemaDb));
   assert.equal(schemaDb.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('crm_users') WHERE name='last_login_at'").get().n, 1);
   assert.equal(schemaDb.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='ai_settings'").get().n, 1);
+  schemaDb.exec('CREATE TABLE crm_transactions(id TEXT PRIMARY KEY, data TEXT)');
+  schema.resetLeadSchemaCache();
+  await schema.ensureLeadSchema(sqliteExecutor(schemaDb));
+  for (const column of ['owner_commission', 'client_commission']) {
+    assert.equal(schemaDb.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('crm_transactions') WHERE name=?").get(column).n, 1, column);
+  }
+  schema.resetLeadSchemaCache();
+  await schema.ensureLeadSchema(sqliteExecutor(schemaDb));
+  assert.equal(schemaDb.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('crm_transactions') WHERE name='owner_commission'").get().n, 1);
   schemaDb.close();
-  console.log('PASS runtime schema creates ai_settings and last_login_at once');
+  console.log('PASS runtime schema creates ai_settings, last_login_at, and commission columns once');
 
   globalThis.assistantUser = null;
   globalThis.assistantWrites = [];
   globalThis.assistantConfig = null;
   const scriptedLeads = [{
     id: 'late', name: 'عميل_سري', phone: '0551112233', stage: 'new', source: 'meta', notes: 'حملة: الربيع',
-    assigned_to: 'sales', field_assigned_to: '', created_at: '2020-01-01T00:00:00.000Z', updated_at: '2020-01-01T00:00:00.000Z',
+    assigned_to: 'sales', field_assigned_to: '', follow_up: '2020-01-02', created_at: '2020-01-01T00:00:00.000Z', updated_at: '2020-01-01T00:00:00.000Z',
   }];
   const scriptedUsers = [{id: 'sales', name: 'نورة', role: 'sales', active: 1, last_login_at: '2026-09-28T00:00:00.000Z'}];
   const boundaries = {name: 'assistant-boundaries', setup(b) {
@@ -260,7 +286,7 @@ try {
   globalThis.fetch = async () => new Response('no', {status: 502});
   const fallback = await (await route.POST(request({question: 'حلل أداء الموظفين'}))).json();
   assert.equal(fallback.source, 'local');
-  assert.match(fallback.answer, /نورة: \d+ عميل، \d+ متأخر، تحويل \d+%، آخر دخول \d+ يوم/);
+  assert.match(fallback.answer, /نورة: \d+ عميل، \d+ متأخر، تحويل (?:\d+%|غير متاح)، آخر دخول \d+ يوم/);
   assert.equal(fallback.answer.includes('عميل_سري'), false);
   assert.equal(fallback.answer.includes('0551112233'), false);
   globalThis.fetch = originalFetch;

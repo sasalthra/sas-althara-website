@@ -21,8 +21,6 @@ const groupNames:Record<string,string>={source:'المصادر',stage:'المر�
 const CHART_COLORS=['#3F1A44','#5B245F','#6B5A70','#4B5563','#8B6B90','#374151','#A78BAA','#6B7280','#542454','#1F2937','#7C6A86','#4A4450','#2E1233','#9CA3AF','#C4B5C8','#111827'];
 const PURPLE='#3F1A44';
 const GREY_BAR='#E5E7EB';
-const SIGNED_STAGES=new Set(['contract_signed','transferred','won','deposit_paid']);
-
 function isNumericValue(v:unknown):boolean{
  if(v===null||v===undefined||v==='')return false;
  const n=Number(String(v).replace(/[,٬]/g,''));
@@ -64,15 +62,14 @@ function HorizontalBars({items,title}:{items:{label:string;count:number}[];title
  );
 }
 
-function KpiCard({value,label,icon,chip}:{value:string|number;label:string;icon:ReactNode;chip?:string}){
- return (
-  <div className="reports-kpi-card">
-   <div className="reports-kpi-icon" aria-hidden="true">{icon}</div>
-   <strong className="reports-kpi-value">{value}</strong>
-   <span className="reports-kpi-label">{label}</span>
-   {chip?<span className="reports-kpi-chip">{chip}</span>:null}
-  </div>
- );
+function KpiCard({value,label,icon,chip,href}:{value:string|number;label:string;icon:ReactNode;chip?:string;href?:string}){
+ const body=<>
+  <div className="reports-kpi-icon" aria-hidden="true">{icon}</div>
+  <strong className="reports-kpi-value">{value}</strong>
+  <span className="reports-kpi-label">{label}</span>
+  {chip?<span className="reports-kpi-chip">{chip}</span>:null}
+ </>;
+ return href?<CrmLink className="reports-kpi-card" href={href}>{body}</CrmLink>:<div className="reports-kpi-card">{body}</div>;
 }
 
 function stageFilterValue(raw:string){
@@ -171,30 +168,20 @@ export default function ReportsPanel({role}:{role:string}){
  const metricsChart=report?metricChartData():[];
 
  const snap=stateData?.snapshots;
- const clientsOk=snap?.clients.status==='ok'?snap.clients:null;
  const propsOk=snap?.properties.status==='ok'?snap.properties:null;
- const followupsSummary=stateData?.summaries?.find(s=>s.id==='followups');
- const transactionsSummary=stateData?.summaries?.find(s=>s.id==='transactions');
- const leadsSummary=stateData?.summaries?.find(s=>s.id==='leads');
  const neighborhoodBars=propsOk?.byNeighborhood.slice(0,8).map(n=>({label:n.label,count:n.count}))||[];
  const salesGroups=report?.groups?.sales||[];
-
- const signedCount=clientsOk?clientsOk.byStage.filter(s=>SIGNED_STAGES.has(s.stage)).reduce((n,s)=>n+s.count,0):null;
- const completedDeals=transactionsSummary?.status==='ok'&&transactionsSummary.total!==null
-  ?transactionsSummary.total
-  :signedCount;
- const scheduledFollowups=followupsSummary?.status==='ok'?followupsSummary.total:null;
- const newClientsCount=clientsOk
-  ?(clientsOk.byStage.find(s=>s.stage==='new')?.count ?? clientsOk.total)
-  :(leadsSummary?.status==='ok'?leadsSummary.total:null);
- const employeesCount=stateData?.employees.length??null;
+ const dash=stateData?.dashboard;
+ const employeesCount=dash?dash.employees.length:null;
+ const scheduledFollowups=dash?dash.scheduled:null;
+ const completedDeals=dash?dash.signed:null;
+ const clientsCount=dash?dash.total:null;
 
  const moduleBars=(stateData?.summaries||[])
   .filter(s=>s.status==='ok'&&s.total!==null)
   .map(s=>({name:s.label,value:s.total as number}));
 
- const dash=stateData?.dashboard;
- const stageLegend=(dash?.byStage||[]).map((stage,index)=>({...stage,color:CHART_COLORS[index%CHART_COLORS.length]}));
+ const stageLegend=(dash?.byStage||[]).filter(stage=>stage.count>0).map((stage,index)=>({...stage,color:CHART_COLORS[index%CHART_COLORS.length]}));
  const perfRows=(dash?.employees||[]).map((employee,index)=>({...employee,rank:index+1}));
  const alerts=(()=>{
   const rows:{tone:'info'|'warn'|'muted';tag:string;message:string;time:string;href:string}[]=[];
@@ -262,10 +249,10 @@ export default function ReportsPanel({role}:{role:string}){
      <button className="primary report-primary-btn" type="submit">تطبيق التصفية</button>
     </div>
    </div>
-   <p className="report-filter-help">التصدير إلى CSV يتبع نفس الفلاتر المطبقة أعلاه. الفترة الافتراضية آخر 30 يوماً بتوقيت الرياض.</p>
+   <p className="report-filter-help">التصدير إلى CSV يتبع نفس الفلاتر المطبقة أعلاه. الفترة لبطاقات العملاء هي تاريخ التسجيل created_at بتوقيت الرياض، والافتراضي آخر 30 يوماً.</p>
   </form>
 
-  <p className="report-scope">الفترة المطبقة: {stateData?.filters.from||'…'} — {stateData?.filters.to||'…'} بتقويم الرياض (UTC+03)، والافتراضي آخر 30 يوماً. المصدر يؤثر في وحدات العملاء، والمرحلة تعني مرحلة طلب التمويل في المعاملات ومرحلة العميل في غيرها، وجهة التمويل للمعاملات فقط. الموظف يحدد التكليف/الملكية في وحدات العملاء، والموظف/الفاعل في HR والتدقيق. الإعلانات وSheets لا يرتبطان بموظف. لكل وحدة أساس تاريخ موضح؛ اللقطات الحالية ليست تاريخاً للحالة. الرابط يحفظ المرشحات.</p>
+  <p className="report-scope">الفترة المطبقة: {stateData?.filters.from||'…'} — {stateData?.filters.to||'…'}. بطاقات العملاء والدونات وجدول الموظفين والمصادر والتنبيهات وقائمة العملاء تستخدم تاريخ تسجيل العميل (created_at) بتوقيت الرياض، مع المرحلة والمصدر والموظف معاً. الإسناد يطابق رقم الموظف أو اسم المستخدم أو الاسم الظاهر. اللقطات الحالية للعقارات ليست تاريخاً للحالة. الرابط يحفظ المرشحات.</p>
 
   {loading&&<p role="status">جارٍ تحميل التقارير…</p>}
   {error&&<div role="alert" className="error">{error} <button onClick={()=>setRetry(n=>n+1)}>إعادة المحاولة</button></div>}
@@ -274,11 +261,11 @@ export default function ReportsPanel({role}:{role:string}){
   {stateData&&isOverview&&(
    <div className="reports-overview" aria-label="لوحة نظرة عامة">
     <div className="reports-kpis" aria-label="مؤشرات رئيسية">
-     <KpiCard value={fmt(employeesCount)} label="عدد الموظفين" icon={<Users size={18}/>} chip={employeesCount!=null?`نطاق ${role==='admin'?'الإدارة':'المستخدم'}`:undefined}/>
-     <KpiCard value={fmt(scheduledFollowups)} label="معاينات / متابعات مجدولة" icon={<Calendar size={18}/>} chip={scheduledFollowups!=null&&clientsOk&&clientsOk.total>0?`${Math.round((scheduledFollowups/clientsOk.total)*100)}% من العملاء`:undefined}/>
-     <KpiCard value={fmt(completedDeals)} label="المعاملات / الصفقات المكتملة" icon={<CheckCircle2 size={18}/>} chip={signedCount!=null&&clientsOk&&clientsOk.total>0?`${Math.round((signedCount/clientsOk.total)*100)}% وقع/أفرغ`:undefined}/>
-     <KpiCard value={fmt(dash?.total??newClientsCount)} label="عدد العملاء" icon={<ClipboardList size={18}/>} chip={dash?`${fmt(dash.interested)} مهتم`:clientsOk?`${fmt(clientsOk.interested)} مهتم`:undefined}/>
-     <KpiCard value={fmt(propsOk?.total)} label="عقارات الكتالوج" icon={<Building2 size={18}/>} chip={propsOk?`${fmt(propsOk.byNeighborhood.length)} أحياء`:undefined}/>
+     <KpiCard value={fmt(employeesCount)} label="عدد الموظفين" icon={<Users size={18}/>} chip={stateData?.filters.employee?'الموظف المحدد':employeesCount!=null?`ضمن الفلاتر`:'—'}/>
+     <KpiCard value={fmt(scheduledFollowups)} label="معاينات / متابعات مجدولة" icon={<Calendar size={18}/>} href={dash?clientListHref({scheduled:'1'}):undefined} chip={dash&&dash.total>0&&scheduledFollowups!=null?`${Math.round((scheduledFollowups/dash.total)*100)}% من العملاء المفلترين`:undefined}/>
+     <KpiCard value={fmt(completedDeals)} label="المعاملات / الصفقات المكتملة" icon={<CheckCircle2 size={18}/>} href={dash?clientListHref({stageGroup:'signed'}):undefined} chip={dash&&dash.total>0&&completedDeals!=null?`${Math.round((completedDeals/dash.total)*100)}% وقع عقد أو إفراغ`:undefined}/>
+     <KpiCard value={fmt(clientsCount)} label="عدد العملاء" icon={<ClipboardList size={18}/>} href={dash?clientListHref({}):undefined} chip={dash?`${fmt(dash.interested)} مهتم`:undefined}/>
+     <KpiCard value={fmt(propsOk?.total)} label="عقارات الكتالوج" icon={<Building2 size={18}/>} chip="غير متأثر بالفلاتر"/>
     </div>
 
     <div className="reports-charts" aria-label="رسوم بيانية">
@@ -303,7 +290,7 @@ export default function ReportsPanel({role}:{role:string}){
      </div>
 
      {neighborhoodBars.length>0?(
-      <HorizontalBars title="توزيع العقارات حسب الحي" items={neighborhoodBars}/>
+      <HorizontalBars title="توزيع العقارات حسب الحي — غير متأثر بالفلاتر" items={neighborhoodBars}/>
      ):(
       <ChartEmpty title="توزيع العقارات حسب الحي" hint="لا تتوفر بيانات أحياء في الكتالوج حالياً."/>
      )}

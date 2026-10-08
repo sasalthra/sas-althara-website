@@ -32,7 +32,7 @@ import {canToggleFeatured, compareClients, featuredControlsEnabled, isFeaturedVa
 import LeadBulkBar from './lead-bulk-bar';
 import NewLeadBadge from '@/components/new-lead-badge';
 import {canonicalStage, displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
-import {createdInPeriod, isInactiveLead, isOverdueFollowUp, isUnassignedNewWaiting, leadMatchesEmployee, leadMatchesSource, leadMatchesStage, leadMatchesStageGroup} from '@/lib/lead-cohorts';
+import {leadMatchesReportFilters} from '@/lib/lead-cohorts';
 import {displayLeadPhone, leadPhoneMatchesQuery} from '@/lib/phone';
 
 import {
@@ -179,6 +179,7 @@ export default function CRM({
   const listGroup = query.get('stageGroup') || '';
   const listFrom = query.get('from') || '';
   const listTo = query.get('to') || '';
+  const listScheduled = query.get('scheduled') === '1';
   const selectedStage = (() => {
     const raw = listStage || stageFilter;
     if (!raw) return '';
@@ -315,39 +316,25 @@ export default function CRM({
         return false;
       }
 
-      if ((listFrom || listTo) && !createdInPeriod(lead.created_at, listFrom, listTo)) {
+      if (!listStage && stageFilter && displayStage(lead.stage) !== stageFilter) {
         return false;
       }
 
-      if (listStage) {
-        if (!leadMatchesStage(lead.stage, listStage)) return false;
-      } else if (stageFilter && displayStage(lead.stage) !== stageFilter) {
-        return false;
-      }
-
-      if (listSource && !leadMatchesSource(lead.source, listSource, listSourceExact)) {
-        return false;
-      }
-
-      if ((listEmployee || listEmployeeName || listEmployeeUser) && !leadMatchesEmployee(lead, [listEmployee, listEmployeeName, listEmployeeUser])) {
-        return false;
-      }
-
-      if (listGroup && !leadMatchesStageGroup(lead.stage, lead.assigned_to, listGroup)) {
-        return false;
-      }
-
-      if (listOverdue && !isOverdueFollowUp(lead.follow_up, lead.stage, riyadhDayKey(new Date()))) {
-        return false;
-      }
-
-      if (listInactive && !isInactiveLead(lead.updated_at, lead.created_at, lead.stage, Date.now())) {
-        return false;
-      }
-
-      if (listWaiting && !isUnassignedNewWaiting(lead.stage, lead.assigned_to, lead.created_at, Date.now())) {
-        return false;
-      }
+      if (!leadMatchesReportFilters(lead, {
+        from: listFrom,
+        to: listTo,
+        stage: listStage,
+        source: listSource,
+        sourceExact: listSourceExact,
+        employeeTokens: [listEmployee, listEmployeeName, listEmployeeUser],
+        stageGroup: listGroup,
+        overdue: listOverdue,
+        inactive: listInactive,
+        waiting: listWaiting,
+        scheduled: listScheduled,
+        today: riyadhDayKey(new Date()),
+        nowMs: Date.now(),
+      })) return false;
 
       if (duplicateOnly && canReviewDuplicates && !duplicatePhoneSet.has(displayLeadPhone(lead.phone))) {
         return false;
