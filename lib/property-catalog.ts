@@ -76,16 +76,27 @@ function fromRow(row: Record<string, unknown>): CatalogProperty {
   };
 }
 
+const PUBLISHED_COLUMNS = 'id, title, price, area, beds, baths, city, address, type, purpose, street_width, facade, age, description, images, status';
+
+function publishedSelect(withPriceFrom: boolean) {
+  const columns = withPriceFrom ? PUBLISHED_COLUMNS.replace('price,', 'price, price_from,') : PUBLISHED_COLUMNS;
+  return `SELECT ${columns}
+         FROM site_properties WHERE ${asBinary('status')} = ${asBinary('?')} ORDER BY updated_at DESC, id DESC`;
+}
+
 async function readPublished(): Promise<CatalogProperty[]> {
   const base = staticCatalog();
   try {
-    const result = await crmDb()
-      .prepare(
-        `SELECT id, title, price, price_from, area, beds, baths, city, address, type, purpose, street_width, facade, age, description, images, status
-         FROM site_properties WHERE ${asBinary('status')} = ${asBinary('?')} ORDER BY updated_at DESC, id DESC`
-      )
-      .bind('published')
-      .all();
+    let result;
+    try {
+      result = await crmDb().prepare(publishedSelect(true)).bind('published').all();
+    } catch (error) {
+      if (!/price_from|unknown column|no such column|ER_BAD_FIELD_ERROR/i.test(error instanceof Error ? error.message : String(error))) {
+        throw error;
+      }
+      console.error('published catalog omitted price_from; the column is not on this database yet', error);
+      result = await crmDb().prepare(publishedSelect(false)).bind('published').all();
+    }
     const live = result.results.map(row => fromRow(row)).filter(item => item.id);
     const replaced = new Set(live.map(item => item.id));
     return [...live, ...base.filter(item => !replaced.has(item.id))];

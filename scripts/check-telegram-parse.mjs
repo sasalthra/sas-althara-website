@@ -435,6 +435,8 @@ try {
     ensureLeadSchema,
     resetLeadSchemaCache,
     lastTelegramSchemaError,
+    schemaDiagnostics,
+    AI_USAGE_DDL,
     SITE_PROPERTIES_DDL,
     TELEGRAM_SYNC_LOG_DDL,
     TELEGRAM_SEEN_CHATS_DDL,
@@ -518,6 +520,30 @@ try {
   }};
   await ensureLeadSchema(mysqlish);
   assert.equal(lastTelegramSchemaError(), null);
+  assert.match(AI_USAGE_DDL, /user_id VARCHAR\(160\)/);
+  assert.ok(160 * 4 + 13 * 4 < 767, 'ai_usage primary key stays under the 767-byte compact limit');
+  resetLeadSchemaCache();
+  const partialCalls = [];
+  const partial = {async execute(sql) {
+    const text = String(sql).trim();
+    partialCalls.push(text);
+    if (text.startsWith('CREATE TABLE IF NOT EXISTS telegram_messages')) {
+      const error = new Error('Specified key was too long; max key length is 767 bytes');
+      error.code = 'ER_TOO_LONG_KEY';
+      error.errno = 1071;
+      throw error;
+    }
+    if (text === 'SHOW COLUMNS FROM site_properties') return [[{Field: 'id', Type: 'varchar(191)'}]];
+    if (text.startsWith('SHOW')) return [[]];
+    if (text.startsWith('SELECT')) return [[]];
+    return [{affectedRows: 0}];
+  }};
+  const partialState = await ensureLeadSchema(partial);
+  assert.equal(typeof partialState.featured, 'boolean');
+  assert.ok(partialCalls.some(sql => sql.startsWith('CREATE TABLE IF NOT EXISTS telegram_redirects')));
+  assert.ok(partialCalls.some(sql => sql.includes('price_from')));
+  assert.ok(lastTelegramSchemaError());
+  assert.ok(schemaDiagnostics().some(issue => /1071|ER_TOO_LONG_KEY|too long/i.test(issue.detail)));
   assert.ok(mysqlCalls.some(sql => sql.startsWith('CREATE TABLE IF NOT EXISTS site_properties') && /VARCHAR\(191\)/.test(sql)));
   assert.ok(mysqlCalls.some(sql => sql.startsWith('CREATE TABLE IF NOT EXISTS telegram_sync_log') && /VARCHAR\(40\)/.test(sql)));
   assert.ok(mysqlCalls.some(sql => sql.startsWith('CREATE TABLE IF NOT EXISTS telegram_seen_chats')));

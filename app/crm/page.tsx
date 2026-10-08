@@ -1,4 +1,4 @@
-import {getServerSession} from 'next-auth';
+import {getServerSession, type Session} from 'next-auth';
 
 import {authOptions} from '@/lib/auth';
 import {publicAiEnv} from '@/lib/ai-env.server';
@@ -14,7 +14,12 @@ type CrmRole =
   | 'field';
 
 export default async function CrmPage() {
-  const session = await getServerSession(authOptions);
+  let session: Session | null = null;
+  try {
+    session = await getServerSession(authOptions);
+  } catch (error) {
+    console.error('crm session was not read', error);
+  }
 
   if (!session?.user) {
     return (

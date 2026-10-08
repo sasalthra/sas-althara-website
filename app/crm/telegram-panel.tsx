@@ -44,6 +44,7 @@ type Status = {
   seenChats: SeenChat[];
   lastChat: SeenChat | null;
   dbError: string | null;
+  schemaIssues?: {area: string; statement: string; detail: string}[];
 };
 
 const fieldClass = 'w-full rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-black';
@@ -209,6 +210,16 @@ export default function TelegramPanel() {
           ) : null}
           {status.webhook?.allowedUpdates?.length ? <p>أنواع التحديثات: {status.webhook.allowedUpdates.join('، ')}</p> : null}
           {status.webhookError ? <p>تعذر الويب هوك: {status.webhookError}</p> : null}
+          {status.schemaIssues?.length ? (
+            <div>
+              <p>تحذيرات تهيئة الجداول (الصفحة تبقى تعمل):</p>
+              <ul className="list-disc pe-5">
+                {status.schemaIssues.slice(0, 8).map((issue, index) => (
+                  <li key={`${issue.area}-${index}`}>{issue.area}: {issue.detail}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {status.dbError ? <p>{status.dbError}</p> : (
             <>
               <p>آخر تحديث وصل من: {status.lastChat ? `${status.lastChat.title || 'بدون عنوان'} — ${status.lastChat.chatId}${status.lastChat.chatType ? ` (${status.lastChat.chatType})` : ''}` : 'لم يصل أي تحديث بعد'}</p>

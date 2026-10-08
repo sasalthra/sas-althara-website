@@ -66,7 +66,7 @@ import {
 } from './stage-notes';
 import {sheetSourceKey} from './sheet-keys';
 import {cleanupSheetSyncDuplicates, type SqlRunner} from './sheet-duplicate-cleanup';
-import {TIKTOK_META_TAB_GID, snapSheetSeed, tiktokSheetSeed} from './sheet-sync-config';
+import {TIKTOK_META_TAB_GID, publicSyncError, snapSheetSeed, tiktokSheetSeed} from './sheet-sync-config';
 
 export type LeadSchemaState = {featured: boolean};
 
@@ -80,11 +80,37 @@ let sheetReady: Promise<void> | null = null;
 let telegramReady: Promise<void> | null = null;
 let telegramSchemaError: unknown = null;
 
+export type SchemaDiagnostic = {
+  area: string;
+  statement: string;
+  detail: string;
+};
+
+const schemaIssues: SchemaDiagnostic[] = [];
+const SCHEMA_ISSUE_LIMIT = 40;
+
+/** Redacted per-statement failures from the last schema pass. Safe to show an admin. */
+export function schemaDiagnostics(): SchemaDiagnostic[] {
+  return schemaIssues.map(issue => ({...issue}));
+}
+
+function recordSchemaIssue(area: string, statement: string, error: unknown) {
+  const detail = publicSyncError(error);
+  console.error(`${area} statement failed`, detail);
+  if (schemaIssues.length >= SCHEMA_ISSUE_LIMIT) return;
+  schemaIssues.push({
+    area,
+    statement: statement.replace(/\s+/g, ' ').trim().slice(0, 180),
+    detail,
+  });
+}
+
 export function resetLeadSchemaCache() {
   cached = null;
   sheetReady = null;
   telegramReady = null;
   telegramSchemaError = null;
+  schemaIssues.length = 0;
 }
 
 export function lastTelegramSchemaError() {
@@ -110,6 +136,25 @@ async function defaultExecutor(): Promise<SqlExecutor> {
 async function run(executor: SqlExecutor, sql: string, values: readonly unknown[] = []) {
   if (!values.length && executor.query) return executor.query(sql);
   return executor.execute(sql, values);
+}
+
+/**
+ * Metadata locks default to about a year. An ALTER from this repair would
+ * then hold the cached ensureLeadSchema promise and every later request
+ * until the host turns the wait into the generic server error page.
+ * SQLite and accounts without SESSION privilege skip the setting.
+ */
+async function relaxSessionLocks(executor: SqlExecutor) {
+  for (const sql of [
+    'SET SESSION lock_wait_timeout = 8',
+    'SET SESSION innodb_lock_wait_timeout = 8',
+  ]) {
+    try {
+      await run(executor, sql);
+    } catch {
+      // Not MySQL, or the account cannot change session timeouts.
+    }
+  }
 }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -344,7 +389,7 @@ async function ensureColumn(executor: SqlExecutor, table: string, column: string
     await run(executor, `ALTER TABLE ${table} ADD COLUMN \`${column}\` ${definition}`);
   } catch (error) {
     if (/duplicate|already exists|ER_DUP_FIELDNAME/i.test(messageOf(error))) return;
-    console.error(`${table}.${column} was not added`, error);
+    recordSchemaIssue(table, `ALTER TABLE ${table} ADD COLUMN \`${column}\``, error);
   }
 }
 
@@ -436,37 +481,47 @@ export const TELEGRAM_SOURCE_INDEX_DDL = 'CREATE UNIQUE INDEX IF NOT EXISTS site
 export const TELEGRAM_SOURCE_INDEX_ALTER = 'ALTER TABLE site_properties ADD UNIQUE INDEX site_properties_tg_key (telegram_source_hash)';
 
 /**
- * Creates the published-property table, the sync log, and the chats the bot has
- * seen. Fills any telegram source columns an older process created the table
- * without. Idempotent. Throws the first table-creation error so the admin page
- * can show its code; a failed attempt is not cached by ensureTelegramTables.
+ * Creates the published-property table, the sync log, the chats the bot has
+ * seen, stored messages, and fragment redirects. Each statement is isolated:
+ * a failure is recorded and the next statement still runs, so a telegram_messages
+ * error does not skip site_properties.price_from. Throws the first table-creation
+ * error so the admin page can show its code; a failed attempt is not cached by
+ * ensureTelegramTables. Callers that render a page catch that throw.
  */
 async function ensureTelegramSchema(executor: SqlExecutor) {
   let fatal: unknown = null;
-  const fail = (error: unknown) => {
-    console.error('telegram table was not created', error);
-    if (!fatal) fatal = error;
-  };
-  for (const sql of [SITE_PROPERTIES_DDL, TELEGRAM_SYNC_LOG_DDL, TELEGRAM_SEEN_CHATS_DDL, TELEGRAM_MESSAGES_DDL, TELEGRAM_REDIRECTS_DDL]) {
+  const created = new Set<string>();
+  const tables: [string, string][] = [
+    ['site_properties', SITE_PROPERTIES_DDL],
+    ['telegram_sync_log', TELEGRAM_SYNC_LOG_DDL],
+    ['telegram_seen_chats', TELEGRAM_SEEN_CHATS_DDL],
+    ['telegram_messages', TELEGRAM_MESSAGES_DDL],
+    ['telegram_redirects', TELEGRAM_REDIRECTS_DDL],
+  ];
+  for (const [name, sql] of tables) {
     try {
       await run(executor, sql);
+      created.add(name);
     } catch (error) {
-      fail(error);
+      recordSchemaIssue('telegram', sql, error);
+      if (!fatal) fatal = error;
     }
   }
-  if (!fatal) {
+  if (created.has('site_properties')) {
     for (const [column, definition] of PROPERTY_COLUMNS) {
       await ensureColumn(executor, 'site_properties', column, definition);
     }
     try {
       await ensureUniqueIndex(executor, TELEGRAM_SOURCE_INDEX_DDL, TELEGRAM_SOURCE_INDEX_ALTER, 'telegram');
     } catch (error) {
-      console.error('telegram source index was not added', error);
+      recordSchemaIssue('telegram', TELEGRAM_SOURCE_INDEX_ALTER, error);
     }
+  }
+  if (created.has('telegram_messages')) {
     try {
       await ensureUniqueIndex(executor, TELEGRAM_MESSAGES_INDEX_DDL, TELEGRAM_MESSAGES_INDEX_ALTER, 'telegram messages');
     } catch (error) {
-      console.error('telegram message index was not added', error);
+      recordSchemaIssue('telegram', TELEGRAM_MESSAGES_INDEX_ALTER, error);
     }
   }
   telegramSchemaError = fatal;
@@ -677,7 +732,18 @@ async function repairStages(executor: SqlExecutor) {
 /**
  * Provider settings are written on first save. Installations that never ran
  * 002_expansion.sql otherwise fail that save with a generic error.
+ * The usage primary key stays under the 767-byte utf8mb4 limit on MySQL 5.7
+ * compact row format: VARCHAR(160) + CHAR(13) is 692 bytes. VARCHAR(255) is
+ * 1072 bytes and is ER_TOO_LONG_KEY (1071). CREATE IF NOT EXISTS leaves a
+ * table that already exists unchanged.
  */
+export const AI_USAGE_DDL = `CREATE TABLE IF NOT EXISTS ai_usage (
+  user_id VARCHAR(160) NOT NULL,
+  hour_key CHAR(13) NOT NULL,
+  requests INT NOT NULL,
+  PRIMARY KEY (user_id, hour_key)
+)`;
+
 async function ensureAiSchema(executor: SqlExecutor) {
   try {
     await run(
@@ -691,24 +757,16 @@ async function ensureAiSchema(executor: SqlExecutor) {
       )`
     );
   } catch (error) {
-    console.error('ai_settings table was not created', error);
+    recordSchemaIssue('ai', 'ai_settings', error);
     return;
   }
   await ensureColumn(executor, 'ai_settings', 'provider', 'VARCHAR(30) NULL');
   await ensureColumn(executor, 'ai_settings', 'model', 'VARCHAR(100) NULL');
   await ensureColumn(executor, 'ai_settings', 'updated_at', 'VARCHAR(24) NULL');
   try {
-    await run(
-      executor,
-      `CREATE TABLE IF NOT EXISTS ai_usage (
-        user_id VARCHAR(255) NOT NULL,
-        hour_key CHAR(13) NOT NULL,
-        requests INT NOT NULL,
-        PRIMARY KEY (user_id, hour_key)
-      )`
-    );
+    await run(executor, AI_USAGE_DDL);
   } catch (error) {
-    console.error('ai_usage table was not created', error);
+    recordSchemaIssue('ai', 'ai_usage', error);
   }
 }
 
@@ -1012,10 +1070,11 @@ async function ensureFinanceCommissions(executor: SqlExecutor) {
 }
 
 async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
+  await relaxSessionLocks(executor);
   try {
     await ensureSheetSchema(executor);
   } catch (error) {
-    console.error('sheet sync schema check failed', error);
+    recordSchemaIssue('sheet', 'crm_sheet_*', error);
   }
   try {
     await ensureTelegramSchema(executor);
