@@ -16,6 +16,12 @@
  * unparsed post stores NULL, and telegram_chat_id / telegram_message_id /
  * telegram_media_group_id are added the same once-per-process way. The repair
  * never drops data and a failure here does not block the leads schema.
+ * site_properties.id and telegram_sync_log.id are VARCHAR primary keys.
+ * A TEXT/BLOB primary or unique key is ER_BLOB_KEY_WITHOUT_LENGTH (1170) on
+ * MySQL 5.7, MySQL 8, and MariaDB 10.4, and that failure used to return before
+ * telegram_sync_log existed, so the admin sync page could not read the log.
+ * The source uniqueness is telegram_source_hash CHAR(64), a SHA-256, not a
+ * TEXT column. JSON columns are not used. A failed create is not cached.
  * Existing lead phones are rewritten to the Saudi local form 05XXXXXXXX once
  * per process. A newer lead created by the sheet sync is then deleted when an
  * earlier lead has the same normalized phone (see lib/sheet-duplicate-cleanup.ts).
@@ -71,10 +77,18 @@ export type SqlExecutor = {
 
 let cached: Promise<LeadSchemaState> | null = null;
 let sheetReady: Promise<void> | null = null;
+let telegramReady: Promise<void> | null = null;
+let telegramSchemaError: unknown = null;
 
 export function resetLeadSchemaCache() {
   cached = null;
   sheetReady = null;
+  telegramReady = null;
+  telegramSchemaError = null;
+}
+
+export function lastTelegramSchemaError() {
+  return telegramSchemaError;
 }
 
 export function ensureLeadSchema(executor?: SqlExecutor): Promise<LeadSchemaState> {
@@ -290,11 +304,12 @@ const PROPERTY_COLUMNS: [string, string][] = [
   ['images', 'TEXT NULL'],
   ['image_meta', 'TEXT NULL'],
   ['status', 'TEXT NULL'],
-  ['telegram_chat_id', 'TEXT NULL'],
-  ['telegram_message_id', 'TEXT NULL'],
-  ['telegram_media_group_id', 'TEXT NULL'],
+  ['telegram_chat_id', 'VARCHAR(64) NULL'],
+  ['telegram_message_id', 'VARCHAR(32) NULL'],
+  ['telegram_media_group_id', 'VARCHAR(64) NULL'],
   ['telegram_message_ids', 'TEXT NULL'],
-  ['telegram_source_key', 'TEXT NULL'],
+  ['telegram_source_key', 'VARCHAR(255) NULL'],
+  ['telegram_source_hash', 'CHAR(64) NULL'],
   ['created_at', 'TEXT NULL'],
   ['updated_at', 'TEXT NULL'],
 ];
@@ -333,77 +348,108 @@ async function ensureColumn(executor: SqlExecutor, table: string, column: string
 }
 
 /**
- * Creates the published-property table and fills any telegram source columns
- * that an older process created the table without. Idempotent.
+ * VARCHAR keys stay inside the 767-byte utf8mb4 limit on MySQL 5.7.
+ * id is VARCHAR(191) (764 bytes). The unique source key is CHAR(64), not the
+ * raw telegram_source_key string and not TEXT (error 1170). No JSON column.
+ * MySQL has no CREATE INDEX IF NOT EXISTS; the ALTER form is the fallback.
+ * A failure of one table does not skip the others.
+ */
+export const SITE_PROPERTIES_DDL = `CREATE TABLE IF NOT EXISTS site_properties (
+  id VARCHAR(191) NOT NULL PRIMARY KEY,
+  title TEXT NULL,
+  price REAL NULL,
+  area REAL NULL,
+  beds TEXT NULL,
+  baths TEXT NULL,
+  city TEXT NULL,
+  address TEXT NULL,
+  type TEXT NULL,
+  purpose TEXT NULL,
+  street_width TEXT NULL,
+  facade TEXT NULL,
+  age TEXT NULL,
+  description TEXT NULL,
+  images TEXT NULL,
+  image_meta TEXT NULL,
+  status TEXT NULL,
+  telegram_chat_id VARCHAR(64) NULL,
+  telegram_message_id VARCHAR(32) NULL,
+  telegram_media_group_id VARCHAR(64) NULL,
+  telegram_message_ids TEXT NULL,
+  telegram_source_key VARCHAR(255) NULL,
+  telegram_source_hash CHAR(64) NULL,
+  created_at VARCHAR(40) NULL,
+  updated_at VARCHAR(40) NULL
+)`;
+
+export const TELEGRAM_SYNC_LOG_DDL = `CREATE TABLE IF NOT EXISTS telegram_sync_log (
+  id VARCHAR(40) NOT NULL PRIMARY KEY,
+  chat_id VARCHAR(64) NULL,
+  message_id VARCHAR(32) NULL,
+  media_group_id VARCHAR(64) NULL,
+  property_id VARCHAR(191) NULL,
+  action VARCHAR(32) NULL,
+  note TEXT NULL,
+  created_at VARCHAR(40) NULL
+)`;
+
+export const TELEGRAM_SEEN_CHATS_DDL = `CREATE TABLE IF NOT EXISTS telegram_seen_chats (
+  chat_id VARCHAR(64) NOT NULL PRIMARY KEY,
+  title TEXT NULL,
+  chat_type VARCHAR(32) NULL,
+  last_message_id VARCHAR(32) NULL,
+  last_seen_at VARCHAR(40) NULL
+)`;
+
+export const TELEGRAM_SOURCE_INDEX_DDL = 'CREATE UNIQUE INDEX IF NOT EXISTS site_properties_tg_key ON site_properties (telegram_source_hash)';
+export const TELEGRAM_SOURCE_INDEX_ALTER = 'ALTER TABLE site_properties ADD UNIQUE INDEX site_properties_tg_key (telegram_source_hash)';
+
+/**
+ * Creates the published-property table, the sync log, and the chats the bot has
+ * seen. Fills any telegram source columns an older process created the table
+ * without. Idempotent. Throws the first table-creation error so the admin page
+ * can show its code; a failed attempt is not cached by ensureTelegramTables.
  */
 async function ensureTelegramSchema(executor: SqlExecutor) {
-  try {
-    await run(
-      executor,
-      `CREATE TABLE IF NOT EXISTS site_properties (
-        id TEXT PRIMARY KEY,
-        title TEXT NULL,
-        price REAL NULL,
-        area REAL NULL,
-        beds TEXT NULL,
-        baths TEXT NULL,
-        city TEXT NULL,
-        address TEXT NULL,
-        type TEXT NULL,
-        purpose TEXT NULL,
-        street_width TEXT NULL,
-        facade TEXT NULL,
-        age TEXT NULL,
-        description TEXT NULL,
-        images TEXT NULL,
-        image_meta TEXT NULL,
-        status TEXT NULL,
-        telegram_chat_id TEXT NULL,
-        telegram_message_id TEXT NULL,
-        telegram_media_group_id TEXT NULL,
-        telegram_message_ids TEXT NULL,
-        telegram_source_key TEXT NULL,
-        created_at TEXT NULL,
-        updated_at TEXT NULL
-      )`
-    );
-  } catch (error) {
-    console.error('site_properties table was not created', error);
-    return;
-  }
-  for (const [column, definition] of PROPERTY_COLUMNS) {
-    await ensureColumn(executor, 'site_properties', column, definition);
-  }
-  try {
-    await run(executor, 'CREATE UNIQUE INDEX IF NOT EXISTS site_properties_tg_key ON site_properties (telegram_source_key)');
-  } catch (error) {
-    if (!/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(error))) {
-      try {
-        await run(executor, 'ALTER TABLE site_properties ADD UNIQUE INDEX site_properties_tg_key (telegram_source_key)');
-      } catch (fallback) {
-        if (!/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(fallback))) {
-          console.error('telegram source index was not added', fallback);
-        }
-      }
+  let fatal: unknown = null;
+  const fail = (error: unknown) => {
+    console.error('telegram table was not created', error);
+    if (!fatal) fatal = error;
+  };
+  for (const sql of [SITE_PROPERTIES_DDL, TELEGRAM_SYNC_LOG_DDL, TELEGRAM_SEEN_CHATS_DDL]) {
+    try {
+      await run(executor, sql);
+    } catch (error) {
+      fail(error);
     }
   }
-  try {
-    await run(
-      executor,
-      `CREATE TABLE IF NOT EXISTS telegram_sync_log (
-        id TEXT PRIMARY KEY,
-        chat_id TEXT NULL,
-        message_id TEXT NULL,
-        media_group_id TEXT NULL,
-        property_id TEXT NULL,
-        action TEXT NULL,
-        note TEXT NULL,
-        created_at TEXT NULL
-      )`
-    );
-  } catch (error) {
-    console.error('telegram_sync_log table was not created', error);
+  if (!fatal) {
+    for (const [column, definition] of PROPERTY_COLUMNS) {
+      await ensureColumn(executor, 'site_properties', column, definition);
+    }
+    try {
+      await ensureUniqueIndex(executor, TELEGRAM_SOURCE_INDEX_DDL, TELEGRAM_SOURCE_INDEX_ALTER, 'telegram');
+    } catch (error) {
+      console.error('telegram source index was not added', error);
+    }
   }
+  telegramSchemaError = fatal;
+  if (fatal) throw fatal;
+}
+
+/** Creates the telegram tables. A failure is not cached, so the next call tries again. */
+export function ensureTelegramTables(executor?: SqlExecutor): Promise<void> {
+  if (telegramReady) return telegramReady;
+  let pending: Promise<void>;
+  pending = (async () => {
+    const ex = executor ?? (await defaultExecutor());
+    await ensureTelegramSchema(ex);
+  })();
+  telegramReady = pending;
+  return pending.catch(error => {
+    if (telegramReady === pending) telegramReady = null;
+    throw error;
+  });
 }
 
 function runnerFromExecutor(executor: SqlExecutor): SqlRunner {
@@ -691,7 +737,7 @@ export const SHEET_ROW_INDEX_ALTER = 'ALTER TABLE crm_sheet_rows ADD UNIQUE INDE
 export const SHEET_SOURCE_INDEX_DDL = 'CREATE UNIQUE INDEX IF NOT EXISTS crm_sheet_sources_sheet_key ON crm_sheet_sources (sheet_key)';
 export const SHEET_SOURCE_INDEX_ALTER = 'ALTER TABLE crm_sheet_sources ADD UNIQUE INDEX crm_sheet_sources_sheet_key (sheet_key)';
 
-async function ensureUniqueIndex(executor: SqlExecutor, createSql: string, alterSql: string) {
+async function ensureUniqueIndex(executor: SqlExecutor, createSql: string, alterSql: string, label = 'sheet') {
   try {
     await run(executor, createSql);
   } catch (error) {
@@ -700,7 +746,7 @@ async function ensureUniqueIndex(executor: SqlExecutor, createSql: string, alter
       await run(executor, alterSql);
     } catch (fallback) {
       if (/already exists|duplicate|ER_DUP_KEYNAME/i.test(messageOf(fallback))) return;
-      console.error('sheet index was not added', fallback);
+      console.error(`${label} index was not added`, fallback);
       throw fallback;
     }
   }
@@ -937,7 +983,9 @@ async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
   }
   try {
     await ensureTelegramSchema(executor);
+    telegramReady = Promise.resolve();
   } catch (error) {
+    telegramSchemaError = error;
     console.error('telegram property schema check failed', error);
   }
   try {

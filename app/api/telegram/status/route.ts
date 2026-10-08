@@ -1,6 +1,8 @@
 import {actor, endpoint, reply} from '@/lib/secure-api';
 import {publicSiteOrigin, safeTelegramError, telegramMethod} from '@/lib/telegram-bot';
-import {recentTelegramSync} from '@/lib/telegram-sync';
+import {lastTelegramSchemaError} from '@/lib/lead-schema';
+import {telegramDbError} from '@/lib/telegram-sql';
+import {listTelegramChats, recentTelegramSync} from '@/lib/telegram-sync';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,12 +47,14 @@ export async function GET(req: Request) {
       }
     }
     let recent: Awaited<ReturnType<typeof recentTelegramSync>> = [];
+    let seenChats: Awaited<ReturnType<typeof listTelegramChats>> = [];
     let dbError: string | null = null;
     try {
       recent = await recentTelegramSync(40);
+      seenChats = await listTelegramChats(30);
     } catch (error) {
       console.error('telegram status log failed', error);
-      dbError = 'تعذر قراءة سجل المزامنة. تأكد من اتصال MySQL.';
+      dbError = telegramDbError(lastTelegramSchemaError() ?? error);
     }
     return reply({
       tokenConfigured,
@@ -63,6 +67,8 @@ export async function GET(req: Request) {
       webhook,
       webhookError,
       recent,
+      seenChats,
+      lastChat: seenChats[0] ?? null,
       dbError,
     });
   });

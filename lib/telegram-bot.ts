@@ -75,7 +75,7 @@ export async function registerWebhook(req: Request) {
   await telegramMethod('setWebhook', {
     url,
     secret_token: secret,
-    allowed_updates: ['channel_post', 'edited_channel_post'],
+    allowed_updates: ['channel_post', 'edited_channel_post', 'message', 'edited_message'],
     drop_pending_updates: false,
   });
   return {ok: true as const, url};

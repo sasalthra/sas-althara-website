@@ -1,10 +1,33 @@
-/** Bot API channel ids look like -100 plus the id Telegram Desktop exports. */
+import {createHash} from 'node:crypto';
+
+/**
+ * Bot API channel and supergroup ids look like -100 plus the bare id Telegram Desktop exports.
+ * A basic group id is already negative and does not use the -100 prefix; it is kept as written.
+ */
 export function normalizeChatId(id: string): string {
   const value = id.trim();
   if (!value) return '';
   if (/^-100\d+$/.test(value)) return value;
   if (/^\d+$/.test(value)) return `-100${value}`;
   return value;
+}
+
+const BASIC_GROUP_TYPES = new Set(['private_group', 'public_group']);
+
+/** Desktop export id. Supergroups and channels use -100. Basic groups use a single leading minus. */
+export function exportChatId(id: string, type = ''): string {
+  const value = id.trim();
+  if (BASIC_GROUP_TYPES.has(type)) {
+    if (/^-\d+$/.test(value) && !/^-100\d+$/.test(value)) return value;
+    const digits = value.replace(/\D/g, '');
+    return digits ? `-${digits}` : '';
+  }
+  return normalizeChatId(value);
+}
+
+/** SHA-256 hex. The unique key is this column, not the raw source string (MySQL 5.7 index limit and TEXT key error 1170). */
+export function sourceKeyHash(sourceKey: string): string {
+  return createHash('sha256').update(sourceKey, 'utf8').digest('hex');
 }
 
 export function sourceKeyFor(chatId: string, messageId: string, mediaGroupId: string | null): string {

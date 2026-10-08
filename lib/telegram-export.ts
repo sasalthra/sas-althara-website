@@ -95,3 +95,44 @@ export function combinedText(messages: ExportMessage[]): string {
   if (messages.length === 1) return messageText(messages[0] as ExportMessage);
   return messages.map(messageText).filter(part => part.trim()).join('\n\n');
 }
+
+export type ExportChat = {
+  id: string;
+  type: string;
+  name: string;
+  messages: ExportMessage[];
+};
+
+const SUPPORTED_EXPORT_TYPES = new Set([
+  '',
+  'public_channel',
+  'private_channel',
+  'public_supergroup',
+  'private_supergroup',
+  'public_group',
+  'private_group',
+]);
+
+/** Telegram Desktop single-chat export and the chats.list wrapper. Groups use private_supergroup / public_supergroup. */
+export function supportedExportType(type: string) {
+  return SUPPORTED_EXPORT_TYPES.has(type);
+}
+
+export function readExportChats(value: unknown): ExportChat[] {
+  if (Array.isArray(value)) return [{id: '', type: '', name: '', messages: value as ExportMessage[]}];
+  if (!value || typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  if (Array.isArray(record.messages)) {
+    return [{
+      id: record.id == null ? '' : String(record.id),
+      type: typeof record.type === 'string' ? record.type : '',
+      name: typeof record.name === 'string' ? record.name : '',
+      messages: record.messages as ExportMessage[],
+    }];
+  }
+  const chats = record.chats;
+  if (chats && typeof chats === 'object' && Array.isArray((chats as {list?: unknown}).list)) {
+    return ((chats as {list: unknown[]}).list).flatMap(item => readExportChats(item));
+  }
+  return [];
+}

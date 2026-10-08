@@ -13,6 +13,14 @@ type SyncRow = {
   messageId: string | null;
 };
 
+type SeenChat = {
+  chatId: string;
+  title: string | null;
+  chatType: string | null;
+  lastMessageId: string | null;
+  lastSeenAt: string | null;
+};
+
 type Status = {
   tokenConfigured: boolean;
   secretConfigured: boolean;
@@ -24,6 +32,8 @@ type Status = {
   webhook: {url: string; pendingUpdateCount: number; lastErrorMessage: string | null; lastErrorDate: number | null; allowedUpdates: string[]} | null;
   webhookError: string | null;
   recent: SyncRow[];
+  seenChats: SeenChat[];
+  lastChat: SeenChat | null;
   dbError: string | null;
 };
 
@@ -100,12 +110,15 @@ export default function TelegramPanel() {
     <section dir="rtl" className="panel space-y-4 text-black">
       <h2 className="text-black">مزامنة التليجرام</h2>
       <p className="text-black">
-        عروض القناة تُنشر مباشرة على الموقع، وليست مسودات. أنشئ بوتًا عند @BotFather بالأمر /newbot، ثم أضفه مشرفًا في قناة العروض.
+        عروض القناة أو الجروب تُنشر مباشرة على الموقع، وليست مسودات. أنشئ بوتًا عند @BotFather بالأمر /newbot.
+        للقناة أضف البوت مشرفًا حتى تصل المنشورات. للجروب أوقف وضع الخصوصية من @BotFather بالأمر /setprivacy ثم Disable، أو اجعل البوت مشرفًا، وإلا لن تصله رسائل الأعضاء.
         في متغيرات Hostinger ضع TELEGRAM_BOT_TOKEN وTELEGRAM_WEBHOOK_SECRET (8 أحرف على الأقل من الإنجليزية والأرقام و _ و -)،
-        واختياريًا TELEGRAM_CHANNEL_ID مثل -100xxxxxxxxxx لقبول قناة واحدة. تأكد أن NEXTAUTH_URL هو https://sasalthra.sa ثم اضغط تسجيل الويب هوك.
+        واختياريًا TELEGRAM_CHANNEL_ID لمعرّف قناة أو جروب واحد مثل -100xxxxxxxxxx. تأكد أن NEXTAUTH_URL هو https://sasalthra.sa ثم اضغط تسجيل الويب هوك.
+        بعد هذا التحديث سجّل الويب هوك مرة أخرى ليستقبل رسائل الجروب.
       </p>
       <p className="text-black">
-        لاستيراد السجل: من Telegram Desktop افتح القناة، ثم النقاط الثلاث، ثم Export chat history، واختر JSON مع الصور.
+        لاستيراد السجل: من Telegram Desktop افتح القناة أو الجروب، ثم النقاط الثلاث، ثم Export chat history، واختر JSON مع الصور.
+        التصدير يقبل قناة أو جروب من نوع private_supergroup أو public_supergroup.
         ارفع result.json أو أرشيفًا مضغوطًا يضم result.json ومجلد photos. حد الرفع على Hostinger غالبًا حوالي 128 ميجابايت عبر الوسيط
         (وقد يختلف حتى 256 ميجابايت حسب الخطة). إن كان الأرشيف أكبر، ارفع JSON وحده أو قسّم الصور. القراءة تتم على دفعات من القرص.
       </p>
@@ -122,7 +135,7 @@ export default function TelegramPanel() {
         <div className="space-y-2 rounded-lg border border-[#d1d5db] bg-white p-3 text-black">
           <p>رمز البوت: {flag(status.tokenConfigured)}{status.bot?.username ? ` — @${status.bot.username}` : ''}</p>
           <p>سر الويب هوك: {flag(status.secretConfigured)}</p>
-          <p>القناة المقبولة: {status.channelId || 'كل القنوات التي يديرها البوت'}</p>
+          <p>القناة أو الجروب المقبول: {status.channelId || 'كل القنوات والجروبات التي يراها البوت'}</p>
           <p>رابط الموقع: {status.siteUrl || 'غير معروف — ضع NEXTAUTH_URL'}</p>
           <p>مسار الاستقبال: {status.webhookPath}</p>
           {status.botError ? <p>تعذر البوت: {status.botError}</p> : null}
@@ -132,8 +145,21 @@ export default function TelegramPanel() {
               {status.webhook.lastErrorMessage ? ` — آخر خطأ: ${status.webhook.lastErrorMessage}` : ''}
             </p>
           ) : null}
+          {status.webhook?.allowedUpdates?.length ? <p>أنواع التحديثات: {status.webhook.allowedUpdates.join('، ')}</p> : null}
           {status.webhookError ? <p>تعذر الويب هوك: {status.webhookError}</p> : null}
-          {status.dbError ? <p>{status.dbError}</p> : null}
+          {status.dbError ? <p>{status.dbError}</p> : (
+            <>
+              <p>آخر تحديث وصل من: {status.lastChat ? `${status.lastChat.title || 'بدون عنوان'} — ${status.lastChat.chatId}${status.lastChat.chatType ? ` (${status.lastChat.chatType})` : ''}` : 'لم يصل أي تحديث بعد'}</p>
+              <div>
+                <p>المحادثات التي رآها البوت:</p>
+                <ul className="list-disc pe-5">
+                  {status.seenChats?.length ? status.seenChats.map(chat => (
+                    <li key={chat.chatId}>{chat.title || 'بدون عنوان'} — {chat.chatId}{chat.chatType ? ` — ${chat.chatType}` : ''}</li>
+                  )) : <li>لا توجد محادثات بعد</li>}
+                </ul>
+              </div>
+            </>
+          )}
         </div>
       ) : null}
       <form className="space-y-2" onSubmit={event => event.preventDefault()}>

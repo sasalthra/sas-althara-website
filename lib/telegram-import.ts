@@ -7,8 +7,8 @@ import {pipeline} from 'node:stream/promises';
 import Busboy from 'busboy';
 import yauzl from 'yauzl';
 import type {Entry, ZipFile} from 'yauzl';
-import {combinedText, groupExportMessages, messagePhotoPaths, messageText, type ExportMessage} from './telegram-export';
-import {normalizeChatId, sourceKeyFor} from './telegram-ids';
+import {combinedText, groupExportMessages, messagePhotoPaths, messageText, readExportChats, supportedExportType, type ExportChat, type ExportMessage} from './telegram-export';
+import {exportChatId, sourceKeyFor} from './telegram-ids';
 import {mediaTarget} from './telegram-media';
 import {publishTelegramOffer, recordTelegramEvent} from './telegram-sync';
 import type {StoredImage} from './telegram-media';
@@ -92,19 +92,20 @@ function findPhoto(entries: Map<string, Entry>, relative: string) {
   return null;
 }
 
-function exportRoot(value: unknown) {
-  if (Array.isArray(value)) return {id: '', messages: value as ExportMessage[]};
-  if (!value || typeof value !== 'object' || !Array.isArray((value as {messages?: unknown}).messages)) {
-    throw new ImportError('ملف JSON لا يحتوي قائمة messages. صدّر السجل من تيليجرام بصيغة JSON.');
+function chatsFromExport(value: unknown): ExportChat[] {
+  const all = readExportChats(value);
+  if (!all.length) throw new ImportError('ملف JSON لا يحتوي قائمة messages. صدّر السجل من تيليجرام بصيغة JSON.');
+  const chats = all.filter(chat => supportedExportType(chat.type));
+  if (!chats.length) {
+    throw new ImportError('ملف التصدير ليس قناة أو جروب. الأنواع المقبولة تشمل private_supergroup و public_supergroup.');
   }
-  const root = value as {id?: unknown; messages: ExportMessage[]};
-  return {id: root.id == null ? '' : String(root.id), messages: root.messages};
+  return chats;
 }
 
-async function publishGroups(root: {id: string; messages: ExportMessage[]}, loadPhoto: (relative: string, messageId: string) => Promise<StoredImage | null>) {
+async function publishGroups(root: ExportChat, loadPhoto: (relative: string, messageId: string) => Promise<StoredImage | null>) {
   const summary: ImportSummary = {created: 0, updated: 0, skipped: 0, errors: []};
-  const chatId = normalizeChatId(root.id);
-  if (!chatId) throw new ImportError('ملف التصدير بلا معرف القناة');
+  const chatId = exportChatId(root.id, root.type);
+  if (!chatId) throw new ImportError('ملف التصدير بلا معرف القناة أو الجروب');
   const usable: ExportMessage[] = [];
   for (const message of root.messages) {
     if (!message || message.type === 'service' || message.type === 'unsupported') {
@@ -167,26 +168,45 @@ async function publishGroups(root: {id: string; messages: ExportMessage[]}, load
   return summary;
 }
 
+function addSummary(total: ImportSummary, part: ImportSummary) {
+  total.created += part.created;
+  total.updated += part.updated;
+  total.skipped += part.skipped;
+  for (const error of part.errors) {
+    if (total.errors.length < 12) total.errors.push(error);
+  }
+}
+
 async function importJsonBuffer(bytes: Buffer, photos: Map<string, Entry> | null, zip: ZipFile | null) {
-  let root: ReturnType<typeof exportRoot>;
+  let chats: ExportChat[];
   try {
-    root = exportRoot(JSON.parse(bytes.toString('utf8')));
+    chats = chatsFromExport(JSON.parse(bytes.toString('utf8')));
   } catch (error) {
     if (error instanceof ImportError) throw error;
     throw new ImportError('تعذر قراءة JSON');
   }
-  return publishGroups(root, async (relative, messageId) => {
-    if (!photos || !zip) return null;
-    const entry = findPhoto(photos, relative);
-    if (!entry) return null;
-    const ext = (path.extname(relative).toLowerCase() || '.jpg').replace(/[^a-z0-9.]/g, '') || '.jpg';
-    const safeExt = ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext) ? (ext === '.jpeg' ? '.jpg' : ext) : '.jpg';
-    const filename = `tgx-${root.id.replace(/\D/g, '').slice(-12) || 'chat'}-${messageId}-${Buffer.from(relative).toString('hex').slice(0, 24)}${safeExt}`;
-    const target = mediaTarget(filename);
-    const wrote = await writeEntry(zip, entry, target.absolute, PHOTO_LIMIT);
-    if (!wrote) return null;
-    return {messageId, fileUniqueId: filename, path: target.publicPath};
-  });
+  const summary: ImportSummary = {created: 0, updated: 0, skipped: 0, errors: []};
+  for (const chat of chats) {
+    try {
+      const part = await publishGroups(chat, async (relative, messageId) => {
+        if (!photos || !zip) return null;
+        const entry = findPhoto(photos, relative);
+        if (!entry) return null;
+        const ext = (path.extname(relative).toLowerCase() || '.jpg').replace(/[^a-z0-9.]/g, '') || '.jpg';
+        const safeExt = ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext) ? (ext === '.jpeg' ? '.jpg' : ext) : '.jpg';
+        const filename = `tgx-${chat.id.replace(/\D/g, '').slice(-12) || 'chat'}-${messageId}-${Buffer.from(relative).toString('hex').slice(0, 24)}${safeExt}`;
+        const target = mediaTarget(filename);
+        const wrote = await writeEntry(zip, entry, target.absolute, PHOTO_LIMIT);
+        if (!wrote) return null;
+        return {messageId, fileUniqueId: filename, path: target.publicPath};
+      });
+      addSummary(summary, part);
+    } catch (error) {
+      if (error instanceof ImportError && chats.length === 1) throw error;
+      if (summary.errors.length < 12) summary.errors.push(error instanceof Error ? error.message : 'تعذر حفظ عرض');
+    }
+  }
+  return summary;
 }
 
 export async function importTelegramFile(filePath: string, filename: string) {
