@@ -7,6 +7,7 @@ import {
   isSheetUuid,
   normalizeHeaderCell,
   parseSnapChoice,
+  sheetStageFromRow,
   suggestSheetMapping,
   type SheetField,
   type SheetLeadDraft,
@@ -90,9 +91,10 @@ export type SheetImportPlan = {
   adSetIndex: number;
   answers: SnapAnswerColumn[];
   extraIndexes: number[];
+  headers: string[];
 };
 
-function emptyPlan(mapping: SheetMapping): SheetImportPlan {
+function emptyPlan(mapping: SheetMapping, headers: string[] = []): SheetImportPlan {
   return {
     snap: false,
     mapping,
@@ -105,6 +107,7 @@ function emptyPlan(mapping: SheetMapping): SheetImportPlan {
     adSetIndex: -1,
     answers: [],
     extraIndexes: [],
+    headers,
   };
 }
 
@@ -239,7 +242,7 @@ function looksLikeSnap(rows: string[][], width: number) {
 export function planSheetImport(headers: string[], rows: string[][], saved: SheetMapping): SheetImportPlan {
   const data = dataRows(rows);
   const width = widthOf(headers, data);
-  if (!looksLikeSnap(data, width)) return emptyPlan(saved);
+  if (!looksLikeSnap(data, width)) return emptyPlan(saved, headers);
   const phone = saudiPhoneColumn(data, width);
   const createdAt = timestampColumn(data, width);
   const leadId = createdAt > 0 && mostly(data, createdAt - 1, isSheetUuid) ? createdAt - 1 : -1;
@@ -291,6 +294,7 @@ export function planSheetImport(headers: string[], rows: string[][], saved: Shee
     ...meta,
     answers,
     extraIndexes,
+    headers,
   };
 }
 
@@ -400,7 +404,7 @@ export function composeSnapLead(
     source: lead.source.slice(0, 80),
     notes: snapLeadNotes(lead),
     campaign: lead.campaign.slice(0, 60),
-    stage: 'new',
+    stage: sheetStageFromRow(row, plan.mapping, plan.headers),
     registeredAt: lead.registeredAt,
   };
 }
@@ -410,7 +414,7 @@ export function composePlannedLead(
   source: {label: string; campaign: string},
   plan: SheetImportPlan
 ): SheetLeadDraft {
-  if (!plan.snap) return composeSheetLead(row, source, plan.mapping);
+  if (!plan.snap) return composeSheetLead(row, source, plan.mapping, plan.headers);
   return composeSnapLead(row, plan);
 }
 

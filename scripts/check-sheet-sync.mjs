@@ -10,9 +10,13 @@ import {build} from 'esbuild';
 const require = createRequire(import.meta.url);
 const output = mkdtempSync(join(tmpdir(), 'sas-sheets-'));
 
+function sqliteSql(sql) {
+  return String(sql).replaceAll(' AS BINARY', ' AS BLOB');
+}
+
 function sqliteExecutor(db) {
   return {async execute(sql, values = []) {
-    const text = String(sql).trim();
+    const text = sqliteSql(sql).trim();
     if (text.startsWith('SHOW')) throw Error('near SHOW: syntax error');
     if (text.startsWith('SELECT')) return [db.prepare(text).all(...values)];
     return [{affectedRows: Number(db.prepare(text).run(...values).changes)}];
@@ -21,11 +25,12 @@ function sqliteExecutor(db) {
 
 function leadDb(db) {
   return {prepare(sql) {
+    const text = sqliteSql(sql);
     return {bind(...args) {
       return {
-        async all() { return {results: db.prepare(sql).all(...args)}; },
-        async first() { return db.prepare(sql).get(...args) || null; },
-        async run() { db.prepare(sql).run(...args); },
+        async all() { return {results: db.prepare(text).all(...args)}; },
+        async first() { return db.prepare(text).get(...args) || null; },
+        async run() { db.prepare(text).run(...args); },
       };
     }};
   }};
@@ -103,9 +108,59 @@ try {
     'جديد',
     'CREATED',
   ];
-  const draft = config.composeSheetLead(tiktokRow, {label: 'تيك توك', campaign: ''}, mapping);
+  const draft = config.composeSheetLead(tiktokRow, {label: 'تيك توك', campaign: ''}, mapping, headers);
   assert.equal(draft.phone, '0551110000');
   assert.equal(draft.stage, 'new');
+  assert.equal(config.stageFromSheetLabel('تم التواصل'), 'contacted');
+  assert.equal(config.stageFromSheetLabel('مهتم'), 'interested');
+  assert.equal(config.stageFromSheetLabel('غير مهتم'), 'not_interested');
+  assert.equal(config.stageFromSheetLabel('  غَيْر   مُهْتَم  '), 'not_interested');
+  assert.equal(config.stageFromSheetLabel('غير المؤهل'), 'unqualified');
+  assert.equal(config.stageFromSheetLabel('إعاده تواصل'), 'postponed');
+  assert.equal(config.stageFromSheetLabel('أفراغ'), 'transferred');
+  assert.equal(config.stageFromSheetLabel('CREATED'), 'new');
+  assert.equal(config.stageFromSheetLabel('حظر'), 'new');
+  assert.equal(config.stageFromSheetLabel(''), 'new');
+  const statusRow = tiktokRow.slice();
+  statusRow[13] = 'غير مهتم';
+  const statusDraft = config.composeSheetLead(statusRow, {label: 'تيك توك', campaign: ''}, mapping, headers);
+  assert.equal(statusDraft.stage, 'not_interested');
+  assert.equal(statusDraft.propertyOther, 'شقة تمليك');
+  assert.match(statusDraft.notes, /الحاله: غير مهتم/);
+  assert.match(statusDraft.notes, /Lead status: تم التواصل/);
+  const propertyStatus = config.composeSheetLead(
+    ['نورة', '0551000001', 'غير مهتم'],
+    {label: 'نورة', campaign: ''},
+    {name: 0, phone: 1, propertyType: 2},
+    ['الاسم', 'الجوال', 'الوحدة']
+  );
+  assert.equal(propertyStatus.stage, 'not_interested');
+  assert.equal(propertyStatus.propertyOther, 'غير مهتم');
+  const quality = config.composeSheetLead(
+    ['نورة', '0551000002', 'شقة', 'مهتم'],
+    {label: 'ميتا', campaign: ''},
+    {name: 0, phone: 1, propertyType: 2},
+    ['الاسم', 'الجوال', 'الوحدة', 'الجودة']
+  );
+  assert.equal(quality.stage, 'interested');
+  assert.equal(quality.propertyOther, 'شقة');
+  const clientState = config.composeSheetLead(
+    ['نورة', '0551000003', 'فيلا', 'لم يرد'],
+    {label: 'تيك توك', campaign: ''},
+    {name: 0, phone: 1, propertyType: 2},
+    ['Name', 'Phone number', 'ما الذي تبحث عنه؟', 'حاله العميل']
+  );
+  assert.equal(clientState.stage, 'no_answer');
+  assert.equal(clientState.propertyOther, 'فيلا');
+  const metaStatus = config.composeSheetLead(
+    ['نورة', '0551000004', 'شقة', 'CREATED', 'غير مهتم'],
+    {label: 'meta', campaign: ''},
+    {name: 0, phone: 1, propertyType: 2, sheetLeadStatus: 3},
+    ['full_name', 'phone_number', 'نوع العقار', 'lead_status', '']
+  );
+  assert.equal(metaStatus.stage, 'not_interested');
+  assert.equal(metaStatus.propertyOther, 'شقة');
+  assert.equal(config.sheetStageFromRow(['تم الاسناد', 'غير مهتم'], {sheetState: 0}, ['الحاله', '']), 'not_interested');
   assert.equal(draft.source, 'تيك توك');
   assert.equal(draft.propertyOther, 'شقة تمليك');
   assert.match(draft.notes, /الوحدة: شقة تمليك/);
@@ -415,7 +470,7 @@ try {
   assert.equal(identified.invalid, 1);
   assert.equal(identified.created[0].source, 'تيك توك');
   const storedLead = mem.prepare('SELECT stage, assigned_to, source, notes FROM leads WHERE phone = ?').get('0552220001');
-  assert.equal(storedLead.stage, 'new');
+  assert.equal(storedLead.stage, 'contacted');
   assert.equal(storedLead.assigned_to, '');
   assert.equal(storedLead.source, 'تيك توك');
   assert.match(storedLead.notes, /Lead status: تم التواصل/);
@@ -430,8 +485,92 @@ try {
   ];
   const identifiedAgain = await sync.importSheetGrid(db, idSource, editedId, owner);
   assert.equal(identifiedAgain.unchanged, 1);
+  assert.equal(identifiedAgain.stagesUpdated, 0);
   assert.equal(identifiedAgain.inserted, 1);
-  assert.equal(mem.prepare("SELECT name FROM leads WHERE phone = '0552220001'").get().name, 'نورة');
+  assert.equal(mem.prepare("SELECT name, stage FROM leads WHERE phone = '0552220001'").get().name, 'نورة');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE phone = '0552220001'").get().stage, 'contacted');
+
+  const stageHeaders = ['الاسم', 'رقم الجوال', 'TikTok Lead ID', 'الوحدة', 'الحاله'];
+  const stageMapping = config.suggestSheetMapping(stageHeaders);
+  const stageSource = {...source, id: 'stage-src', headers: stageHeaders, mapping: stageMapping, campaign: ''};
+  const stageGrid = [
+    stageHeaders,
+    ['نورة مرحلة', '0553330001', 'tt-stage-1', 'شقة تمليك', ''],
+    ['ليلى مرحلة', '0553330002', 'tt-stage-2', 'غير مهتم', ''],
+    ['هند مرحلة', '0553330003', 'tt-stage-3', 'فيلا', 'تم التواصل'],
+  ];
+  const seenSql = [];
+  const spyDb = {prepare(sql) {
+    seenSql.push(String(sql));
+    return db.prepare(sql);
+  }};
+  const stageImport = await sync.importSheetGrid(spyDb, stageSource, stageGrid, owner);
+  assert.equal(stageImport.inserted, 3);
+  assert.equal(stageImport.stagesUpdated, 0);
+  const noraStage = mem.prepare("SELECT id, stage, property_other FROM leads WHERE phone = '0553330001'").get();
+  assert.equal(noraStage.stage, 'new');
+  assert.equal(noraStage.property_other, 'شقة تمليك');
+  const laylaStage = mem.prepare("SELECT stage, property_other FROM leads WHERE phone = '0553330002'").get();
+  assert.equal(laylaStage.stage, 'not_interested');
+  assert.equal(laylaStage.property_other, 'غير مهتم');
+  const hindStage = mem.prepare("SELECT stage, property_other, notes FROM leads WHERE phone = '0553330003'").get();
+  assert.equal(hindStage.stage, 'contacted');
+  assert.equal(hindStage.property_other, 'فيلا');
+  assert.match(hindStage.notes, /الحاله: تم التواصل/);
+  const stageGridAgain = [
+    stageHeaders,
+    ['نورة مرحلة', '0553330001', 'tt-stage-1', 'شقة تمليك', 'غير مهتم'],
+    ['ليلى مرحلة', '0553330002', 'tt-stage-2', 'غير مهتم', 'مهتم'],
+    ['هند مرحلة', '0553330003', 'tt-stage-3', 'فيلا', 'غير مهتم'],
+  ];
+  mem.prepare("UPDATE leads SET stage = 'negotiation' WHERE phone = '0553330003'").run();
+  const stageAgain = await sync.importSheetGrid(spyDb, stageSource, stageGridAgain, owner);
+  assert.equal(stageAgain.inserted, 0);
+  assert.equal(stageAgain.duplicates, 0);
+  assert.equal(stageAgain.stagesUpdated, 1);
+  assert.equal(mem.prepare("SELECT stage, property_other FROM leads WHERE phone = '0553330001'").get().stage, 'not_interested');
+  assert.equal(mem.prepare("SELECT property_other FROM leads WHERE phone = '0553330001'").get().property_other, 'شقة تمليك');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE phone = '0553330002'").get().stage, 'not_interested');
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE phone = '0553330003'").get().stage, 'negotiation');
+  const stageActivity = mem.prepare("SELECT action, user_id, details FROM lead_activity WHERE lead_id = ? AND action = 'stage_changed'").get(noraStage.id);
+  const stageDetails = JSON.parse(stageActivity.details);
+  assert.equal(stageActivity.user_id, 'system');
+  assert.equal(stageDetails.previousStage, 'new');
+  assert.equal(stageDetails.stage, 'not_interested');
+  assert.match(stageDetails.note, /غير مهتم/);
+  const stageNote = mem.prepare('SELECT stage, note_text, by_name FROM lead_stage_notes WHERE lead_id = ?').get(noraStage.id);
+  assert.equal(stageNote.stage, 'not_interested');
+  assert.match(stageNote.note_text, /غير مهتم/);
+  assert.equal(stageNote.by_name, 'النظام');
+  const stageThird = await sync.importSheetGrid(db, stageSource, stageGridAgain, owner);
+  assert.equal(stageThird.stagesUpdated, 0);
+  assert.equal(mem.prepare("SELECT COUNT(*) AS n FROM lead_activity WHERE lead_id = ? AND action = 'stage_changed'").get(noraStage.id).n, 1);
+  const changedId = [
+    stageHeaders,
+    ['سارة مرحلة', '0553330004', 'tt-stage-4', 'شقة', ''],
+  ];
+  const freshStage = await sync.importSheetGrid(db, stageSource, changedId, owner);
+  assert.equal(freshStage.inserted, 1);
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE phone = '0553330004'").get().stage, 'new');
+  const relabeled = [
+    stageHeaders,
+    ['سارة معدلة', '0553330004', 'tt-stage-4b', 'شقة', 'مهتم'],
+  ];
+  const relabeledImport = await sync.importSheetGrid(db, stageSource, relabeled, owner);
+  assert.equal(relabeledImport.inserted, 0);
+  assert.equal(relabeledImport.duplicates, 1);
+  assert.equal(relabeledImport.stagesUpdated, 1);
+  assert.equal(mem.prepare("SELECT stage, property_other, name FROM leads WHERE phone = '0553330004'").get().stage, 'interested');
+  assert.equal(mem.prepare("SELECT property_other FROM leads WHERE phone = '0553330004'").get().property_other, 'شقة');
+  assert.equal(mem.prepare("SELECT name FROM leads WHERE phone = '0553330004'").get().name, 'سارة مرحلة');
+  mem.prepare(`INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, phone, property_id, property_other, source, stage, notes, follow_up, created_at, updated_at) VALUES ('manual-stage', ?, ?, '', '', 'عميل يدوي', '0553330005', 'other', 'شقة', 'يدوي', 'new', '', '', '2026-01-01', '2026-01-01')`).run(owner, owner);
+  const manualGrid = [stageHeaders, ['يدوي', '0553330005', 'tt-manual', 'شقة', 'غير مهتم']];
+  const manualImport = await sync.importSheetGrid(db, {...stageSource, id: 'stage-manual'}, manualGrid, owner);
+  assert.equal(manualImport.duplicates, 1);
+  assert.equal(manualImport.stagesUpdated, 0);
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id = 'manual-stage'").get().stage, 'new');
+  assert.equal(seenSql.some(sql => /HEX\s*\(\s*LOWER/i.test(sql) || /CONVERT_TZ/i.test(sql)), false);
+  assert.equal(seenSql.some(sql => sql.includes('CAST(') && sql.includes('AS BINARY') && sql.includes('stage')), true);
 
   const fixtureCsv = readFileSync('scripts/fixtures/tiktok-leads-sample.csv', 'utf8');
   assert.equal(fixtureCsv.includes('سارة اختبار'), true);
@@ -600,6 +739,18 @@ try {
   assert.equal(roofLead.assigned_to, '');
   assert.equal(roofLead.stage, 'new');
   assert.match(roofLead.notes, /مواطن ام مقيم: مقيم/);
+  const statusSnap = snapGrid[1].slice();
+  statusSnap[9] = 'cccccccc-dddd-4eee-8fff-000000000001';
+  statusSnap[11] = 'حالة';
+  statusSnap[12] = 'سناب';
+  statusSnap[13] = '+966500000222';
+  statusSnap.push('غير مهتم');
+  const statusSnapImport = await sync.importSheetGrid(db, snapSource, [[...snapGrid[0], ''], statusSnap], owner);
+  assert.equal(statusSnapImport.inserted, 1, statusSnapImport.error);
+  const statusSnapLead = mem.prepare("SELECT stage, property_other, source FROM leads WHERE phone = '0500000222'").get();
+  assert.equal(statusSnapLead.source, 'سناب');
+  assert.equal(statusSnapLead.property_other, 'شقة');
+  assert.equal(statusSnapLead.stage, 'not_interested');
   const driftedSnap = await sync.importSheetGrid(db, {...snapSource, id: 'snap-drift', headers: ['اسم مختلف', 'جوال']}, snapGrid, owner);
   assert.equal(driftedSnap.ok, false);
   assert.match(driftedSnap.error, /عناوين/);

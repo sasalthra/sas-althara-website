@@ -150,7 +150,7 @@ export const stageAliasGroups: Record<string, string[]> = {
     'مؤجل', 'تأجيل', 'تاجيل', 'اعادة تواصل', 'إعادة تواصل', 'اعادة التواصل', 'إعادة التواصل',
     'postponed', 'on hold',
   ],
-  unqualified: ['غير مؤهل', 'غير مؤهلين', 'unqualified'],
+  unqualified: ['غير مؤهل', 'غير المؤهل', 'غير مؤهلين', 'unqualified'],
   not_interested: ['غير مهتم', 'غير مهتمين', 'لا يرغب', 'not interested'],
   negotiation: ['تفاوض', 'قيد التفاوض', 'مفاوضات', 'negotiation'],
   closed: ['مغلق', 'اغلاق', 'إغلاق', 'منتهي', 'closed'],
@@ -223,4 +223,22 @@ export function canonicalStage(value: string): string | null {
   const key = stageLookup[text] || null;
   if (!key) return null;
   return stageWriteAllowed(key) ? key : displayStage(key) || null;
+}
+
+/**
+ * A sheet status cell that is a known stage label.
+ * Blank and unknown text are null so another column can be tried.
+ * «جديد» and «عميل جديد» are `new`, not unknown.
+ */
+export function matchedSheetStage(value: string): string | null {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const key = canonicalStage(text);
+  if (!key || !stageWriteAllowed(key)) return null;
+  return key;
+}
+
+/** Sheet status → active stage key. Unknown or blank labels are `new`. */
+export function stageFromSheetLabel(value: string): string {
+  return matchedSheetStage(value) || 'new';
 }

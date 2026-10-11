@@ -142,11 +142,12 @@ async function saveSourceResult(sourceId: string, result: SheetImportResult | {e
   const duplicates = 'duplicates' in result ? result.duplicates : 0;
   const invalid = 'invalid' in result ? result.invalid : 0;
   const unchanged = 'unchanged' in result ? result.unchanged : 0;
+  const stagesUpdated = 'stagesUpdated' in result ? result.stagesUpdated : 0;
   const rowsRead = 'rowsRead' in result ? result.rowsRead || 0 : 0;
   const skippedRows = 'skippedRows' in result ? result.skippedRows || 0 : 0;
   const error = result.error || '';
   const errors = 'errors' in result ? result.errors.slice(0, 30) : error ? [error] : [];
-  const summary = {inserted, duplicates, invalid, unchanged, rowsRead, skippedRows, error, errors};
+  const summary = {inserted, duplicates, invalid, unchanged, stagesUpdated, rowsRead, skippedRows, error, errors};
   const payload = JSON.stringify(summary);
   try {
     await crmDb()
@@ -277,7 +278,7 @@ async function doSync(): Promise<SheetSyncReport> {
         report.steps.push({
           step: `${label}: الحفظ`,
           ok: !result.error,
-          detail: `قُرئ ${result.rowsRead}، جديد ${result.inserted}، موجود ${result.duplicates}، متخطى ${result.skippedRows}${result.error ? `. ${result.error}` : ''}`,
+          detail: `قُرئ ${result.rowsRead}، جديد ${result.inserted}، موجود ${result.duplicates}، متخطى ${result.skippedRows}${result.stagesUpdated ? `، مراحل ${result.stagesUpdated}` : ''}${result.error ? `. ${result.error}` : ''}`,
         });
         if (backfill) {
           if (!result.error && result.inserted + result.duplicates + result.invalid > 0) {
