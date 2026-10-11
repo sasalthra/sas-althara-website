@@ -297,11 +297,12 @@ try {
 
   const headers = ['الاسم', 'رقم الجوال', 'TikTok Lead ID'];
   const again = await sync.importSheetGrid({prepare(query) {
+    const text = String(query).replaceAll(' AS BINARY', ' AS BLOB');
     return {bind(...args) {
       return {
-        async all() { return {results: sql.prepare(query).all(...args)}; },
-        async first() { return sql.prepare(query).get(...args) || null; },
-        async run() { sql.prepare(query).run(...args); },
+        async all() { return {results: sql.prepare(text).all(...args)}; },
+        async first() { return sql.prepare(text).get(...args) || null; },
+        async run() { sql.prepare(text).run(...args); },
       };
     }};
   }}, {

@@ -1,6 +1,9 @@
 import {z} from 'zod';
 import {foldHeader} from './lead-import';
+import {matchedSheetStage, stageFromSheetLabel} from './lead-stages';
 import {normalizeLeadPhone} from './phone';
+
+export {stageFromSheetLabel};
 
 /** Lead-form columns an admin can map. Name and phone are required. */
 export const SHEET_FIELDS = [
@@ -42,10 +45,10 @@ export const sheetFieldLabels: Record<SheetField, string> = {
   contactTime: 'وقت التواصل',
   purchaseTimeline: 'الوقت المتوقع للشراء',
   leadId: 'TikTok Lead ID',
-  sheetLeadStatus: 'Lead status (ملاحظة فقط)',
+  sheetLeadStatus: 'Lead status (يحدد المرحلة)',
   sheetAssignment: 'الاسناد (ملاحظة فقط)',
-  sheetState: 'الحاله (ملاحظة فقط)',
-  sheetTiktokStatus: 'TikTok Lead Status (ملاحظة فقط)',
+  sheetState: 'الحاله (يحدد المرحلة)',
+  sheetTiktokStatus: 'TikTok Lead Status (يحدد المرحلة)',
   city: 'المدينة',
   notes: 'الملاحظات',
   campaign: 'عمود اسم الحملة',
@@ -357,7 +360,7 @@ export type SheetLeadDraft = {
   source: string;
   notes: string;
   campaign: string;
-  stage: 'new';
+  stage: string;
   /** UTC instant from the sheet, when the row carries one. Empty uses the import time. */
   registeredAt?: string;
 };
@@ -388,6 +391,64 @@ function mappedCell(row: string[], mapping: SheetMapping, key: SheetField) {
   return String(row[index] ?? '').replace(/\s+/g, ' ').trim();
 }
 
+const EMPLOYEE_STAGE_HEADER = /^(ال)?حاله( العميل)?$|^المرحله$|^الجوده$/;
+const LEAD_STATUS_HEADER = /^lead status$|^status$|^stage$/;
+
+function pushIndex(indexes: number[], index: number | undefined) {
+  if (index === undefined || index < 0 || indexes.includes(index)) return;
+  indexes.push(index);
+}
+
+function headerIndexes(headers: string[], test: (folded: string) => boolean) {
+  const indexes: number[] = [];
+  headers.forEach((header, index) => {
+    if (test(foldHeader(header))) pushIndex(indexes, index);
+  });
+  return indexes;
+}
+
+function firstSheetStage(row: string[], indexes: number[]) {
+  for (const index of indexes) {
+    const stage = matchedSheetStage(tidy(String(row[index] ?? '')));
+    if (stage) return stage;
+  }
+  return '';
+}
+
+/**
+ * Stage for one sheet row.
+ * Employee columns (الحاله، حالة العميل، الجودة، المرحلة) win, including an
+ * explicit «جديد». Then Lead status. Then any other cell that is a stage
+ * other than new — that is how «غير مهتم» still sets the stage when it was
+ * stored in the property column or an unlabeled Meta/Snap column. TikTok's
+ * own lead status is last. Unknown text does not invent a stage.
+ */
+export function sheetStageFromRow(row: string[], mapping: SheetMapping, headers: string[] = []) {
+  const employee = headerIndexes(headers, folded => EMPLOYEE_STAGE_HEADER.test(folded));
+  pushIndex(employee, mapping.sheetState);
+  const fromEmployee = firstSheetStage(row, employee);
+  if (fromEmployee) return fromEmployee;
+
+  const leadStatus = headerIndexes(headers, folded => LEAD_STATUS_HEADER.test(folded));
+  pushIndex(leadStatus, mapping.sheetLeadStatus);
+  const fromLeadStatus = firstSheetStage(row, leadStatus);
+  if (fromLeadStatus) return fromLeadStatus;
+
+  const skip = new Set<number>([...employee, ...leadStatus]);
+  if (mapping.sheetTiktokStatus !== undefined) skip.add(mapping.sheetTiktokStatus);
+  if (mapping.name !== undefined) skip.add(mapping.name);
+  if (mapping.phone !== undefined) skip.add(mapping.phone);
+  if (mapping.leadId !== undefined) skip.add(mapping.leadId);
+  for (let index = 0; index < row.length; index++) {
+    if (skip.has(index)) continue;
+    const stage = matchedSheetStage(tidy(String(row[index] ?? '')));
+    if (stage && stage !== 'new') return stage;
+  }
+
+  const fromPlatform = mapping.sheetTiktokStatus === undefined ? '' : firstSheetStage(row, [mapping.sheetTiktokStatus]);
+  return fromPlatform || 'new';
+}
+
 /** Stable id from the TikTok Lead ID column. Empty when that column is unmapped or blank. */
 export function sheetExternalId(row: string[], mapping: SheetMapping) {
   return mappedCell(row, mapping, 'leadId').slice(0, 120);
@@ -401,7 +462,8 @@ export function sheetNameAndPhoneBlank(row: string[], mapping: SheetMapping) {
 export function composeSheetLead(
   row: string[],
   source: {label: string; campaign: string},
-  mapping: SheetMapping
+  mapping: SheetMapping,
+  headers: string[] = []
 ): SheetLeadDraft {
   const read = (key: SheetField) => mappedCell(row, mapping, key);
   const propertyType = tidy(read('propertyType'));
@@ -427,7 +489,7 @@ export function composeSheetLead(
     source: (campaign ? `${label} — ${campaign}` : label).slice(0, 80) || DEFAULT_SHEET_LABEL,
     notes: lines.join('\n').slice(0, 3000),
     campaign,
-    stage: 'new',
+    stage: sheetStageFromRow(row, mapping, headers),
   };
 }
 
