@@ -60,9 +60,13 @@ try {
  assert.match(html,/hr=requests/,'dated requests destination available; forms exercised in check-crm-browser');
  assert.match(html,/hr=profile/,'employee profile destination available');
  console.log('PASS HR calendar/request/profile destinations rendered; browser suite exercises their forms');
- await build({stdin:{contents:`import React from 'react';import {renderToStaticMarkup} from 'react-dom/server';import ImportPanel from './app/crm/import-panel';export const html=renderToStaticMarkup(<ImportPanel onSaved={()=>{}}/>);`,resolveDir:process.cwd(),loader:'tsx'},outfile:join(out,'import-ui.cjs'),bundle:true,platform:'node',format:'cjs'});
- const {html:importHtml}=createRequire(import.meta.url)(join(out,'import-ui.cjs'));
+ await build({stdin:{contents:`import React from 'react';import {renderToStaticMarkup} from 'react-dom/server';import ImportPanel from './app/crm/import-panel';export const html=renderToStaticMarkup(<ImportPanel onSaved={()=>{}}/>);export const adminHtml=renderToStaticMarkup(<ImportPanel onSaved={()=>{}} canRepairStages/>);`,resolveDir:process.cwd(),loader:'tsx'},outfile:join(out,'import-ui.cjs'),bundle:true,platform:'node',format:'cjs'});
+ const {html:importHtml,adminHtml:importAdminHtml}=createRequire(import.meta.url)(join(out,'import-ui.cjs'));
  assert.match(importHtml,/الاسم والجوال فقط مطلوبان/,'import copy states only name and phone are required');
+ assert.doesNotMatch(importHtml,/تصحيح مراحل العملاء المستوردين/);
+ assert.match(importAdminHtml,/تصحيح مراحل العملاء المستوردين/);
+ assert.match(importAdminHtml,/data-imported-stage-repair/);
+ assert.match(importAdminHtml,/إذا كان عمود المرحلة فارغاً أو غير معروف/);
  assert.match(importHtml,/data-primary="true"[^>]*data-active="true"|data-active="true"[^>]*data-primary="true"/,'assign-all-to-one is selected by default');
  assert.match(importHtml,/تعيين الكل لمندوب واحد/,'assign-all-to-one control is present');
  const oneIndex=importHtml.indexOf('تعيين الكل لمندوب واحد');

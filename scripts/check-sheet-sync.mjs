@@ -45,6 +45,7 @@ try {
       schema: 'lib/lead-schema.ts',
       dedupe: 'lib/sheet-duplicate-cleanup.ts',
       purge: 'lib/sheet-test-purge.ts',
+      repair: 'lib/imported-stage-repair.ts',
     },
     outdir: output,
     bundle: true,
@@ -59,6 +60,7 @@ try {
   const schema = require(join(output, 'schema.cjs'));
   const dedupe = require(join(output, 'dedupe.cjs'));
   const purge = require(join(output, 'purge.cjs'));
+  const repair = require(join(output, 'repair.cjs'));
 
   const ref = config.parseSheetRef('https://docs.google.com/spreadsheets/d/1_lAoABagOV93EQPi_vNWct4ok3zCWE1plJFfbDzm6Nc/edit?usp=sharing#gid=0');
   assert.equal(ref.sheetId, config.TIKTOK_SHEET_ID);
@@ -563,12 +565,95 @@ try {
   assert.equal(mem.prepare("SELECT stage, property_other, name FROM leads WHERE phone = '0553330004'").get().stage, 'interested');
   assert.equal(mem.prepare("SELECT property_other FROM leads WHERE phone = '0553330004'").get().property_other, 'شقة');
   assert.equal(mem.prepare("SELECT name FROM leads WHERE phone = '0553330004'").get().name, 'سارة مرحلة');
+  mem.exec(`CREATE TABLE IF NOT EXISTS crm_import_rows (id TEXT PRIMARY KEY, lead_id TEXT, source TEXT, raw_data TEXT, created_at TEXT)`);
   mem.prepare(`INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, phone, property_id, property_other, source, stage, notes, follow_up, created_at, updated_at) VALUES ('manual-stage', ?, ?, '', '', 'عميل يدوي', '0553330005', 'other', 'شقة', 'يدوي', 'new', '', '', '2026-01-01', '2026-01-01')`).run(owner, owner);
   const manualGrid = [stageHeaders, ['يدوي', '0553330005', 'tt-manual', 'شقة', 'غير مهتم']];
   const manualImport = await sync.importSheetGrid(db, {...stageSource, id: 'stage-manual'}, manualGrid, owner);
   assert.equal(manualImport.duplicates, 1);
   assert.equal(manualImport.stagesUpdated, 0);
   assert.equal(mem.prepare("SELECT stage FROM leads WHERE id = 'manual-stage'").get().stage, 'new');
+  const manualAgain = await sync.importSheetGrid(db, {...stageSource, id: 'stage-manual'}, manualGrid, owner);
+  assert.equal(manualAgain.stagesUpdated, 0);
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id = 'manual-stage'").get().stage, 'new');
+  mem.prepare(`INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, phone, property_id, property_other, source, stage, notes, follow_up, created_at, updated_at) VALUES ('excel-fresh', ?, ?, '', '', 'عميل إكسل', '0553330006', 'other', 'غير مهتم', 'داتا', 'new', '', '', '2026-02-01', '2026-02-01')`).run(owner, owner);
+  mem.prepare(`INSERT INTO crm_import_rows (id, lead_id, source, raw_data, created_at) VALUES ('imp-excel-fresh', 'excel-fresh', 'excel', '[]', '2026-02-01')`).run();
+  const excelGrid = [stageHeaders, ['إكسل', '0553330006', 'tt-excel-fresh', 'فيلا', 'غير مهتم']];
+  const excelImport = await sync.importSheetGrid(db, {...stageSource, id: 'stage-excel'}, excelGrid, owner);
+  assert.equal(excelImport.duplicates, 1);
+  assert.equal(excelImport.stagesUpdated, 1);
+  assert.equal(mem.prepare("SELECT stage, property_other FROM leads WHERE id = 'excel-fresh'").get().stage, 'not_interested');
+  assert.equal(mem.prepare("SELECT property_other FROM leads WHERE id = 'excel-fresh'").get().property_other, 'غير مهتم');
+  const excelActivity = mem.prepare("SELECT action, user_id, details FROM lead_activity WHERE lead_id = 'excel-fresh' AND action = 'stage_changed'").get();
+  const excelDetails = JSON.parse(excelActivity.details);
+  assert.equal(excelActivity.user_id, 'system');
+  assert.equal(excelDetails.previousStage, 'new');
+  assert.equal(excelDetails.stage, 'not_interested');
+  assert.match(excelDetails.note, /غير مهتم/);
+  const excelNote = mem.prepare("SELECT stage, note_text, by_name FROM lead_stage_notes WHERE lead_id = 'excel-fresh'").get();
+  assert.equal(excelNote.stage, 'not_interested');
+  assert.match(excelNote.note_text, /غير مهتم/);
+  assert.equal(excelNote.by_name, 'النظام');
+  mem.prepare(`INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, phone, property_id, property_other, source, stage, notes, follow_up, created_at, updated_at) VALUES ('excel-moved', ?, ?, '', '', 'عميل إكسل منقول', '0553330008', 'other', 'غير مهتم', 'excel', 'contacted', '', '', '2026-02-02', '2026-02-02')`).run(owner, owner);
+  mem.prepare(`INSERT INTO crm_import_rows (id, lead_id, source, raw_data, created_at) VALUES ('imp-excel-moved', 'excel-moved', 'excel', '[]', '2026-02-02')`).run();
+  const movedGrid = [stageHeaders, ['منقول', '0553330008', 'tt-excel-moved', 'فيلا', 'غير مهتم']];
+  const movedImport = await sync.importSheetGrid(db, {...stageSource, id: 'stage-excel-moved'}, movedGrid, owner);
+  assert.equal(movedImport.duplicates, 1);
+  assert.equal(movedImport.stagesUpdated, 0);
+  assert.equal(mem.prepare("SELECT stage FROM leads WHERE id = 'excel-moved'").get().stage, 'contacted');
+  const knownCells = ['إكسل سابق', '0553330007', 'tt-excel-known', 'فيلا', 'غير مهتم'];
+  const knownKey = sync.sheetRowKey(2, knownCells, 'tt-excel-known');
+  const knownHash = createHash('sha256').update(`stage-excel-known\u001f${knownKey}`).digest('hex');
+  mem.prepare(`INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, phone, property_id, property_other, source, stage, notes, follow_up, created_at, updated_at) VALUES ('excel-known', ?, ?, '', '', 'عميل إكسل سابق', '0553330007', 'other', 'غير مهتم', 'داتا', 'new', 'الحاله: مهتم', '', '2026-02-03', '2026-02-03')`).run(owner, owner);
+  mem.prepare(`INSERT INTO crm_import_rows (id, lead_id, source, raw_data, created_at) VALUES ('imp-excel-known', 'excel-known', 'excel', '[]', '2026-02-03')`).run();
+  mem.prepare(`INSERT INTO crm_sheet_rows (id, source_id, row_key, row_key_hash, lead_id, status, created_at) VALUES ('row-excel-known', 'stage-excel-known', ?, ?, 'excel-known', 'duplicate', '2026-02-03')`).run(knownKey, knownHash);
+  const knownImport = await sync.importSheetGrid(db, {...stageSource, id: 'stage-excel-known'}, [stageHeaders, knownCells], owner);
+  assert.equal(knownImport.inserted, 0);
+  assert.equal(knownImport.stagesUpdated, 1);
+  assert.equal(mem.prepare("SELECT stage, property_other FROM leads WHERE id = 'excel-known'").get().stage, 'not_interested');
+  assert.equal(mem.prepare("SELECT property_other FROM leads WHERE id = 'excel-known'").get().property_other, 'غير مهتم');
+  const repairMem = new DatabaseSync(':memory:');
+  repairMem.exec(`CREATE TABLE leads(id TEXT PRIMARY KEY, owner TEXT, created_by TEXT, assigned_to TEXT, field_assigned_to TEXT, name TEXT, phone TEXT, property_id TEXT, property_other TEXT, source TEXT, stage TEXT, notes TEXT, follow_up TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE lead_stage_notes(id TEXT PRIMARY KEY, lead_id TEXT, stage TEXT, note_text TEXT, created_at TEXT, by_user_id TEXT, by_name TEXT, source_activity_id TEXT);`);
+  const repairDb = leadDb(repairMem);
+  const putRepair = (id, name, phone, property, notes, stage) => {
+    repairMem.prepare(`INSERT INTO leads (id, owner, created_by, assigned_to, field_assigned_to, name, phone, property_id, property_other, source, stage, notes, follow_up, created_at, updated_at) VALUES (?, ?, ?, '', '', ?, ?, 'other', ?, 'excel', ?, ?, '', '2026-03-01', '2026-03-01')`).run(id, owner, owner, name, phone, property, stage, notes);
+  };
+  putRepair('repair-property', 'وصف حالة', '0554440001', 'غير مهتم', '', 'new');
+  putRepair('repair-notes', 'ملاحظة حالة', '0554440002', 'فيلا', 'الوحدة: شقة\nالحاله: تم التواصل', 'new');
+  putRepair('repair-plain', 'عقار عادي', '0554440003', 'فيلا', 'العميل غير مهتم بالشراء', 'new');
+  putRepair('repair-kept', 'مرحلة يدوية', '0554440004', 'غير مهتم', '', 'interested');
+  putRepair('repair-new-label', 'ما زال جديد', '0554440005', 'عميل جديد', '', 'new');
+  const repairPreview = await repair.previewImportedStageRepair(repairDb);
+  assert.equal(repairPreview.updated, 0);
+  assert.equal(repairPreview.count, 2);
+  assert.deepEqual(repairPreview.sample.map(row => row.id), ['repair-notes', 'repair-property']);
+  assert.equal(repairPreview.sample.find(row => row.id === 'repair-property').label, 'غير مهتم');
+  assert.equal(repairPreview.sample.find(row => row.id === 'repair-notes').text, 'تم التواصل');
+  assert.equal(repairMem.prepare("SELECT stage FROM leads WHERE id = 'repair-property'").get().stage, 'new');
+  repairMem.prepare("UPDATE leads SET stage = 'negotiation' WHERE id = 'repair-property'").run();
+  const repairApplied = await repair.applyImportedStageRepair(repairDb);
+  assert.equal(repairApplied.updated, 1);
+  assert.equal(repairMem.prepare("SELECT stage, property_other FROM leads WHERE id = 'repair-notes'").get().stage, 'contacted');
+  assert.equal(repairMem.prepare("SELECT property_other FROM leads WHERE id = 'repair-notes'").get().property_other, 'فيلا');
+  assert.equal(repairMem.prepare("SELECT stage FROM leads WHERE id = 'repair-property'").get().stage, 'negotiation');
+  assert.equal(repairMem.prepare("SELECT stage FROM leads WHERE id = 'repair-plain'").get().stage, 'new');
+  assert.equal(repairMem.prepare("SELECT stage FROM leads WHERE id = 'repair-kept'").get().stage, 'interested');
+  assert.equal(repairMem.prepare("SELECT stage FROM leads WHERE id = 'repair-new-label'").get().stage, 'new');
+  const repairActivity = repairMem.prepare("SELECT action, user_id, details FROM lead_activity WHERE lead_id = 'repair-notes' AND action = 'stage_changed'").get();
+  const repairDetails = JSON.parse(repairActivity.details);
+  assert.equal(repairActivity.user_id, 'system');
+  assert.equal(repairDetails.previousStage, 'new');
+  assert.equal(repairDetails.stage, 'contacted');
+  assert.match(repairDetails.note, /تم التواصل/);
+  const repairNote = repairMem.prepare("SELECT stage, note_text, by_name FROM lead_stage_notes WHERE lead_id = 'repair-notes'").get();
+  assert.equal(repairNote.stage, 'contacted');
+  assert.match(repairNote.note_text, /تم التواصل/);
+  assert.equal(repairNote.by_name, 'النظام');
+  const repairAgain = await repair.applyImportedStageRepair(repairDb);
+  assert.equal(repairAgain.updated, 0);
+  assert.equal(repairMem.prepare("SELECT COUNT(*) AS n FROM lead_activity WHERE lead_id = 'repair-notes' AND action = 'stage_changed'").get().n, 1);
+  repairMem.close();
   assert.equal(seenSql.some(sql => /HEX\s*\(\s*LOWER/i.test(sql) || /CONVERT_TZ/i.test(sql)), false);
   assert.equal(seenSql.some(sql => sql.includes('CAST(') && sql.includes('AS BINARY') && sql.includes('stage')), true);
 
@@ -841,6 +926,22 @@ try {
   assert.match(readFileSync('app/api/integrations/sheet-sources/purge-tests/route.ts', 'utf8'), /تم حذف \$\{result\.deleted\} عميل/);
   assert.match(readFileSync('app/api/integrations/sheet-sources/purge-tests/route.ts', 'utf8'), /if \(!input\.confirm\)/);
   assert.doesNotMatch(readFileSync('app/api/integrations/sheet-sources/purge-tests/route.ts', 'utf8'), /sendMail|assignment-notify/);
+  assert.match(readFileSync('app/crm/import-panel.tsx', 'utf8'), /ImportedStageRepair/);
+  assert.match(readFileSync('app/crm/import-panel.tsx', 'utf8'), /canRepairStages/);
+  assert.match(readFileSync('app/crm/imported-stage-repair.tsx', 'utf8'), /تصحيح مراحل العملاء المستوردين/);
+  assert.match(readFileSync('app/crm/workspace.tsx', 'utf8'), /canRepairStages=\{role === 'admin'\}/);
+  assert.match(readFileSync('app/crm/imported-stage-repair.tsx', 'utf8'), /تأكيد التصحيح/);
+  assert.match(readFileSync('app/crm/imported-stage-repair.tsx', 'utf8'), /data-imported-stage-repair/);
+  const repairRoute = readFileSync('app/api/leads/import/repair-stages/route.ts', 'utf8');
+  assert.match(repairRoute, /actor\(req, \['admin'\]\)/);
+  assert.match(repairRoute, /crmTransaction/);
+  assert.match(repairRoute, /acquireSheetSyncLock/);
+  assert.match(repairRoute, /if \(!input\.confirm\)/);
+  assert.match(repairRoute, /تم تصحيح مرحلة \$\{result\.updated\} عميل/);
+  assert.doesNotMatch(repairRoute, /sendMail|assignment-notify/);
+  assert.doesNotMatch(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /HEX\s*\(|CONVERT_TZ\s*\(/i);
+  assert.match(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /asBinary\(column\)/);
+  assert.match(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /asBinary\('\?'\)/);
   assert.doesNotMatch(readFileSync('lib/sheet-test-purge.ts', 'utf8'), /sendMail|assignment-notify/);
   assert.doesNotMatch(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /sheet-test-purge|purgeSheetTest|executeSheetTestLeadPurge/);
   assert.doesNotMatch(readFileSync('lib/lead-schema.ts', 'utf8'), /sheet-test-purge|purgeSheetTest|executeSheetTestLeadPurge/);

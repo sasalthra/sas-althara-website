@@ -242,3 +242,50 @@ export function matchedSheetStage(value: string): string | null {
 export function stageFromSheetLabel(value: string): string {
   return matchedSheetStage(value) || 'new';
 }
+
+const STATUS_LABEL = /^(?:ال)?(?:حاله(?: العميل)?|مرحله|جوده)$|^(?:tiktok )?lead status$|^status$|^stage$/;
+
+/**
+ * A cell or note line that is a stage other than new.
+ * A status label before a colon is stripped (`الحاله: غير مهتم`, `Lead status: مهتم`).
+ * «جديد» is not a match, so another column or line can still be tried.
+ */
+export function nonNewStageText(value: string): {stage: string; text: string} | null {
+  const direct = matchedSheetStage(value);
+  if (direct && direct !== 'new') return {stage: direct, text: clipStageText(value)};
+  const trimmed = String(value ?? '').trim();
+  const parts = trimmed.split(/\s*[:：]\s*/);
+  if (parts.length < 2) return null;
+  if (!STATUS_LABEL.test(foldStageText(parts[0] || ''))) return null;
+  const text = parts.slice(1).join(':').trim();
+  const stage = matchedSheetStage(text);
+  if (!stage || stage === 'new') return null;
+  return {stage, text: clipStageText(text)};
+}
+
+/** First non-new stage among cells. Blank cells are skipped. */
+export function firstNonNewSheetStage(values: readonly string[]): string | null {
+  for (const value of values) {
+    const match = nonNewStageText(value);
+    if (match) return match.stage;
+  }
+  return null;
+}
+
+/**
+ * Stage stored in the property field, or in a status line of the notes.
+ * The property field wins. «جديد» and unknown text are not a match.
+ */
+export function importedStageFromFields(propertyOther: string, notes: string): {stage: string; text: string} | null {
+  const fromProperty = nonNewStageText(propertyOther);
+  if (fromProperty) return fromProperty;
+  for (const line of String(notes ?? '').split(/\r?\n/)) {
+    const match = nonNewStageText(line);
+    if (match) return match;
+  }
+  return null;
+}
+
+function clipStageText(value: string) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+}
