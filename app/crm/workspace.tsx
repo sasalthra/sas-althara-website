@@ -438,7 +438,7 @@ export default function CRM({
           {['admin', 'supervisor'].includes(role) && <TabsContent value="ai"><AiPanel admin={role === 'admin'} envModel={aiEnvModel}/></TabsContent>}
           {role === 'admin' && <TabsContent value="sheets"><SheetsPanel/></TabsContent>}
           {role === 'admin' && <TabsContent value="telegram"><TelegramPanel/></TabsContent>}
-          {['admin','supervisor'].includes(role) && <TabsContent value="import"><ImportPanel onSaved={()=>void refresh()}/></TabsContent>}
+          {['admin','supervisor'].includes(role) && <TabsContent value="import"><ImportPanel onSaved={()=>void refresh()} canRepairStages={role === 'admin'}/></TabsContent>}
           <TabsContent value="leads">
             <div className="panel !py-6">
               <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">

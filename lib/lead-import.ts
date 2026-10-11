@@ -2,7 +2,7 @@ import {z} from 'zod';
 import properties from '../data/properties.json';
 import {leadSchema,stageKeys} from './lead-input';
 import {normalizeLeadPhone} from './phone';
-import {canonicalStage, displayStage, stageLabel, stageWriteAllowed} from './lead-stages';
+import {canonicalStage, displayStage, firstNonNewSheetStage, stageLabel, stageWriteAllowed} from './lead-stages';
 
 export const importFields={
   name:'اسم العميل',
@@ -181,6 +181,23 @@ function stubLead(mapped:Record<string,string>,phone:string,property:{propertyId
  return {name:mapped.name||'',phone:phone||mapped.phone||'',propertyOther:property.propertyOther,propertyId:property.propertyId,stage,followUp,source:mapped.source||'excel',notes:mapped.notes||''};
 }
 
+function mappedStage(stageCell:string):(typeof stageKeys)[number]|''{
+ const resolved=canonicalStage(stageCell);
+ const active=resolved&&stageWriteAllowed(resolved)?resolved:resolved?displayStage(resolved):'';
+ if(active&&stageWriteAllowed(active)&&(stageKeys as readonly string[]).includes(active))return active as (typeof stageKeys)[number];
+ return '';
+}
+
+/** Name and phone are skipped. The first other cell that is a stage other than new wins. */
+function stageFromOtherCells(raw:string[],mapping:Mapping):(typeof stageKeys)[number]|''{
+ const skip=new Set<number>();
+ if(mapping.name!==undefined)skip.add(mapping.name);
+ if(mapping.phone!==undefined)skip.add(mapping.phone);
+ const found=firstNonNewSheetStage(raw.map((cell,index)=>skip.has(index)?'':String(cell??'')));
+ if(found&&(stageKeys as readonly string[]).includes(found))return found as (typeof stageKeys)[number];
+ return '';
+}
+
 export function previewImport(rows:string[][],mapping:Mapping,existingPhones:string[]){
  const parsed=mappingSchema.safeParse(mapping);if(!parsed.success)throw Error('راجع ربط الأعمدة');
  const seen=new Set(existingPhones.map(phone=>normalizeLeadPhone(phone)).filter(Boolean));
@@ -196,11 +213,12 @@ export function previewImport(rows:string[][],mapping:Mapping,existingPhones:str
   }
   let stage:(typeof stageKeys)[number]='new';
   const stageCell=(mapped.stage||'').trim();
-  if(stageCell){
-   const resolved=canonicalStage(stageCell);
-   const active=resolved&&stageWriteAllowed(resolved)?resolved:resolved?displayStage(resolved):'';
-   if(active&&stageWriteAllowed(active)&&(stageKeys as readonly string[]).includes(active))stage=active as (typeof stageKeys)[number];
-   else warnings.push(`مرحلة غير معروفة «${stageCell}»؛ استُخدمت «${stageLabel('new')}» دون إنشاء مرحلة جديدة`);
+  const fromStage=stageCell?mappedStage(stageCell):'';
+  if(fromStage)stage=fromStage;
+  else{
+   const fromOther=stageFromOtherCells(raw,parsed.data);
+   if(fromOther)stage=fromOther;
+   else if(stageCell)warnings.push(`مرحلة غير معروفة «${stageCell}»؛ استُخدمت «${stageLabel('new')}» دون إنشاء مرحلة جديدة`);
   }
   const sourceRaw=(mapped.source||'').trim();
   const source=(isBlankPropertyText(sourceRaw)?'excel':sourceRaw).slice(0,80)||'excel';
