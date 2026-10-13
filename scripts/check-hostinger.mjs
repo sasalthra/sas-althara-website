@@ -3,6 +3,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {createRequire} from 'node:module';
 import {readFileSync,mkdirSync} from 'node:fs';
 import assert from 'node:assert/strict';
+import {sqliteReportSql} from './sqlite-report-sql.mjs';
 const require=createRequire(import.meta.url);
 // Match webpack's CommonJS default-import interop for the actual Google provider.
 const googleInterop={name:'google-interop',setup(b){
@@ -38,8 +39,8 @@ globalThis.qaSession=null;globalThis.qaFailDB=false;
 // SQL runs in SQLite; MySQL-specific upsert is translated at this boundary.
 globalThis.qaPool={async execute(sql,values){
   if(globalThis.qaFailDB)throw Error('test database unavailable');
-  sql=sql.trim();
-  if(sql.startsWith('SELECT'))return [sqlite.prepare(sql).all(...values)];
+  sql=sqliteReportSql(sql.trim());
+  if(sql.startsWith('SELECT'))return [sqlite.prepare(sql).all(...(values||[]))];
   const translated=sql.replace(/ON DUPLICATE KEY\s+UPDATE id\s*=\s*id/,'ON CONFLICT(id) DO NOTHING');
   return [{affectedRows:Number(sqlite.prepare(translated).run(...values).changes)}];
 }};
@@ -54,6 +55,12 @@ const apiBoundary={name:'test-boundaries',setup(b){
 await build({entryPoints:['app/api/leads/route.ts'],outfile:'test-output/api.cjs',bundle:true,platform:'node',format:'cjs',plugins:[googleInterop,apiBoundary]});
 await build({entryPoints:['app/api/leads/[id]/featured/route.ts'],outfile:'test-output/featured.cjs',bundle:true,platform:'node',format:'cjs',plugins:[googleInterop,apiBoundary]});
 const api=require('../test-output/api.cjs');
+async function leadRows(route=api){
+  const body=await (await route.GET()).json();
+  if(Array.isArray(body))return body;
+  if(!body||!Array.isArray(body.leads))throw new Error('expected a lead page');
+  return body.leads;
+}
 const featuredApi=require('../test-output/featured.cjs');
 const property=JSON.parse(readFileSync('data/properties.json','utf8'))[0];
 const make=(v,origin='https://sas.test')=>new Request('https://internal-host/api/leads',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(v)});
@@ -64,9 +71,9 @@ globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crm
 const v={id:crypto.randomUUID(),name:'عميل اختبار',phone:'+966500000000',propertyId:property.id,stage:'new',notes:"quote ' ; --",followUp:'2026-10-01'};
 assert.equal((await api.POST(make(v))).status,200);
 assert.equal((await api.POST(make({...v,name:'لا يستبدل الأصل'}))).status,200);
-let list=await(await api.GET()).json();assert.equal(list.length,1);assert.equal(list[0].name,v.name);assert.equal(list[0].notes,v.notes);
+let list=await leadRows();assert.equal(list.length,1);assert.equal(list[0].name,v.name);assert.equal(list[0].notes,v.notes);
 assert.equal((await api.PATCH(make({...v,stage:'field_dispatch'}))).status,200);
-assert.equal((await(await api.GET()).json())[0].stage,'field_dispatch');
+assert.equal((await leadRows())[0].stage,'field_dispatch');
 assert.equal((await api.POST(make({...v,id:crypto.randomUUID(),stage:'won'}))).status,400);
 assert.equal((await api.POST(make({...v,id:crypto.randomUUID(),stage:'viewing'}))).status,400);
 assert.equal((await api.PATCH(make({...v,stage:'won'}))).status,400);
@@ -74,7 +81,7 @@ assert.equal((await api.PATCH(make({...v,stage:'viewing'}))).status,400);
 assert.equal((await api.PATCH(make({...v,stage:'received'}))).status,400);
 assert.equal((await api.PATCH(make({...v,stage:'visit_qualified'}))).status,400);
 assert.equal((await api.PATCH(make({...v,stage:'data_received'}))).status,400);
-assert.equal((await(await api.GET()).json())[0].stage,'field_dispatch');
+assert.equal((await leadRows())[0].stage,'field_dispatch');
 sqlite.prepare('UPDATE leads SET stage=? WHERE id=?').run('won', v.id);
 assert.equal((await api.PATCH(make({...v,stage:'won'}))).status,400,'a stored won value cannot be saved again');
 assert.equal(sqlite.prepare('SELECT stage FROM leads WHERE id=?').get(v.id).stage,'won');
@@ -88,7 +95,7 @@ sqlite.prepare('UPDATE leads SET owner=?,created_by=? WHERE id=?').run('google:s
 globalThis.qaSession.crmRole='sales';
 assert.equal((await api.POST(make(v))).status,409);
 assert.equal((await api.PATCH(make(v))).status,404);
-assert.equal((await(await api.GET()).json()).length,0);
+assert.equal((await leadRows()).length,0);
 globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crmUserId:'google:test-admin',crmRole:'admin'};
 globalThis.qaFailDB=false;
 const salesId=crypto.randomUUID();
@@ -138,7 +145,7 @@ globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crm
 sqlite.prepare('UPDATE leads SET is_featured=0').run();
 const featuredId=crypto.randomUUID();
 sqlite.prepare('INSERT INTO leads (id,owner,created_by,assigned_to,field_assigned_to,name,phone,property_id,property_other,source,stage,notes,follow_up,created_at,updated_at,is_featured) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(featuredId,'google:test-admin','google:test-admin','','','عميل أعلى القائمة','+966533333333',property.id,'','manual','new','','','2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z',1);
-const ordered=await (await api.GET()).json();
+const ordered=await leadRows();
 assert.equal(ordered[0].id,featuredId,'an unassigned new lead stays ahead of newer ordinary clients');
 assert.equal(ordered[0].is_featured,1);
 const freshId=crypto.randomUUID();
@@ -152,18 +159,18 @@ insertRanked(blankId,'   ','new','2026-09-03T00:00:00.000Z',0,'عميل بمسا
 insertRanked(nullId,null,'new','2026-09-04T00:00:00.000Z',1,'عميل بلا قيمة إسناد','+966555000005');
 insertRanked(pinnedId,salesId,'contacted','2026-12-01T00:00:00.000Z',1,'عميل مميز مسند','+966555000003');
 insertRanked(assignedNewId,salesId,'new','2026-11-01T00:00:00.000Z',0,'عميل جديد مسند','+966555000004');
-const ranked=(await (await api.GET()).json()).map(row=>row.id);
+const ranked=(await leadRows()).map(row=>row.id);
 assert.deepEqual(ranked.slice(0,5),[nullId,blankId,freshId,featuredId,pinnedId],'unassigned new leads, newest first, stay above featured clients');
 assert.ok(ranked.indexOf(pinnedId)<ranked.indexOf(assignedNewId),'featured clients stay above the remaining sort');
 sqlite.prepare('UPDATE leads SET assigned_to=? WHERE id=?').run(salesId,freshId);
-const afterAssign=(await (await api.GET()).json()).map(row=>row.id);
+const afterAssign=(await leadRows()).map(row=>row.id);
 assert.equal(afterAssign[0],nullId,'assignment drops that lead out of the top group');
 assert.ok(afterAssign.indexOf(pinnedId)<afterAssign.indexOf(freshId));
 globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crmUserId:'google:test-admin',crmRole:'supervisor'};
-assert.equal((await (await api.GET()).json())[0].id,nullId,'supervisors use the same server order');
+assert.equal((await leadRows())[0].id,nullId,'supervisors use the same server order');
 sqlite.prepare('UPDATE leads SET owner=?, created_by=? WHERE id=?').run(salesId,salesId,blankId);
 globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crmUserId:salesId,crmRole:'sales'};
-const salesRank=(await (await api.GET()).json()).map(row=>row.id);
+const salesRank=(await leadRows()).map(row=>row.id);
 assert.equal(salesRank[0],blankId,'a visible unassigned new lead stays first for the rep who can see it');
 assert.ok(salesRank.includes(pinnedId)&&salesRank.indexOf(blankId)<salesRank.indexOf(pinnedId));
 globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crmUserId:'google:test-admin',crmRole:'admin'};
@@ -172,20 +179,21 @@ bare.function('JSON_UNQUOTE',v=>v);
 bare.exec('CREATE TABLE leads(id TEXT PRIMARY KEY,owner TEXT,created_by TEXT,assigned_to TEXT,field_assigned_to TEXT,name TEXT,phone TEXT,property_id TEXT,property_other TEXT,source TEXT,stage TEXT,notes TEXT,follow_up TEXT,created_at TEXT,updated_at TEXT); CREATE TABLE crm_users(id TEXT PRIMARY KEY,name TEXT,username TEXT,role TEXT,active INTEGER,email TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY,lead_id TEXT,user_id TEXT,action TEXT,details TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
 bare.prepare('INSERT INTO leads (id,owner,created_by,assigned_to,field_assigned_to,name,phone,property_id,property_other,source,stage,notes,follow_up,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('bare-1','google:test-admin','google:test-admin','','','عميل بلا عمود','+966544444444',property.id,'','manual','won','','','2026-09-01T00:00:00.000Z','2026-09-01T00:00:00.000Z');
 const savedPool=globalThis.qaPool;
-globalThis.qaPool={async execute(sql,values=[]){const text=String(sql).trim();if(text.startsWith('SHOW')||text.startsWith('ALTER')||text.startsWith('CREATE INDEX'))throw Error('schema locked');if(/\bis_featured\b/.test(text))throw Error('Unknown column is_featured');if(text.startsWith('SELECT'))return [bare.prepare(text).all(...values)];return [{affectedRows:Number(bare.prepare(text).run(...values).changes)}];}};
+globalThis.qaPool={async execute(sql,values=[]){const text=String(sql).trim();if(text.startsWith('SHOW')||text.startsWith('ALTER')||text.startsWith('CREATE INDEX'))throw Error('schema locked');if(/\bis_featured\b/.test(text))throw Error('Unknown column is_featured');if(text.startsWith('SELECT'))return [bare.prepare(sqliteReportSql(text)).all(...values)];return [{affectedRows:Number(bare.prepare(text).run(...values).changes)}];}};
 await build({entryPoints:['app/api/leads/route.ts'],outfile:'test-output/api-nofeature.cjs',bundle:true,platform:'node',format:'cjs',plugins:[googleInterop,apiBoundary]});
 await build({entryPoints:['app/api/leads/[id]/featured/route.ts'],outfile:'test-output/featured-nofeature.cjs',bundle:true,platform:'node',format:'cjs',plugins:[googleInterop,apiBoundary]});
 const apiBare=require('../test-output/api-nofeature.cjs');
 const featuredBare=require('../test-output/featured-nofeature.cjs');
 const bareResponse=await apiBare.GET();
 assert.equal(bareResponse.status,200,'clients list stays up when is_featured cannot be added');
-const bareRows=await bareResponse.json();
+const bareBody=await bareResponse.json();
+const bareRows=Array.isArray(bareBody)?bareBody:bareBody.leads;
 assert.equal(Array.isArray(bareRows),true);
 assert.equal(bareRows.length,1);
 assert.equal(bareRows[0].featured_available,0);
 assert.equal(bareRows[0].is_featured,0);
 bare.prepare('INSERT INTO leads (id,owner,created_by,assigned_to,field_assigned_to,name,phone,property_id,property_other,source,stage,notes,follow_up,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('bare-new','google:test-admin','google:test-admin','','','عميل جديد قديم','+966544444445',property.id,'','manual','new','','','2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z');
-const bareOrdered=await (await apiBare.GET()).json();
+const bareOrdered=await leadRows(apiBare);
 assert.deepEqual(bareOrdered.map(row=>row.id),['bare-new','bare-1'],'unassigned new leads stay first when is_featured is unavailable');
 assert.equal(bare.prepare("SELECT stage FROM leads WHERE id='bare-1'").get().stage,'contract_signed');
 assert.equal(bare.prepare("SELECT COUNT(*) AS n FROM lead_activity").get().n,1);
@@ -270,7 +278,7 @@ assert.equal((await dispatchCall(assignedLead.id,{fieldUserId:fieldId,note:'من
 assert.equal(sqlite.prepare('SELECT stage, field_assigned_to FROM leads WHERE id=?').get(assignedLead.id).stage,'field_dispatch');
 assert.equal(sqlite.prepare('SELECT field_assigned_to FROM leads WHERE id=?').get(assignedLead.id).field_assigned_to,fieldId);
 globalThis.qaSession={user:{name:'خالد الميداني',email:'field@sas.test'},adminId:'google:test-admin',crmUserId:fieldId,crmRole:'field'};
-const fieldList=await (await api.GET()).json();
+const fieldList=await leadRows();
 assert.equal(fieldList.some(row=>row.id===assignedLead.id),true,'field employee sees the dispatched client');
 assert.equal((await fieldUpdateCall(assignedLead.id,{note:'تمت الزيارة وطلب العميل صورًا إضافية'})).status,200);
 assert.equal((await fieldUpdateCall(assignedLead.id,{note:'ن'})).status,400);
@@ -282,7 +290,7 @@ assert.equal((await fieldUpdateCall(assignedLead.id,{note:'لست معيّنًا
 globalThis.qaSession={user:{name:'مندوب آخر',email:profile.email},adminId:'google:test-admin',crmUserId:salesTwo,crmRole:'sales'};
 assert.equal((await fieldUpdateCall(assignedLead.id,{note:'ملاحظة مبيعات'})).status,403);
 globalThis.qaSession={user:{name:'أحمد المبيعات',email:profile.email},adminId:'google:test-admin',crmUserId:'google:test-admin',crmRole:'admin'};
-const afterNote=(await (await api.GET()).json()).find(row=>row.id===assignedLead.id);
+const afterNote=(await leadRows()).find(row=>row.id===assignedLead.id);
 assert.match(String(afterNote.field_last_update),/تمت الزيارة/);
 assert.ok(afterNote.field_last_update_at);
 const staffRes=await usersApi.GET(new Request('https://sas.test/api/crm-users?field=1'));

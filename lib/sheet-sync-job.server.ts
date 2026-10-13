@@ -380,6 +380,7 @@ export function startSheetSyncInterval() {
   const interval = sheetsSyncIntervalMs();
   if (!interval) return;
   const tick = () => {
+    if (inflight) return;
     globalState.__sasSheetSyncAt = Date.now();
     void syncAllSheets().catch(error => {
       console.error('sheet sync interval failed', publicSyncError(error));

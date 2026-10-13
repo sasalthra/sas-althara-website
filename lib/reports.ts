@@ -21,7 +21,9 @@ export function parseReportFilters(query:URLSearchParams,now=new Date()):ReportF
  const positive=(key:string,fallback:number,max:number)=>{const v=query.get(key);if(v===null)return fallback;if(!/^\d+$/.test(v)||Number(v)<1||Number(v)>max)throw new ReportError(400,'صفحة غير صالحة');return Number(v);};
  return {from,to,employee:text('employee'),source:text('source'),stage:text('stage'),funding:text('funding'),page:positive('page',1,10000),pageSize:positive('pageSize',25,100)};
 }
-// Comparisons go through lib/sql-collation.ts so both sides are CAST AS BINARY.
+// Id and key comparisons go through lib/sql-collation.ts. The column stays bare
+// and the other side is CAST AS BINARY, so mixed collations do not raise 1267
+// and the index can be used. Date windows still cast both sides.
 function pad2(n:number){return String(n).padStart(2,'0');}
 function nextCalendarDay(day:string){const [y,m,d]=day.split('-').map(Number);const dt=new Date(Date.UTC(y,m-1,d));dt.setUTCDate(dt.getUTCDate()+1);return dt.toISOString().slice(0,10);}
 /** Midnight opening a Riyadh calendar day, as UTC 'YYYY-MM-DD HH:MM:SS'. Saudi Arabia is fixed UTC+3. */
@@ -47,9 +49,9 @@ const specs:Record<Exclude<ReportId,'properties'>,Spec>={
  announcements:{select:'id,title,created_at',from:'hr_announcements',date:'created_at',order:'created_at DESC,id',columns:[['id','المعرف'],['title','الإعلان'],['created_at','النشر UTC']]},
  users:{select:'id,name,role,active,CAST(created_at AS CHAR) AS created_at',from:'crm_users',employee:'id',order:'id',columns:[['id','المعرف'],['name','الاسم'],['role','الدور'],['active','فعال'],['created_at','إنشاء الحساب']],groups:['role','active']},
  audit:{select:'id,actor_id,action,created_at',from:'crm_audit',date:'created_at',employee:'actor_id',order:'created_at DESC,id',columns:[['id','الحدث'],['actor_id','الفاعل'],['action','العمل'],['created_at','الوقت UTC']],groups:['action','actor_id']},
- imports:{select:"id,actor_id,created_at,JSON_EXTRACT(details,'$.inserted') AS inserted",from:'crm_audit',date:'created_at',employee:'actor_id',fixed:`${asBinary('action')} = ${asBinary("'leads.import'")}`,order:'created_at DESC,id',columns:[['id','معرف التشغيل'],['actor_id','الفاعل'],['inserted','صفوف مقبولة'],['created_at','الوقت UTC']],groups:['actor_id']},
+ imports:{select:"id,actor_id,created_at,JSON_EXTRACT(details,'$.inserted') AS inserted",from:'crm_audit',date:'created_at',employee:'actor_id',fixed:`action = ${asBinary("'leads.import'")}`,order:'created_at DESC,id',columns:[['id','معرف التشغيل'],['actor_id','الفاعل'],['inserted','صفوف مقبولة'],['created_at','الوقت UTC']],groups:['actor_id']},
  importRows:{select:'r.id,r.lead_id,r.source,r.created_at',from:`crm_import_rows r JOIN leads l ON ${binJoin('l.id','r.lead_id')}`,date:'r.created_at',lead:true,order:'r.created_at DESC,r.id',columns:[['id','معرف الصف'],['lead_id','العميل'],['source','مصدر الاستيراد'],['created_at','الوقت UTC']],groups:['source']},
- sheets:{select:"id,last_run,JSON_EXTRACT(config,'$.enabled') AS enabled,JSON_EXTRACT(config,'$.sourceConfirmed') AS sourceConfirmed,JSON_EXTRACT(last_result,'$.error') AS failed,JSON_EXTRACT(last_result,'$.inserted') AS inserted,JSON_EXTRACT(last_result,'$.duplicates') AS duplicates,JSON_EXTRACT(last_result,'$.invalid') AS invalid",from:'crm_integrations',fixed:`${asBinary('id')} = ${asBinary("'sheets'")}`,order:'id',columns:[['id','التكامل'],['enabled','حالة الإعداد'],['sourceConfirmed','اعتماد المصدر'],['last_run','آخر تشغيل UTC'],['health','الحالة المحفوظة'],['inserted','المقبول'],['duplicates','المكرر'],['invalid','غير الصالح']]},
+ sheets:{select:"id,last_run,JSON_EXTRACT(config,'$.enabled') AS enabled,JSON_EXTRACT(config,'$.sourceConfirmed') AS sourceConfirmed,JSON_EXTRACT(last_result,'$.error') AS failed,JSON_EXTRACT(last_result,'$.inserted') AS inserted,JSON_EXTRACT(last_result,'$.duplicates') AS duplicates,JSON_EXTRACT(last_result,'$.invalid') AS invalid",from:'crm_integrations',fixed:`id = ${asBinary("'sheets'")}`,order:'id',columns:[['id','التكامل'],['enabled','حالة الإعداد'],['sourceConfirmed','اعتماد المصدر'],['last_run','آخر تشغيل UTC'],['health','الحالة المحفوظة'],['inserted','المقبول'],['duplicates','المكرر'],['invalid','غير الصالح']]},
  ai:{select:'user_id,hour_key,requests',from:'ai_usage',date:'hour_key',employee:'user_id',order:'hour_key DESC,user_id',columns:[['user_id','المستخدم'],['hour_key','الساعة UTC'],['requests','محاولات الطلبات']],groups:['user_id']},
 };
 const financeFields=[['ownerCommission','العمولة من المالك'],['clientCommission','العمولة من العميل'],['totalCommission','إجمالي العمولة'],['brokerage','السعي — مدخل'],['companyDebt','سداد الشركة للمديونية'],['clientDebt','سداد العميل المباشر — ليس تحصيلاً'],['confirmed_due','المستحق المؤكد حسب القاعدة'],['companyDeposit','عربون الشركة — يدوي'],['companyValuation','تقييم الشركة — يدوي'],['companyPayments','دفعات الشركة — يدوي'],['totalPayments','إجمالي مدفوعات — يدوي مستقل'],['brokerageCheque','تحصيل شيك سعي — يدوي'],['ownerCollection','تحصيل المالك — يدوي'],['clientCollection','تحصيل العميل للشركة — يدوي'],['totalCollections','إجمالي متحصلات — يدوي مستقل'],['totalDue','إجمالي مستحق — يدوي مستقل'],['balance','رصيد — يدوي مستقل'],['tax','ضريبة — يدوي'],['netCommission','صافي العمولة — يدوي'],['fundingAmount','تمويل — يدوي'],['propertyValue','قيمة عقار — يدوي'],['refund','استرداد — يدوي'],['brokerCommission','عمولة وسيط — يدوي'],['externalExpenses','مصروفات خارجية — يدوي'],['buyerDeposit','عربون المشتري — يدوي']];
@@ -109,21 +111,12 @@ async function employeeTokens(db:Database,employee:string):Promise<string[]>{
  const tokens=new Set<string>();const add=(value:unknown)=>{const text=String(value??'').trim();if(text)tokens.add(text);};
  add(employee);
  if(!employee.trim())return [];
- const queries=[
-  `SELECT id, name, username FROM crm_users WHERE ${binEq('id')} OR ${binEq('username')} OR ${binEq('name')} LIMIT 5`,
-  `SELECT id, name FROM crm_users WHERE ${binEq('id')} OR ${binEq('name')} LIMIT 5`,
- ];
- for(const sql of queries){
-  try{
-   const marks=(sql.match(/\?/g)||[]).length;
-   const rows=await db.prepare(sql).bind(...Array.from({length:marks},()=>employee)).all();
-   for(const row of rows.results){add(row.id);add(row.name);add(row.username);}
-   break;
-  }catch(error){
-   const message=error instanceof Error?error.message:'';
-   if(!/username|no such column|unknown column/i.test(message))break;
-  }
- }
+ // Case-insensitive name/username expansion happens in JS. The SQL filter then
+ // compares the stored id, name, and username exactly, so the column is not wrapped.
+ try{
+  const person=matchUser(await loadUsers(db),employee);
+  if(person){add(person.id);add(person.name);add(person.username);}
+ }catch{/* the typed token still filters assignment columns */}
  return [...tokens];
 }
 function cachedTokens(db:Database,employee:string){

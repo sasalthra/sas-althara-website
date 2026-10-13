@@ -22,8 +22,9 @@
  * telegram_sync_log existed, so the admin sync page could not read the log.
  * The source uniqueness is telegram_source_hash CHAR(64), a SHA-256, not a
  * TEXT column. JSON columns are not used. A failed create is not cached.
- * Existing lead phones are rewritten to the Saudi local form 05XXXXXXXX once
- * per process. A newer lead created by the sheet sync is then deleted when an
+ * Existing lead phones are rewritten to the Saudi local form 05XXXXXXXX once.
+ * That pass and the retired-stage conversion are recorded in crm_schema_meta
+ * so a later process start does not scan the leads table again. A newer lead created by the sheet sync is then deleted when an
  * earlier lead has the same normalized phone (see lib/sheet-duplicate-cleanup.ts).
  * The marker is leads.created_via = google_sheet, a created activity whose
  * via is google_sheet, or a crm_sheet_rows link with status imported. Source
@@ -49,7 +50,9 @@
  * created, existing, skipped, and error_message are added the same way.
  */
 
+import {createHash} from 'node:crypto';
 import {planLeadPhoneMigration} from './phone';
+import {paramEq} from './sql-collation';
 import {retiredStageMoves, stageEnumValues} from './lead-stages';
 import {
   STAGE_CHANGED_NOTES_SQL,
@@ -189,6 +192,104 @@ async function hasFeaturedColumn(executor: SqlExecutor): Promise<boolean | null>
   }
 }
 
+const PHONE_MIGRATION = 'lead_phone_normalize_v1';
+
+function stageMigrationName() {
+  const body = retiredStageMoves.map(move => `${move.from}>${move.to}`).join('\n');
+  return `stages_${createHash('sha256').update(body).digest('hex').slice(0, 56)}`;
+}
+
+async function ensureSchemaMeta(executor: SqlExecutor) {
+  try {
+    await run(
+      executor,
+      `CREATE TABLE IF NOT EXISTS crm_schema_meta (
+        name VARCHAR(64) NOT NULL PRIMARY KEY,
+        applied_at VARCHAR(40) NOT NULL
+      )`
+    );
+  } catch (error) {
+    console.error('crm_schema_meta was not created', error);
+  }
+}
+
+/** True only when the flag row is readable. A missing table means "not yet". */
+async function migrationApplied(executor: SqlExecutor, name: string) {
+  try {
+    const rows = rowsOf(
+      await run(executor, `SELECT name FROM crm_schema_meta WHERE ${paramEq('name')} LIMIT 1`, [name])
+    );
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function markMigration(executor: SqlExecutor, name: string) {
+  try {
+    await run(executor, 'INSERT INTO crm_schema_meta (name, applied_at) VALUES (?, ?)', [
+      name,
+      new Date().toISOString(),
+    ]);
+  } catch (error) {
+    if (/duplicate|UNIQUE|ER_DUP_ENTRY/i.test(messageOf(error))) return;
+    console.error('schema migration flag was not recorded', name, error);
+  }
+}
+
+/**
+ * TEXT/BLOB/JSON cannot be indexed (1171/1170). A utf8mb4 key longer than
+ * 767 bytes is ER_TOO_LONG_KEY (1071) on MySQL 5.7 compact rows. CHAR(36)
+ * stays under that limit; a wide VARCHAR is skipped.
+ */
+function columnTooWideForIndex(type: string) {
+  const text = type.toLowerCase();
+  if (/\b(?:tiny|medium|long)?text\b|\bblob\b|\bjson\b/.test(text)) return true;
+  const match = /\b(?:var)?char\((\d+)\)/.exec(text);
+  if (!match) return false;
+  const bytesEach = /ascii|latin1/.test(text) ? 1 : 4;
+  return Number(match[1]) * bytesEach > 767;
+}
+
+async function ensureActivityLeadIndex(executor: SqlExecutor) {
+  try {
+    const names = new Set(
+      rowsOf(await run(executor, 'SHOW INDEX FROM lead_activity')).map(row =>
+        String(row.Key_name ?? row.key_name ?? row.name ?? '')
+      )
+    );
+    if (names.has('activity_lead_time')) return;
+  } catch {
+    // SHOW INDEX is MySQL. SQLite and locked accounts fall through.
+  }
+  try {
+    const rows = rowsOf(await run(executor, 'SHOW COLUMNS FROM lead_activity'));
+    if (rows.length) {
+      const lead = rows.find(row => columnName(row).toLowerCase() === 'lead_id');
+      const created = rows.find(row => columnName(row).toLowerCase() === 'created_at');
+      if ((lead && columnTooWideForIndex(columnType(lead))) || (created && columnTooWideForIndex(columnType(created)))) {
+        console.error('activity_lead_time was not added; a key column is TEXT or longer than 767 bytes');
+        return;
+      }
+    }
+  } catch {
+    // No SHOW COLUMNS. The CREATE below still refuses a too-long key.
+  }
+  const duplicate = /duplicate|already exists|ER_DUP_KEYNAME/i;
+  const tooLong = /too long|1071|1170|BLOB\/TEXT/i;
+  try {
+    await run(executor, 'ALTER TABLE lead_activity ADD INDEX activity_lead_time (lead_id, created_at)');
+  } catch (error) {
+    if (duplicate.test(messageOf(error)) || tooLong.test(messageOf(error))) return;
+    try {
+      await run(executor, 'CREATE INDEX IF NOT EXISTS activity_lead_time ON lead_activity (lead_id, created_at)');
+    } catch (fallback) {
+      if (duplicate.test(messageOf(fallback)) || tooLong.test(messageOf(fallback))) return;
+      console.error('activity_lead_time was not added', fallback);
+    }
+  }
+}
+
 async function ensureFeaturedIndex(executor: SqlExecutor) {
   try {
     const names = new Set(
@@ -266,6 +367,9 @@ async function widenStageEnum(executor: SqlExecutor) {
 }
 
 async function convertRetiredStages(executor: SqlExecutor) {
+  const flag = stageMigrationName();
+  if (await migrationApplied(executor, flag)) return;
+  let ok = true;
   for (const move of retiredStageMoves) {
     try {
       const ids = rowsOf(await run(executor, 'SELECT id FROM leads WHERE stage = ?', [move.from]))
@@ -295,9 +399,11 @@ async function convertRetiredStages(executor: SqlExecutor) {
         }
       }
     } catch (error) {
+      ok = false;
       console.error(`stage conversion ${move.from} -> ${move.to} failed`, error);
     }
   }
+  if (ok) await markMigration(executor, flag);
 }
 
 /**
@@ -562,6 +668,7 @@ function runnerFromExecutor(executor: SqlExecutor): SqlRunner {
  * existing notes, so it does not write them again.
  */
 async function normalizeExistingLeadPhones(executor: SqlExecutor) {
+  if (await migrationApplied(executor, PHONE_MIGRATION)) return;
   let rows: Record<string, unknown>[] = [];
   try {
     rows = rowsOf(await run(executor, 'SELECT id, phone FROM leads'));
@@ -574,19 +681,23 @@ async function normalizeExistingLeadPhones(executor: SqlExecutor) {
       .map(row => ({id: String(row.id ?? ''), phone: String(row.phone ?? '')}))
       .filter(row => row.id)
   );
+  let ok = true;
   for (const update of plan.updates) {
     try {
       await run(executor, 'UPDATE leads SET phone = ? WHERE id = ?', [update.phone, update.id]);
     } catch (error) {
+      ok = false;
       console.error('lead phone was not normalized', error);
     }
   }
   try {
     await cleanupSheetSyncDuplicates(runnerFromExecutor(executor));
   } catch (error) {
+    ok = false;
     console.error('sheet duplicate cleanup failed', error);
   }
-  await noteSharedLeadPhones(executor);
+  if (!(await noteSharedLeadPhones(executor))) ok = false;
+  if (ok) await markMigration(executor, PHONE_MIGRATION);
 }
 
 async function noteSharedLeadPhones(executor: SqlExecutor) {
@@ -595,14 +706,14 @@ async function noteSharedLeadPhones(executor: SqlExecutor) {
     rows = rowsOf(await run(executor, 'SELECT id, phone FROM leads'));
   } catch (error) {
     console.error('duplicate phone notes were not checked', error);
-    return;
+    return false;
   }
   const plan = planLeadPhoneMigration(
     rows
       .map(row => ({id: String(row.id ?? ''), phone: String(row.phone ?? '')}))
       .filter(row => row.id)
   );
-  if (!plan.duplicateNotes.length) return;
+  if (!plan.duplicateNotes.length) return true;
   let noted = new Set<string>();
   try {
     noted = new Set(
@@ -612,8 +723,9 @@ async function noteSharedLeadPhones(executor: SqlExecutor) {
     );
   } catch (error) {
     console.error('duplicate phone notes were not checked', error);
-    return;
+    return false;
   }
+  let ok = true;
   for (const item of plan.duplicateNotes) {
     if (noted.has(item.id)) continue;
     try {
@@ -633,9 +745,11 @@ async function noteSharedLeadPhones(executor: SqlExecutor) {
         ]
       );
     } catch (error) {
+      ok = false;
       console.error('duplicate phone note was not written', error);
     }
   }
+  return ok;
 }
 
 async function ensureStageNoteIndex(executor: SqlExecutor, createSql: string, alterSql: string) {
@@ -1071,6 +1185,16 @@ async function ensureFinanceCommissions(executor: SqlExecutor) {
 
 async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
   await relaxSessionLocks(executor);
+  try {
+    await ensureSchemaMeta(executor);
+  } catch (error) {
+    console.error('crm_schema_meta check failed', error);
+  }
+  try {
+    await ensureActivityLeadIndex(executor);
+  } catch (error) {
+    console.error('lead_activity index check failed', error);
+  }
   try {
     await ensureSheetSchema(executor);
   } catch (error) {

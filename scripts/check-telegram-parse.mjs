@@ -375,7 +375,7 @@ try {
     assertCollationSafe(sql);
   }
   const seenUpdate = seenChatUpdateSql();
-  assert.match(seenUpdate, /WHERE CAST\(chat_id AS BINARY\) = CAST\(\? AS BINARY\)/);
+  assert.match(seenUpdate, /WHERE chat_id = CAST\(\? AS BINARY\)/);
   assert.doesNotMatch(seenUpdate, /HEX\s*\(|CONVERT_TZ\s*\(/i);
   assertCollationSafe(seenUpdate.slice(seenUpdate.indexOf('WHERE')));
   assert.match(propertyLookupSql(1), /telegram_message_ids/);

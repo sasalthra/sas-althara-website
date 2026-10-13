@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {sqliteReportSql} from './sqlite-report-sql.mjs';
 import {createHash} from 'node:crypto';
 import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {createRequire} from 'node:module';
@@ -11,7 +12,7 @@ const require = createRequire(import.meta.url);
 const output = mkdtempSync(join(tmpdir(), 'sas-sheets-'));
 
 function sqliteSql(sql) {
-  return String(sql).replaceAll(' AS BINARY', ' AS BLOB');
+  return sqliteReportSql(sql);
 }
 
 function sqliteExecutor(db) {
@@ -940,8 +941,9 @@ try {
   assert.match(repairRoute, /تم تصحيح مرحلة \$\{result\.updated\} عميل/);
   assert.doesNotMatch(repairRoute, /sendMail|assignment-notify/);
   assert.doesNotMatch(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /HEX\s*\(|CONVERT_TZ\s*\(/i);
-  assert.match(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /asBinary\(column\)/);
-  assert.match(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /asBinary\('\?'\)/);
+  assert.match(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /paramEq\(column\)/);
+  assert.match(readFileSync('lib/sql-collation.ts', 'utf8'), /\$\{column\} = \$\{asBinary\('\?'\)\}/);
+  assert.doesNotMatch(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /asBinary\(column\)/);
   assert.doesNotMatch(readFileSync('lib/sheet-test-purge.ts', 'utf8'), /sendMail|assignment-notify/);
   assert.doesNotMatch(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /sheet-test-purge|purgeSheetTest|executeSheetTestLeadPurge/);
   assert.doesNotMatch(readFileSync('lib/lead-schema.ts', 'utf8'), /sheet-test-purge|purgeSheetTest|executeSheetTestLeadPurge/);

@@ -5,10 +5,9 @@ import {crmDb} from '@/lib/crm-db';
 import {leadSchema as schema} from '@/lib/lead-input';
 import {findLeadByNormalizedPhone, noteReregistration} from '@/lib/lead-reregistration';
 import {ensureLeadSchema, isMissingFeaturedColumn} from '@/lib/lead-schema';
-import {leadListOrderSql} from '@/lib/lead-featured';
+import {loadLeadPage, parseLeadListFilters} from '@/lib/lead-list';
 import {stageWriteAllowed} from '@/lib/lead-stages';
 import {displayLeadPhone, normalizeLeadPhone} from '@/lib/phone';
-import {binJoin} from '@/lib/sql-collation';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -108,168 +107,7 @@ async function notifySalesAssignment(
   });
 }
 
-function leadSelect() {
-  return `
-    SELECT
-      leads.*,
-
-      sales_user.name AS assigned_name,
-      sales_user.username AS assigned_username,
-
-      field_user.name AS field_assigned_name,
-      field_user.username AS field_assigned_username,
-
-      (
-        SELECT JSON_UNQUOTE(
-          JSON_EXTRACT(
-            activity.details,
-            '$.note'
-          )
-        )
-        FROM lead_activity AS activity
-        INNER JOIN crm_users AS activity_user
-          ON ${binJoin('activity_user.id', 'activity.user_id')}
-        WHERE ${binJoin('activity.lead_id', 'leads.id')}
-          AND activity_user.role = 'sales'
-          AND JSON_EXTRACT(
-            activity.details,
-            '$.note'
-          ) IS NOT NULL
-        ORDER BY activity.created_at DESC
-        LIMIT 1
-      ) AS sales_last_update,
-
-      (
-        SELECT activity.created_at
-        FROM lead_activity AS activity
-        INNER JOIN crm_users AS activity_user
-          ON ${binJoin('activity_user.id', 'activity.user_id')}
-        WHERE ${binJoin('activity.lead_id', 'leads.id')}
-          AND activity_user.role = 'sales'
-          AND JSON_EXTRACT(
-            activity.details,
-            '$.note'
-          ) IS NOT NULL
-        ORDER BY activity.created_at DESC
-        LIMIT 1
-      ) AS sales_last_update_at,
-
-      (
-        SELECT JSON_UNQUOTE(
-          JSON_EXTRACT(
-            activity.details,
-            '$.note'
-          )
-        )
-        FROM lead_activity AS activity
-        INNER JOIN crm_users AS activity_user
-          ON ${binJoin('activity_user.id', 'activity.user_id')}
-        WHERE ${binJoin('activity.lead_id', 'leads.id')}
-          AND activity_user.role = 'field'
-          AND JSON_EXTRACT(
-            activity.details,
-            '$.note'
-          ) IS NOT NULL
-        ORDER BY activity.created_at DESC
-        LIMIT 1
-      ) AS field_last_update,
-
-      (
-        SELECT activity.created_at
-        FROM lead_activity AS activity
-        INNER JOIN crm_users AS activity_user
-          ON ${binJoin('activity_user.id', 'activity.user_id')}
-        WHERE ${binJoin('activity.lead_id', 'leads.id')}
-          AND activity_user.role = 'field'
-          AND JSON_EXTRACT(
-            activity.details,
-            '$.note'
-          ) IS NOT NULL
-        ORDER BY activity.created_at DESC
-        LIMIT 1
-      ) AS field_last_update_at
-
-    FROM leads
-
-    LEFT JOIN crm_users AS sales_user
-      ON ${binJoin('sales_user.id', 'leads.assigned_to')}
-
-    LEFT JOIN crm_users AS field_user
-      ON ${binJoin('field_user.id', 'leads.field_assigned_to')}
-  `;
-}
-
-function presentLeads(
-  rows: unknown[],
-  featured: boolean
-) {
-  return (rows as Record<string, unknown>[]).map(row => {
-    const phone = displayLeadPhone(String(row.phone ?? ''));
-    return featured
-      ? {...row, phone, featured_available: 1}
-      : {...row, phone, is_featured: 0, featured_available: 0};
-  });
-}
-
-async function readLeads(
-  user: {userId: string; role: string},
-  featured: boolean
-) {
-  const order = leadListOrderSql(featured);
-  const db = crmDb();
-
-  if (canSeeAll(user.role)) {
-    const result = await db
-      .prepare(`
-        ${leadSelect()}
-        ${order}
-      `)
-      .all();
-    return result.results;
-  }
-
-  if (user.role === 'sales') {
-    const result = await db
-      .prepare(`
-        ${leadSelect()}
-        WHERE
-          leads.assigned_to = ?
-          OR leads.created_by = ?
-          OR leads.owner = ?
-        ${order}
-      `)
-      .bind(
-        user.userId,
-        user.userId,
-        user.userId
-      )
-      .all();
-    return result.results;
-  }
-
-  if (user.role === 'field') {
-    const result = await db
-      .prepare(`
-        ${leadSelect()}
-        WHERE
-          leads.field_assigned_to = ?
-          OR leads.created_by = ?
-          OR leads.owner = ?
-        ${order}
-      `)
-      .bind(
-        user.userId,
-        user.userId,
-        user.userId
-      )
-      .all();
-    return result.results;
-  }
-
-  return [];
-}
-
-export async function GET() {
+export async function GET(req?: Request) {
   const user = await getCrmUser();
 
   if (!user) {
@@ -279,14 +117,16 @@ export async function GET() {
     );
   }
 
+  const filters = parseLeadListFilters(req ? new URL(req.url) : null, user.role);
+
   try {
     let featured = (await ensureLeadSchema()).featured;
     try {
-      return reply(presentLeads(await readLeads(user, featured), featured));
+      return reply(await loadLeadPage(crmDb(), user, filters, featured));
     } catch (error) {
       if (!featured || !isMissingFeaturedColumn(error)) throw error;
       featured = false;
-      return reply(presentLeads(await readLeads(user, false), false));
+      return reply(await loadLeadPage(crmDb(), user, filters, false));
     }
   } catch (error) {
     console.error(

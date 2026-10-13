@@ -69,7 +69,7 @@ https://docs.google.com/spreadsheets/d/1_lAoABagOV93EQPi_vNWct4ok3zCWE1plJFfbDzm
 
 السحب يعمل بطريقتين معاً:
 
-1. داخل عملية Node: كل 3 دقائق تقريباً، وأول مرة بعد نحو 20 ثانية من تشغيل خادم Node. المؤقت يبدأ من `instrumentation.ts` عندما يكون التشغيل `nodejs`، وأيضاً عند أول طلب يصل إلى واجهة تستخدم قاعدة البيانات، حتى لا يتوقف السحب إذا لم تُستدعَ instrumentation على Hostinger. لا يحتاج ضغط «مزامنة الآن». لتعطيل هذا المؤقت فقط اضبط SHEETS_SYNC_INTERVAL_MS=0. لا تخفضه عن 30 ثانية.
+1. داخل عملية Node: كل 15 دقيقة تقريباً، وأول مرة بعد نحو 20 ثانية من تشغيل خادم Node. المؤقت يبدأ من `instrumentation.ts` عندما يكون التشغيل `nodejs`، وأيضاً عند أول طلب يصل إلى واجهة تستخدم قاعدة البيانات، حتى لا يتوقف السحب إذا لم تُستدعَ instrumentation على Hostinger. لا يحتاج ضغط «مزامنة الآن». لتعطيل هذا المؤقت فقط اضبط SHEETS_SYNC_INTERVAL_MS=0. لا تخفضه عن 30 ثانية.
 2. كرون Hostinger احتياطاً إن نامت العملية. أنشئ سراً بطول 32 حرفاً على الأقل، مثلاً ناتج `openssl rand -hex 32`، وضعه في متغير البيئة CRON_SECRET. لا تضعه في الرابط.
 
 من hPanel → Websites → تطبيق Node.js → Environment variables أضف CRON_SECRET ثم أعد تشغيل التطبيق. بعدها Advanced → Cron Jobs → Create:

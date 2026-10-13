@@ -6,6 +6,7 @@ import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
+import {sqliteReportSql} from './sqlite-report-sql.mjs';
 
 process.env.npm_lifecycle_event = process.env.npm_lifecycle_event || 'test';
 
@@ -297,7 +298,7 @@ try {
 
   const headers = ['الاسم', 'رقم الجوال', 'TikTok Lead ID'];
   const again = await sync.importSheetGrid({prepare(query) {
-    const text = String(query).replaceAll(' AS BINARY', ' AS BLOB');
+    const text = sqliteReportSql(query);
     return {bind(...args) {
       return {
         async all() { return {results: sql.prepare(text).all(...args)}; },
