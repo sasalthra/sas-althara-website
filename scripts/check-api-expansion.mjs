@@ -20,8 +20,10 @@ try {
  const api=createRequire(import.meta.url)(join(out,'api.cjs'));
  const request=(v,origin='https://sas.test')=>new Request('https://sas.test/api/transactions',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify(v)});
  assert.equal((await api.GET()).status,401);
- globalThis.testUser={...user,role:'sales'};
+ globalThis.testUser={...user,role:'field'};
  assert.equal((await api.POST(request({}))).status,403);
+ globalThis.testUser={...user,role:'sales'};
+ assert.equal((await api.POST(request({}))).status,400);
  globalThis.testUser=user;
  assert.equal((await api.POST(request({},'https://evil.test'))).status,403);
  assert.equal((await api.POST(request({}))).status,400);

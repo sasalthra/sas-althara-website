@@ -184,7 +184,7 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled, isNewUnassig
   const choiceLabels=rules.stageChoices().map(([,label])=>label);
   assert.deepEqual(choiceLabels,[
     'عميل جديد','لم يتم الرد','تم التواصل','مهتم','بانتظار العروض','تفويج للميداني','تم زيارة العقار','تفاوض',
-    'تمت إحالة معاملة العميل للبنك','دفع عربون','وقع عقد','إفراغ','تم تأجيل الطلب - للمتابعة','غير مؤهل','غير مهتم','مغلق',
+    'تمت إحالة معاملة العميل للبنك','سداد مديونية','دفع عربون','وقع عقد','إفراغ','تم تأجيل الطلب - للمتابعة','غير مؤهل','غير مهتم','مغلق',
   ]);
   assert.equal(rules.stageLabel('interested'),'مهتم');
   assert.equal(rules.canonicalStage('مهتم'),'interested');

@@ -63,7 +63,7 @@ export const workspaceItems = [
     id: "leads",
     label: "العملاء والمتابعات",
     group: "إدارة الأعمال",
-    roles: ["admin", "supervisor", "sales", "field"],
+    roles: ["admin", "supervisor", "sales", "field", "accounts"],
   },
   {
     id: "properties",
@@ -75,7 +75,7 @@ export const workspaceItems = [
     id: "transactions",
     label: "المعاملات والمالية",
     group: "إدارة الأعمال",
-    roles: ["admin"],
+    roles: ["admin", "accounts", "sales"],
   },
   {
     id: "hr",

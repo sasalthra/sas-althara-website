@@ -24,7 +24,7 @@ function canAccessLead(
   user: {userId: string; role: string},
   lead: LeadAccessRow
 ) {
-  if (user.role === 'admin' || user.role === 'supervisor') return true;
+  if (user.role === 'admin' || user.role === 'supervisor' || user.role === 'accounts') return true;
   if (user.role === 'sales') {
     return lead.assigned_to === user.userId || lead.created_by === user.userId || lead.owner === user.userId;
   }

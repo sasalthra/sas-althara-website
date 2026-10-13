@@ -323,10 +323,7 @@ export default function ReportsPanel({role}:{role:string}){
       <input type="date" name="to" aria-label="إلى تاريخ" defaultValue={query.get('to')||stateData?.filters.to||''}/>
      </div>
     </label>
-    <label>مرحلة العميل{selectedModule==='transactions'
-     ?<input name="stage" placeholder="مرحلة طلب التمويل" defaultValue={query.get('stage')||''}/>
-     :<select name="stage" defaultValue={stageFilterValue(query.get('stage')||'')}><option value="">كل المراحل</option>{stageChoices().map(([key,label])=><option key={key} value={label}>{label}</option>)}{stageFilterExtra(query.get('stage')||'')}</select>
-    }</label>
+    <label>مرحلة العميل<select name="stage" defaultValue={stageFilterValue(query.get('stage')||'')}><option value="">كل المراحل</option>{stageChoices().map(([key,label])=><option key={key} value={label}>{label}</option>)}{stageFilterExtra(query.get('stage')||'')}</select></label>
     <label>مصدر العميل<input name="source" placeholder="كل المصادر" defaultValue={query.get('source')||''}/></label>
     <label>الموظف<select name="reportEmployee" defaultValue={query.get('reportEmployee')||''}><option value="">{role==='admin'?'جميع الموظفين':'نطاقي فقط'}</option>{stateData?.employees.map(e=><option key={e.id} value={e.id}>{employeeOptionLabel(e)}</option>)}</select></label>
     <label>الوحدة التقريرية<select name="module" defaultValue={selectedModule}><option value="overview">نظرة عامة — كل المسموح</option>{modules.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label>

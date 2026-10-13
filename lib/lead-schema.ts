@@ -36,6 +36,10 @@
  * crm_transactions.owner_commission and client_commission are added once and
  * left null. A previous free-text brokerage value is not copied into either
  * column.
+ * Debt-payoff and review columns are added the same way and are never keys.
+ * A stored client serial is copied once into client_serial; the pass is
+ * recorded in crm_schema_meta. Empty serials are left blank. crm_users.role
+ * gains `accounts` when the column is still an ENUM that lacks it.
  * crm_sheet_sources / crm_sheet_rows / crm_sheet_sync_lock are created the same
  * way, with DDL that MySQL 5.7+, MySQL 8, and MariaDB 10.4 accept. TEXT cannot
  * be a primary key there (ER_BLOB_KEY_WITHOUT_LENGTH), JSON and a long utf8mb4
@@ -1196,6 +1200,94 @@ async function ensureFinanceCommissions(executor: SqlExecutor) {
   await ensureColumn(executor, 'crm_transactions', 'client_commission', 'VARCHAR(40) NULL');
 }
 
+const CLIENT_SERIAL_MIGRATION = 'transaction_client_serial_v1';
+
+const transactionFinanceColumns: Array<[string, string]> = [
+  ['client_serial', 'VARCHAR(40) NULL'],
+  ['review_status', 'VARCHAR(20) NULL'],
+  ['reviewed_by', 'VARCHAR(255) NULL'],
+  ['reviewed_at', 'VARCHAR(40) NULL'],
+  ['debt_payoff_amount', 'VARCHAR(40) NULL'],
+  ['debt_account_number', 'VARCHAR(80) NULL'],
+  ['debt_payoff_date', 'VARCHAR(20) NULL'],
+  ['debt_payment_ref', 'VARCHAR(80) NULL'],
+  ['other_refund', 'VARCHAR(40) NULL'],
+  ['other_refund_note', 'VARCHAR(1000) NULL'],
+  ['linked_property_id', 'VARCHAR(64) NULL'],
+];
+
+function jsonObject(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+/** Copy a serial the form used to store in JSON. Does not invent numbers for blank rows. */
+async function backfillClientSerials(executor: SqlExecutor) {
+  if (await columnMissing(executor, 'crm_transactions', 'client_serial')) return;
+  if (await migrationApplied(executor, CLIENT_SERIAL_MIGRATION)) return;
+  const rows = rowsOf(await run(executor, 'SELECT id, data, client_serial FROM crm_transactions'));
+  let ok = true;
+  for (const row of rows) {
+    const id = String(row.id ?? '');
+    if (!id || String(row.client_serial ?? '').trim()) continue;
+    const serial = String(jsonObject(row.data).clientSerial ?? '').trim().slice(0, 40);
+    if (!serial) continue;
+    try {
+      await run(executor, `UPDATE crm_transactions SET client_serial = ? WHERE ${paramEq('id')}`, [serial, id]);
+    } catch (error) {
+      ok = false;
+      console.error('client serial was not copied', error);
+    }
+  }
+  if (ok) await markMigration(executor, CLIENT_SERIAL_MIGRATION);
+}
+
+async function ensureTransactionFinance(executor: SqlExecutor) {
+  for (const [column, definition] of transactionFinanceColumns) {
+    await ensureColumn(executor, 'crm_transactions', column, definition);
+  }
+  try {
+    await backfillClientSerials(executor);
+  } catch (error) {
+    console.error('client serial backfill failed', error);
+  }
+}
+
+/** Append موظف الحسابات when role is still an ENUM. VARCHAR roles are left as stored. */
+async function widenAccountsRole(executor: SqlExecutor) {
+  let type = '';
+  try {
+    const rows = rowsOf(await run(executor, 'SHOW COLUMNS FROM crm_users'));
+    const role = rows.find(row => columnName(row).toLowerCase() === 'role');
+    type = role ? columnType(role) : '';
+  } catch (error) {
+    console.error('crm_users role inspection failed; existing roles stay as stored', error);
+    return;
+  }
+  const current = parseEnum(type);
+  if (!current || current.includes('accounts')) return;
+  const next = [...current, 'accounts'];
+  if (next.some(value => !/^[a-z0-9_]+$/i.test(value))) {
+    console.error('accounts role was not added; a role value is not a safe identifier');
+    return;
+  }
+  try {
+    await run(
+      executor,
+      `ALTER TABLE crm_users MODIFY COLUMN role ENUM(${next.map(value => `'${value}'`).join(',')}) NOT NULL`
+    );
+  } catch (error) {
+    console.error('accounts role was not added', error);
+  }
+}
+
 const FIELD_REPORT_MIGRATION = 'field_report_dispatch_v1';
 
 const USER_ALERTS_DDL = `CREATE TABLE IF NOT EXISTS crm_user_alerts (
@@ -1568,6 +1660,16 @@ async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
     await ensureFinanceCommissions(executor);
   } catch (error) {
     console.error('crm_transactions commission columns were not added', error);
+  }
+  try {
+    await ensureTransactionFinance(executor);
+  } catch (error) {
+    console.error('crm_transactions finance columns were not added', error);
+  }
+  try {
+    await widenAccountsRole(executor);
+  } catch (error) {
+    console.error('accounts role check failed', error);
   }
   try {
     await ensureFieldReportSchema(executor);

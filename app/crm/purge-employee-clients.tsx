@@ -11,7 +11,7 @@ type EmployeeOption = {
   id: string;
   username: string;
   name: string;
-  role: 'admin' | 'supervisor' | 'sales' | 'field';
+  role: 'admin' | 'supervisor' | 'sales' | 'field' | 'accounts';
   active: number;
 };
 
@@ -36,6 +36,7 @@ const roleLabels: Record<EmployeeOption['role'], string> = {
   supervisor: 'مشرف',
   sales: 'مبيعات',
   field: 'ميداني',
+  accounts: 'موظف الحسابات',
 };
 
 export default function PurgeEmployeeClients({

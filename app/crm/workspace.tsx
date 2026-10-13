@@ -74,7 +74,8 @@ type CrmRole =
   | 'admin'
   | 'supervisor'
   | 'sales'
-  | 'field';
+  | 'field'
+  | 'accounts';
 
 type WorkspaceProps = {
   role: CrmRole;
@@ -457,7 +458,7 @@ export default function CRM({
           const entries=items.filter(item=>item.group===group);
           return entries.length>0&&<div className="crm-nav-group" key={group}><h2>{group}</h2>{entries.map(item=><CrmLink key={item.id} href={`/crm?tab=${item.id}`} aria-current={tab===item.id?'page':undefined} onNavigate={()=>setMenuOpen(false)}>{item.label}</CrmLink>)}</div>;
         })}</nav>
-        <div className="crm-sidebar-footer"><span>جلسة {({admin:'الإدارة',supervisor:'الإشراف',sales:'المبيعات',field:'الميدان'})[role]}</span><LogoutButton /></div>
+        <div className="crm-sidebar-footer"><span>جلسة {({admin:'الإدارة',supervisor:'الإشراف',sales:'المبيعات',field:'الميدان',accounts:'الحسابات'})[role]}</span><LogoutButton /></div>
       </aside>
       <div className="crm-stage" inert={menuOpen||undefined}>
       <header className="crm-toolbar">
@@ -471,7 +472,7 @@ export default function CRM({
         {tab==='leads'&&<div className="crm-summary"><button type="button" className="crm-summary-btn" data-active={leadView==='all'} onClick={()=>setLeadView('all')}>طلبات العملاء <strong>{loading?'—':scopeTotal}</strong></button><button type="button" className="crm-summary-btn" data-active={leadView==='followups'} onClick={()=>setLeadView('followups')}>تحتاج متابعة <strong>{loading?'—':followUps}</strong></button>{role==='field'&&<button type="button" className="crm-summary-btn" data-active={reportOnly} onClick={()=>setReportOnly(value=>!value)}>تقرير مطلوب <strong>{loading?'—':counts.reportRequired}</strong></button>}<span>العقارات <strong>{data.length}</strong></span></div>}
         <Tabs value={tab} dir="rtl">
           <TabsContent value="reports"><ReportsPanel role={role}/></TabsContent>
-          {role === 'admin' && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} initialLeadId={query.get('lead')||''}/></TabsContent>}
+          {['admin', 'accounts', 'sales'].includes(role) && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} initialLeadId={query.get('lead')||''} role={role}/></TabsContent>}
           <TabsContent value="hr"><HrPanel admin={role === 'admin'}/></TabsContent>
           {['admin', 'supervisor'].includes(role) && <TabsContent value="ai"><AiPanel admin={role === 'admin'} envModel={aiEnvModel}/></TabsContent>}
           {role === 'admin' && <TabsContent value="sheets"><SheetsPanel/></TabsContent>}

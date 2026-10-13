@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS crm_users (
  id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
  username VARCHAR(80) NOT NULL UNIQUE,password_hash VARCHAR(255) NOT NULL,
  name VARCHAR(100) NOT NULL,email VARCHAR(255),phone VARCHAR(30),
- role ENUM('admin','supervisor','sales','field') NOT NULL,active TINYINT NOT NULL DEFAULT 1,
+ role ENUM('admin','supervisor','sales','field','accounts') NOT NULL,active TINYINT NOT NULL DEFAULT 1,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS lead_activity (

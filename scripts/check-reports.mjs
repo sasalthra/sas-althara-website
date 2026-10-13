@@ -104,7 +104,9 @@ try {
  report=await readReport(db,admin,'transactions',filters);
  const metric=label=>report.metrics.find(m=>m.label.includes(label));
  assert.equal(metric('السعي — مدخل').value,'0.30');assert.equal(metric('المستحق المؤكد').value,'900000000000.31');
- assert.equal(metric('رصيد — يدوي').value,'-0.30');assert.equal(metric('تحصيل العميل للشركة').value,'0.10');assert.equal(metric('تحصيل العميل للشركة').missing,1);
+ assert.equal(metric('رصيد — يدوي'), undefined, 'balance stays stored and is hidden from the finance report');
+ assert.equal(metric('المبلغ المراد سداده').value,'900000000801.00');
+ assert.equal(metric('تحصيل العميل للشركة').value,'0.10');assert.equal(metric('تحصيل العميل للشركة').missing,1);
  assert.equal(report.rows.find(r=>r.id==='t2').companyDebt,null);
  assert.equal(metric('إجمالي متحصلات').value,null,'unknown is not zero');
  sql.exec(`INSERT INTO hr_attendance VALUES ('alice','2026-09-01','2026-09-01T06:00:00Z','2026-09-01T14:00:00Z',7),('bob','2026-09-01','2026-09-01T06:00:00Z',NULL,0);

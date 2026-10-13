@@ -2,7 +2,7 @@ import {reportCatalog,type ReportColumn,type ReportResult,type ReportRow,type Re
 import {retiredStageMap, stageLabel, stageMatchKeys, stagePipelineIndex} from './lead-stages';
 import {COHORT_DEFINITIONS,countAssignmentEvents,completionRate,conversionRate,fieldDispatchMoment,hasScheduledFollowUp,instantInRiyadhRange,isClosedStage,isContactedStage,isEverFieldDispatchFilter,isInactiveLead,isInterestedStage,isNotInterestedStage,isOverdueFollowUp,isPastFreshStage,isSignedStage,isUnassignedNew,isUnassignedNewWaiting,leadMatchesReportFilters,leadMatchesStage,matchUser,normalizeSource,orderedStages,stageKeyOf,type AssignmentEvent,type DirectoryUser} from './lead-cohorts';
 import {formatRiyadhDateTime, riyadhDayKey} from './lead-dates';
-import {commissionTotal} from './transactions';
+import {commissionTotal, debtAmount, debtPayerLabels, reviewStatusLabels} from './transactions';
 import {asBinary,binEq,binJoin} from './sql-collation';
 export {leadMatchesReportFilters};
 export {fieldDispatchMoment, instantInRiyadhRange, isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort} from './lead-cohorts';
@@ -55,7 +55,7 @@ const specs:Record<Exclude<ReportId,'properties'>,Spec>={
  leads:{select:leadFields,from:leadFrom,date:'l.created_at',lead:true,order:'l.created_at DESC,l.id',columns:[['id','معرف العميل'],['name','العميل'],['source','المصدر'],['stage','المرحلة الحالية'],['sales','المبيعات'],['field','الميدان'],['property_id','معرف العقار'],['property_other','عقار آخر'],['follow_up','المتابعة'],['created_at','الإنشاء UTC']],groups:['source','stage','sales','field']},
  followups:{select:leadFields,from:leadFrom,date:'l.follow_up',lead:true,fixed:`${asBinary('l.follow_up')} <> ${asBinary("''")}`,order:'l.follow_up,l.id',columns:[['id','معرف العميل'],['name','العميل'],['follow_up','الموعد الحالي'],['follow_up_age','عمر المتابعة بتوقيت الرياض'],['stage','المرحلة'],['sales','المبيعات'],['field','الميدان']],groups:['follow_up_age','stage','sales']},
  activity:{select:'a.id,a.lead_id,a.user_id,a.action,CAST(a.created_at AS CHAR) AS created_at',from:`lead_activity a JOIN leads l ON ${binJoin('l.id','a.lead_id')}`,date:'a.created_at',lead:true,order:'a.created_at DESC,a.id',columns:[['id','معرف الحدث'],['lead_id','العميل'],['user_id','الفاعل'],['action','العمل'],['created_at','الوقت المخزن — منطقة DB']],groups:['action','user_id']},
- transactions:{select:'t.id,t.lead_id,t.data,t.confirmed_due,t.updated_at,t.owner_commission,t.client_commission,l.name,l.source,l.stage,l.property_id,s.name AS sales,f.name AS field,l.assigned_to AS assigned_raw,l.field_assigned_to AS field_raw',from:`crm_transactions t JOIN leads l ON ${binJoin('l.id','t.lead_id')} LEFT JOIN crm_users s ON ${binJoin('s.id','l.assigned_to')} LEFT JOIN crm_users f ON ${binJoin('f.id','l.field_assigned_to')}`,date:'t.updated_at',lead:true,order:'t.updated_at DESC,t.id',columns:[],groups:['fundingEntity','debtPayer','requestStage']},
+ transactions:{select:'t.id,t.lead_id,t.data,t.confirmed_due,t.updated_at,t.owner_commission,t.client_commission,l.name,l.source,l.stage,l.property_id,s.name AS sales,f.name AS field,l.assigned_to AS assigned_raw,l.field_assigned_to AS field_raw',from:`crm_transactions t JOIN leads l ON ${binJoin('l.id','t.lead_id')} LEFT JOIN crm_users s ON ${binJoin('s.id','l.assigned_to')} LEFT JOIN crm_users f ON ${binJoin('f.id','l.field_assigned_to')}`,date:'t.updated_at',lead:true,order:'t.updated_at DESC,t.id',columns:[],groups:['fundingEntity','debtPayer']},
  attendance:{select:'a.user_id,u.name,a.work_day,a.check_in,a.check_out,a.late_minutes',from:`hr_attendance a LEFT JOIN crm_users u ON ${binJoin('u.id','a.user_id')}`,date:'a.work_day',employee:'a.user_id',order:'a.work_day DESC,a.user_id',columns:[['user_id','الموظف'],['name','الاسم'],['work_day','يوم العمل'],['check_in','الحضور UTC'],['check_out','الانصراف UTC'],['hours','ساعات مكتملة'],['late_minutes','دقائق التأخير المسجلة']],groups:['name']},
  profiles:{select:'p.user_id,u.name,p.job_title,p.department,p.leave_balance,p.updated_at,p.schedule',from:`hr_profiles p LEFT JOIN crm_users u ON ${binJoin('u.id','p.user_id')}`,employee:'p.user_id',order:'p.user_id',columns:[['user_id','الموظف'],['name','الاسم'],['job_title','الوظيفة'],['department','القسم'],['leave_balance','رصيد الإجازة اليدوي'],['schedule_status','الدوام الحالي'],['shift','وقت الدوام الحالي'],['timezone','منطقة الدوام'],['work_days','أيام الدوام الحالي (0 الأحد–6 السبت)'],['grace_minutes','السماح الحالي بالدقائق'],['updated_at','آخر تعديل UTC']],groups:['department','schedule_status']},
  requests:{select:'r.id,r.user_id,u.name,r.type,r.status,r.created_at,r.start_date,r.end_date,r.reviewed_at',from:`hr_requests r LEFT JOIN crm_users u ON ${binJoin('u.id','r.user_id')}`,date:'r.created_at',employee:'r.user_id',order:'r.created_at DESC,r.id',columns:[['id','معرف الطلب'],['user_id','الموظف'],['name','الاسم'],['type','الخدمة'],['status','الحالة الحالية'],['created_at','الطلب UTC'],['start_date','بداية الإجازة'],['end_date','نهاية الإجازة'],['reviewed_at','المراجعة UTC']],groups:['type','status']},
@@ -67,8 +67,8 @@ const specs:Record<Exclude<ReportId,'properties'>,Spec>={
  sheets:{select:"id,last_run,JSON_EXTRACT(config,'$.enabled') AS enabled,JSON_EXTRACT(config,'$.sourceConfirmed') AS sourceConfirmed,JSON_EXTRACT(last_result,'$.error') AS failed,JSON_EXTRACT(last_result,'$.inserted') AS inserted,JSON_EXTRACT(last_result,'$.duplicates') AS duplicates,JSON_EXTRACT(last_result,'$.invalid') AS invalid",from:'crm_integrations',fixed:`id = ${asBinary("'sheets'")}`,order:'id',columns:[['id','التكامل'],['enabled','حالة الإعداد'],['sourceConfirmed','اعتماد المصدر'],['last_run','آخر تشغيل UTC'],['health','الحالة المحفوظة'],['inserted','المقبول'],['duplicates','المكرر'],['invalid','غير الصالح']]},
  ai:{select:'user_id,hour_key,requests',from:'ai_usage',date:'hour_key',employee:'user_id',order:'hour_key DESC,user_id',columns:[['user_id','المستخدم'],['hour_key','الساعة UTC'],['requests','محاولات الطلبات']],groups:['user_id']},
 };
-const financeFields=[['ownerCommission','العمولة من المالك'],['clientCommission','العمولة من العميل'],['totalCommission','إجمالي العمولة'],['brokerage','السعي — مدخل'],['companyDebt','سداد الشركة للمديونية'],['clientDebt','سداد العميل المباشر — ليس تحصيلاً'],['confirmed_due','المستحق المؤكد حسب القاعدة'],['companyDeposit','عربون الشركة — يدوي'],['companyValuation','تقييم الشركة — يدوي'],['companyPayments','دفعات الشركة — يدوي'],['totalPayments','إجمالي مدفوعات — يدوي مستقل'],['brokerageCheque','تحصيل شيك سعي — يدوي'],['ownerCollection','تحصيل المالك — يدوي'],['clientCollection','تحصيل العميل للشركة — يدوي'],['totalCollections','إجمالي متحصلات — يدوي مستقل'],['totalDue','إجمالي مستحق — يدوي مستقل'],['balance','رصيد — يدوي مستقل'],['tax','ضريبة — يدوي'],['netCommission','صافي العمولة — يدوي'],['fundingAmount','تمويل — يدوي'],['propertyValue','قيمة عقار — يدوي'],['refund','استرداد — يدوي'],['brokerCommission','عمولة وسيط — يدوي'],['externalExpenses','مصروفات خارجية — يدوي'],['buyerDeposit','عربون المشتري — يدوي']];
-specs.transactions.columns=[['id','المعاملة'],['lead_id','العميل'],['name','اسم العميل'],['property_id','العقار'],['source','المصدر'],['stage','مرحلة العميل الحالية'],['sales','المبيعات'],['field','الميدان'],['financeEmployeeId','موظف التمويل'],['fundingEntity','جهة التمويل'],['requestStage','مرحلة طلب التمويل'],['debtPayer','جهة سداد الدين'],['updated_at','تاريخ التحديث'],['commissionNote','ملاحظة عمولة سابقة'],...financeFields];
+const financeFields=[['ownerCommission','العمولة من المالك'],['clientCommission','العمولة من العميل'],['totalCommission','إجمالي العمولة'],['brokerage','السعي — مدخل'],['companyDebt','سداد الشركة للمديونية'],['clientDebt','سداد العميل المباشر — ليس تحصيلاً'],['confirmed_due','المستحق المؤكد حسب القاعدة'],['debtPayoffAmount','المبلغ المراد سداده'],['otherRefund','استرداد مبالغ أخرى'],['companyDeposit','عربون محول من العميل'],['companyValuation','تقييم الشركة — يدوي'],['totalPayments','إجمالي مدفوعات — يدوي مستقل'],['brokerageCheque','تحصيل شيك سعي — يدوي'],['ownerCollection','تحصيل المالك — يدوي'],['clientCollection','تحصيل العميل للشركة — يدوي'],['totalCollections','إجمالي متحصلات — يدوي مستقل'],['tax','ضريبة — يدوي'],['netCommission','صافي العمولة — يدوي'],['propertyValue','قيمة عقار — يدوي'],['refund','استرداد دفعة'],['brokerCommission','عمولة وسيط — يدوي'],['externalExpenses','مصروفات خارجية — يدوي']];
+specs.transactions.columns=[['id','المعاملة'],['lead_id','العميل'],['name','اسم العميل'],['property_id','العقار'],['linkedPropertyId','العقار المرتبط'],['source','المصدر'],['stage','مرحلة العميل الحالية'],['sales','المبيعات'],['field','الميدان'],['clientSerial','مسلسل العميل'],['contractDate','تاريخ عقد الوساطة'],['financeEmployeeId','موظف التمويل'],['fundingEntity','جهة التمويل'],['debtPayer','جهة سداد الدين'],['debtAccountNumber','رقم الحساب'],['debtPayoffDate','تاريخ السداد'],['debtPaymentRef','رقم السداد'],['otherRefundNote','بيان استرداد المبالغ الأخرى'],['reviewStatus','حالة الاعتماد'],['updated_at','تاريخ التحديث'],['commissionNote','ملاحظة عمولة سابقة'],...financeFields];
 function object(value:unknown):Record<string,unknown>{if(typeof value==='string'){try{return JSON.parse(value);}catch{return {};}}return value&&typeof value==='object'?value as Record<string,unknown>:{};}
 function moneyOrNull(value:unknown):string|null{const text=String(value??'').trim();return /^\d{1,12}(\.\d{1,2})?$/.test(text)?text:null;}
 function cell(value:unknown):string|number|null {if(value==null||value==='')return null;if(value instanceof Date)return value.toISOString();return typeof value==='number'?value:String(value);}
@@ -107,7 +107,12 @@ function where(spec:Spec,user:Actor,f:ReportFilters,employeeTokens:string[]=[]){
   }
   if(f.source)add(binEq('l.source'),f.source);
   if(f.stage){
-   if(spec===specs.transactions)add(binEq("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.requestStage'))"),f.stage);
+   if(spec===specs.transactions){
+    const keys=stageMatchKeys(f.stage);
+    const lead=matchAny(['l.stage'],keys.length?keys:[f.stage]);
+    const request=binEq("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.requestStage'))");
+    add(`(${lead.sql} OR ${request})`,...lead.args,f.stage);
+   }
    // تفويج للميداني on a registration-dated report means "dispatched in the period",
    // including leads whose current stage has since moved on. Other stages stay current.
    else if(!(spec.date==='l.created_at'&&isEverFieldDispatchFilter(f.stage))){const keys=stageMatchKeys(f.stage);const match=matchAny(['l.stage'],keys);add(match.sql,...match.args);}
@@ -202,8 +207,14 @@ export async function readReport(db:Database,user:Actor,id:string,f:ReportFilter
    r.ownerCommission=moneyOrNull(data.ownerCommission??r.owner_commission);
    r.clientCommission=moneyOrNull(data.clientCommission??r.client_commission);
    r.totalCommission=commissionTotal(data.ownerCommission??r.owner_commission, data.clientCommission??r.client_commission);
-   r.companyDebt=data.debtPayer==='company'?data.debtSettlement:null;
-   r.clientDebt=data.debtPayer==='client'?data.debtSettlement:null;
+   const payoff=debtAmount(data);
+   r.debtPayoffAmount=payoff;
+   r.companyDebt=data.debtPayer==='company'?payoff:null;
+   r.clientDebt=data.debtPayer==='client'?payoff:null;
+   const payer=String(data.debtPayer??'');
+   if(payer==='company'||payer==='client'||payer==='unset')r.debtPayer=debtPayerLabels[payer];
+   const review=String(data.reviewStatus??'pending');
+   r.reviewStatus=review==='approved'||review==='rejected'||review==='pending'?reviewStatusLabels[review]:reviewStatusLabels.pending;
    const stamp=r.updated_at;
    const shown=formatRiyadhDateTime(stamp instanceof Date||typeof stamp==='string'||stamp==null?stamp:String(stamp));
    if(shown)r.updated_at=shown;
