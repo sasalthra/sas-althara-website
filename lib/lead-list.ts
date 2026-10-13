@@ -1,5 +1,5 @@
 import properties from '@/data/properties.json';
-import {fieldDispatchMoment, instantInRiyadhRange, isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort, leadMatchesReportFilters} from './lead-cohorts';
+import {fieldDispatchMoment, instantInRiyadhRange, isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort, leadMatchesFieldAssignee, leadMatchesReportFilters} from './lead-cohorts';
 import {riyadhDayKey} from './lead-dates';
 import {compareClients, isNewUnassignedLead} from './lead-featured';
 import {displayLeadPhone, leadPhoneMatchesQuery} from './phone';
@@ -18,6 +18,11 @@ export type LeadListFilters = {
   assignFrom: string;
   assignTo: string;
   assignRole: '' | 'sales' | 'field';
+  dispatched: boolean;
+  fieldEmployee: string;
+  fieldEmployeeName: string;
+  fieldEmployeeUser: string;
+  fieldUnassigned: boolean;
   from: string;
   to: string;
   source: string;
@@ -100,6 +105,11 @@ export function emptyLeadFilters(page = 1): LeadListFilters {
     assignFrom: '',
     assignTo: '',
     assignRole: '',
+    dispatched: false,
+    fieldEmployee: '',
+    fieldEmployeeName: '',
+    fieldEmployeeUser: '',
+    fieldUnassigned: false,
     from: '',
     to: '',
     source: '',
@@ -134,6 +144,11 @@ export function parseLeadListFilters(url: URL | null, role: string): LeadListFil
     assignFrom: /^\d{4}-\d{2}-\d{2}$/.test(text('assignFrom')) ? text('assignFrom') : '',
     assignTo: /^\d{4}-\d{2}-\d{2}$/.test(text('assignTo')) ? text('assignTo') : '',
     assignRole: params?.get('assignRole') === 'field' ? 'field' : params?.get('assignRole') === 'sales' ? 'sales' : '',
+    dispatched: params?.get('dispatched') === '1',
+    fieldEmployee: text('fieldEmployee'),
+    fieldEmployeeName: text('fieldEmployeeName'),
+    fieldEmployeeUser: text('fieldEmployeeUser'),
+    fieldUnassigned: params?.get('fieldUnassigned') === '1',
     from: text('from'),
     to: text('to'),
     source: text('source'),
@@ -171,6 +186,11 @@ export function leadListSearchParams(filters: LeadListFilters): string {
   if (filters.assignFrom) params.set('assignFrom', filters.assignFrom);
   if (filters.assignTo) params.set('assignTo', filters.assignTo);
   if (filters.assignRole) params.set('assignRole', filters.assignRole);
+  if (filters.dispatched) params.set('dispatched', '1');
+  if (filters.fieldEmployee) params.set('fieldEmployee', filters.fieldEmployee);
+  if (filters.fieldEmployeeName) params.set('fieldEmployeeName', filters.fieldEmployeeName);
+  if (filters.fieldEmployeeUser) params.set('fieldEmployeeUser', filters.fieldEmployeeUser);
+  if (filters.fieldUnassigned) params.set('fieldUnassigned', '1');
   if (filters.from) params.set('from', filters.from);
   if (filters.to) params.set('to', filters.to);
   if (filters.source) params.set('source', filters.source);
@@ -242,11 +262,13 @@ export function leadMatchesClientFilters(
   // «تفويج للميداني» on the clients filter means the lead ever entered that stage.
   // Report drill-downs pass stageNow or an assignment cohort and keep the current stage.
   // The flag is on the lead row, so paging does not join lead_activity.
-  const cohort = filters.assignRole === 'sales' || filters.assignRole === 'field';
-  const everDispatch = !filters.stageNow && !cohort && isEverFieldDispatchFilter(filters.stage);
+  // dispatched=1 is the report drill-down for تفويج للميداني: the period is the
+  // dispatch stamp, and a stage on the link is the current stage.
+  const cohort = !filters.dispatched && (filters.assignRole === 'sales' || filters.assignRole === 'field');
+  const everDispatch = !filters.dispatched && !filters.stageNow && !cohort && isEverFieldDispatchFilter(filters.stage);
   // تفويج للميداني plus a period uses the dispatch time, not created_at.
   // Assignment cohorts keep their own assignFrom/assignTo window.
-  const dispatchPeriod = !cohort && isEverFieldDispatchFilter(filters.stage) && Boolean(filters.from || filters.to);
+  const dispatchPeriod = filters.dispatched || (!cohort && isEverFieldDispatchFilter(filters.stage) && Boolean(filters.from || filters.to));
   if (!leadMatchesReportFilters(lead, {
     from: dispatchPeriod ? '' : filters.from,
     to: dispatchPeriod ? '' : filters.to,
@@ -270,6 +292,8 @@ export function leadMatchesClientFilters(
     to: filters.assignTo,
     employeeTokens: [filters.employee, filters.employeeName, filters.employeeUser],
   })) return false;
+  if (filters.fieldUnassigned && String(lead.field_assigned_to ?? '').trim()) return false;
+  if ((filters.fieldEmployee || filters.fieldEmployeeName || filters.fieldEmployeeUser) && !leadMatchesFieldAssignee(lead, [filters.fieldEmployee, filters.fieldEmployeeName, filters.fieldEmployeeUser])) return false;
   if (filters.duplicateOnly && !duplicatePhones.has(displayLeadPhone(String(lead.phone ?? '')))) return false;
   if (filters.newOnly && !isNewUnassignedLead(lead)) return false;
   if (filters.reportRequired && !fieldReportRequired(lead)) return false;

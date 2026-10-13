@@ -203,6 +203,11 @@ export default function CRM({
   const listAssignFrom = query.get('assignFrom') || '';
   const listAssignTo = query.get('assignTo') || '';
   const listAssignRole = query.get('assignRole') === 'field' ? 'field' : query.get('assignRole') === 'sales' ? 'sales' : '';
+  const listDispatched = query.get('dispatched') === '1';
+  const listFieldEmployee = query.get('fieldEmployee') || '';
+  const listFieldEmployeeName = query.get('fieldEmployeeName') || '';
+  const listFieldEmployeeUser = query.get('fieldEmployeeUser') || '';
+  const listFieldUnassigned = query.get('fieldUnassigned') === '1';
   const listReturn = safeCrmReturn(query.get('returnTo'));
   const listSource = query.get('source') || '';
   const listSourceExact = query.get('sourceExact') === '1';
@@ -301,6 +306,11 @@ export default function CRM({
     assignFrom: /^\d{4}-\d{2}-\d{2}$/.test(listAssignFrom) ? listAssignFrom : '',
     assignTo: /^\d{4}-\d{2}-\d{2}$/.test(listAssignTo) ? listAssignTo : '',
     assignRole: listAssignRole,
+    dispatched: listDispatched,
+    fieldEmployee: listFieldEmployee,
+    fieldEmployeeName: listFieldEmployeeName,
+    fieldEmployeeUser: listFieldEmployeeUser,
+    fieldUnassigned: listFieldUnassigned,
     from: listFrom,
     to: listTo,
     source: listSource,
@@ -606,15 +616,18 @@ export default function CRM({
                 </p>
               )}
 
-              {(listStage || listSource || listEmployee || listEmployeeName || listOverdue || listInactive || listWaiting || listGroup || listFrom || listTo || listAssignRole || listReturn) ? (
+              {(listStage || listSource || listEmployee || listEmployeeName || listOverdue || listInactive || listWaiting || listGroup || listFrom || listTo || listAssignRole || listDispatched || listFieldEmployee || listFieldUnassigned || listReturn) ? (
                 <div className="reports-filter-banner" role="status">
                   <p>
                     {listReturn ? <CrmLink href={listReturn}>← العودة إلى التقرير</CrmLink> : null}
                     {' '}
                     {listAssignRole === 'sales' ? 'عملاء أُسندوا لموظف المبيعات خلال الفترة حسب تاريخ الإسناد. المرحلة في الجدول هي الحالية. ' : ''}
                     {listAssignRole === 'field' ? 'عملاء فُوِّجوا للموظف الميداني خلال الفترة حسب تاريخ التفويج. المرحلة في الجدول هي الحالية. ' : ''}
-                    {!listStageNow && !listAssignRole && isEverFieldDispatchFilter(selectedStage) ? 'تفويج للميداني: كل عميل دخل هذه المرحلة أو فُوِّج لميداني، حتى لو تغيّرت مرحلته لاحقاً. العمود يعرض المرحلة الحالية. ' : ''}
-                    {!listAssignRole && isEverFieldDispatchFilter(selectedStage) && (listFrom || listTo) ? 'الفترة هنا تاريخ التفويج بتوقيت الرياض (آخر تفويج، أو أول تفويج إن لم يُحفظ لاحق)، وليس تاريخ التسجيل. ' : ''}
+                    {listDispatched ? 'عملاء فُوِّجوا للميدان خلال الفترة حسب تاريخ التفويج بتوقيت الرياض (آخر تفويج، أو أول تفويج إن لم يُحفظ لاحق). المرحلة في الجدول هي الحالية. ' : ''}
+                    {!listDispatched && !listStageNow && !listAssignRole && isEverFieldDispatchFilter(selectedStage) ? 'تفويج للميداني: كل عميل دخل هذه المرحلة أو فُوِّج لميداني، حتى لو تغيّرت مرحلته لاحقاً. العمود يعرض المرحلة الحالية. ' : ''}
+                    {!listDispatched && !listAssignRole && isEverFieldDispatchFilter(selectedStage) && (listFrom || listTo) ? 'الفترة هنا تاريخ التفويج بتوقيت الرياض (آخر تفويج، أو أول تفويج إن لم يُحفظ لاحق)، وليس تاريخ التسجيل. ' : ''}
+                    {listFieldUnassigned ? 'بدون موظف ميدان. ' : ''}
+                    {(listFieldEmployeeName || listFieldEmployeeUser || listFieldEmployee) ? `موظف الميدان: ${listFieldEmployeeName || listFieldEmployeeUser || 'المحدد'}. ` : ''}
                     {listOverdue ? 'مواعيد متابعة متأخرة: الموظف في عمود المبيعات، والموعد في عمود المتابعة. ' : ''}
                     {listWaiting ? 'عملاء جدد غير مسندين منذ أكثر من 24 ساعة. ' : ''}
                     {listInactive ? 'عملاء بلا تحديث منذ 7 أيام أو أكثر. ' : ''}

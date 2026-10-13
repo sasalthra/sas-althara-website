@@ -20,7 +20,7 @@ export const COHORT_DEFINITIONS = {
   contacted: 'تم التواصل = العميل حالياً في مرحلة «تم التواصل» فقط.',
   overdue: 'متابعة متأخرة = تاريخ المتابعة قبل اليوم بتوقيت الرياض، والمرحلة ليست «مغلق» ولا «غير مهتم» ولا «غير مؤهل» ولا «وقع عقد» ولا «إفراغ».',
   scheduled: 'معاينات / متابعات مجدولة = عملاء النطاق الذين لديهم تاريخ متابعة مسجّل، ضمن نفس فلاتر الفترة والمصدر والمرحلة والموظف.',
-  period: 'الفترة تُطبَّق على تاريخ تسجيل العميل (created_at) بتوقيت الرياض. عند تصفية مرحلة تفويج للميداني تُطبَّق الفترة على تاريخ التفويج (آخر تفويج، أو أول تفويج إن لم يُحفظ لاحق) بتوقيت الرياض وليس على تاريخ التسجيل.',
+  period: 'الفترة تُطبَّق على تاريخ تسجيل العميل (created_at) بتوقيت الرياض. عند تصفية مرحلة تفويج للميداني تُطبَّق الفترة على تاريخ التفويج (آخر تفويج، أو أول تفويج إن لم يُحفظ لاحق) بتوقيت الرياض وليس على تاريخ التسجيل، ويُحسب كل عميل فُوِّج خلال الفترة حتى لو تغيّرت مرحلته الحالية.',
   assignment: 'الإسناد يُحسب من وقت الإسناد في lead_activity أو عمود assigned_at بتوقيت الرياض، لا من تاريخ التسجيل.',
   inactive: 'بلا نشاط = لم يُحدَّث سجل العميل منذ 7 أيام أو أكثر، باستثناء «مغلق» و«غير مهتم».',
   unassignedNew: 'جدد غير مسندين = مرحلة «عميل جديد» بلا موظف مبيعات.',
@@ -256,6 +256,17 @@ export function leadMatchesEmployee(lead: LeadIdentity, tokens: string[]): boole
   if (!wanted.size) return true;
   const fields = [lead.assigned_to, lead.field_assigned_to, lead.assigned_name, lead.assigned_username, lead.field_assigned_name, lead.field_assigned_username, lead.owner, lead.created_by];
   return fields.some(value => wanted.has(normText(value)));
+}
+
+/** Field-assignee breakdown. A blank token list does not narrow the row. */
+export function leadMatchesFieldAssignee(lead: {
+  field_assigned_to?: unknown;
+  field_assigned_name?: unknown;
+  field_assigned_username?: unknown;
+}, tokens: string[]): boolean {
+  const wanted = new Set(tokens.map(normText).filter(Boolean));
+  if (!wanted.size) return true;
+  return [lead.field_assigned_to, lead.field_assigned_name, lead.field_assigned_username].some(value => wanted.has(normText(value)));
 }
 
 export type AssignmentEvent = {leadId: string; at: unknown; assignee: string};

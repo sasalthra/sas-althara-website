@@ -49,7 +49,7 @@ async function selfEmployee(db: ReturnType<typeof crmDb>, user: {userId: string;
 
 async function loadAssignment(db:ReturnType<typeof crmDb>,user:{userId:string;role:string},filters:ReturnType<typeof parseReportFilters>,explain:(error:unknown)=>string):Promise<EmployeeAssignmentReport>{
  try{return await readEmployeeAssignmentReport(db,user,filters);}
- catch(error){return {status:'unavailable',from:filters.from,to:filters.to,employeeId:filters.employee,employeeName:'',employeeUser:'',role:'',basis:'',total:null,byStage:[],error:explain(error)};}
+ catch(error){return {status:'unavailable',from:filters.from,to:filters.to,employeeId:filters.employee,employeeName:'',employeeUser:'',role:'',basis:'',total:null,byStage:[],byField:[],dispatched:false,error:explain(error)};}
 }
 function dbErrorParts(error:unknown){
  const record=error&&typeof error==='object'?error as {code?:unknown;errno?:unknown;sqlMessage?:unknown}:{};
