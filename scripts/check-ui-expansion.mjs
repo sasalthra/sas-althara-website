@@ -33,6 +33,7 @@ try {
  await build({stdin:{contents:`import React from 'react';import {renderToStaticMarkup} from 'react-dom/server';import UsersPanel from './app/crm/users-panel';const users=[{id:'u1',username:'ohoud',name:'عهود',email:'ohoud@sas.test',phone:'+966501111111',role:'sales',active:1,created_at:'2026-01-01'}];export const html=renderToStaticMarkup(<UsersPanel initialUsers={users}/>);`,resolveDir:process.cwd(),loader:'tsx'},outfile:join(out,'users.cjs'),bundle:true,platform:'node',format:'cjs'});
  const {html:usersHtml}=createRequire(import.meta.url)(join(out,'users.cjs'));
  assert.match(usersHtml,/تعديل بيانات الموظف/);
+ assert.match(usersHtml,/تغيير كلمة المرور/);
  assert.match(usersHtml,/عهود/);
  assert.match(usersHtml,/>ohoud</);
  assert.doesNotMatch(usersHtml,/تعديل الاسم والبريد والجوال/);
