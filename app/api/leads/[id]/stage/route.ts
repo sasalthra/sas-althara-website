@@ -3,7 +3,7 @@ import {NextResponse} from 'next/server';
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
 import {stageWriteAllowed} from '@/lib/lead-stages';
-import {leadNeedsFieldDispatchStamp, rememberFirstFieldDispatch} from '@/lib/lead-stamps';
+import {enteringFieldDispatch, rememberFieldDispatch} from '@/lib/lead-stamps';
 import {clipFieldReport, fieldReportText, visitDoneBlocked} from '@/lib/field-report';
 import {STAGE_NOTE_INSERT_SQL, STAGE_NOTE_MAX, clipName} from '@/lib/stage-notes';
 
@@ -16,6 +16,7 @@ type LeadRow = {
   stage: string;
   field_report: string | null;
   field_dispatched_at: string | null;
+  first_field_dispatch_at: string | null;
 };
 
 function canAccess(user: {userId: string; role: string}, lead: LeadRow) {
@@ -52,7 +53,7 @@ export async function PATCH(
   const lead = await crmDb()
     .prepare(`
       SELECT id, owner, assigned_to, field_assigned_to, created_by, stage,
-             field_report, field_dispatched_at
+             field_report, field_dispatched_at, first_field_dispatch_at
       FROM leads
       WHERE id = ?
       LIMIT 1
@@ -79,19 +80,28 @@ export async function PATCH(
   const byUserId = clipName(user.userId);
   const activityId = randomUUID();
   const saveReport = Boolean(filedReport) && !fieldReportText(lead.field_report) && stage === 'property_visited';
+  const enteringDispatch = enteringFieldDispatch(previousStage, stage);
+  const firstDispatch = String(lead.first_field_dispatch_at ?? '').trim() || at;
 
   if (stageChanged) {
+    const sets = ['stage = ?', 'updated_at = ?'];
+    const args: Array<string | null> = [stage, at];
+    if (saveReport) {
+      sets.push('field_report = ?', 'field_report_at = ?');
+      args.push(filedReport, at);
+    }
+    if (enteringDispatch) {
+      sets.push('field_dispatched_at = ?', 'first_field_dispatch_at = ?');
+      args.push(at, firstDispatch);
+    }
+    args.push(id);
     await crmDb()
-      .prepare(
-        saveReport
-          ? `UPDATE leads SET stage = ?, updated_at = ?, field_report = ?, field_report_at = ? WHERE id = ?`
-          : `UPDATE leads SET stage = ?, updated_at = ? WHERE id = ?`
-      )
-      .bind(...(saveReport ? [stage, at, filedReport, at, id] : [stage, at, id]))
+      .prepare(`UPDATE leads SET ${sets.join(', ')} WHERE id = ?`)
+      .bind(...args)
       .run();
 
-    if (leadNeedsFieldDispatchStamp(stage, lead.field_assigned_to)) {
-      await rememberFirstFieldDispatch(crmDb(), id, at);
+    if (enteringDispatch || String(lead.field_assigned_to ?? '').trim()) {
+      await rememberFieldDispatch(crmDb(), id, at, enteringDispatch);
     }
 
     await crmDb()

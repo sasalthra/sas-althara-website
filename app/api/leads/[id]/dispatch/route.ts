@@ -4,7 +4,7 @@ import {getCrmUser} from '@/lib/admin';
 import {notifyFieldDispatch} from '@/lib/assignment-notify';
 import {propertyRequestText} from '@/lib/assignment-email';
 import {crmDb} from '@/lib/crm-db';
-import {rememberFirstFieldDispatch} from '@/lib/lead-stamps';
+import {rememberFieldDispatch} from '@/lib/lead-stamps';
 import properties from '@/data/properties.json';
 
 type LeadRow = {
@@ -21,6 +21,7 @@ type LeadRow = {
   source: string | null;
   notes: string | null;
   follow_up: string | null;
+  first_field_dispatch_at: string | null;
 };
 
 type FieldUserRow = {
@@ -83,7 +84,8 @@ export async function POST(
   const lead = await crmDb()
     .prepare(`
       SELECT id, owner, assigned_to, field_assigned_to, created_by, stage,
-             name, phone, property_id, property_other, source, notes, follow_up
+             name, phone, property_id, property_other, source, notes, follow_up,
+             first_field_dispatch_at
       FROM leads
       WHERE id = ?
       LIMIT 1
@@ -119,19 +121,21 @@ export async function POST(
   const dispatchedByName = dispatcher?.name?.trim() || user.name?.trim() || user.username?.trim() || 'فريق المبيعات';
   const fieldAssignedName = fieldUser.name?.trim() || 'الموظف الميداني';
   const now = new Date().toISOString().replace('T', ' ').replace('Z', '');
+  const firstDispatch = String(lead.first_field_dispatch_at ?? '').trim() || now;
 
   await crmDb()
     .prepare(`
       UPDATE leads
       SET field_assigned_to = ?, stage = 'field_dispatch', field_dispatched_at = ?,
+          first_field_dispatch_at = ?,
           field_report = NULL, field_report_at = NULL, field_report_alert_at = NULL,
           updated_at = ?
       WHERE id = ?
     `)
-    .bind(fieldUserId, now, now, id)
+    .bind(fieldUserId, now, firstDispatch, now, id)
     .run();
 
-  await rememberFirstFieldDispatch(crmDb(), id, now);
+  await rememberFieldDispatch(crmDb(), id, now, true);
 
   await crmDb()
     .prepare(`

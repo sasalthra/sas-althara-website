@@ -5,7 +5,7 @@ import {crmDb} from '@/lib/crm-db';
 import {leadSchema as schema} from '@/lib/lead-input';
 import {findLeadByNormalizedPhone, noteReregistration} from '@/lib/lead-reregistration';
 import {ensureLeadSchema, isMissingFeaturedColumn} from '@/lib/lead-schema';
-import {leadNeedsFieldDispatchStamp, rememberAssignedAt, rememberFirstFieldDispatch} from '@/lib/lead-stamps';
+import {fieldDispatchWrite, rememberAssignedAt, rememberFieldDispatch} from '@/lib/lead-stamps';
 import {loadLeadPage, parseLeadListFilters} from '@/lib/lead-list';
 import {stageWriteAllowed} from '@/lib/lead-stages';
 import {displayLeadPhone, normalizeLeadPhone} from '@/lib/phone';
@@ -384,8 +384,14 @@ async function write(
         if (nextAssigned && nextAssigned !== String(existing.assigned_to ?? '')) {
           await rememberAssignedAt(db, value.id, now);
         }
-        if (leadNeedsFieldDispatchStamp(value.stage, finalFieldAssignedTo)) {
-          await rememberFirstFieldDispatch(db, value.id, now);
+        const dispatchWrite = fieldDispatchWrite({
+          previousStage: existing.stage,
+          nextStage: value.stage,
+          previousField: existing.field_assigned_to,
+          nextField: finalFieldAssignedTo,
+        });
+        if (dispatchWrite.write) {
+          await rememberFieldDispatch(db, value.id, now, dispatchWrite.latest);
         }
 
         await db
@@ -528,8 +534,12 @@ async function write(
         )
         .run();
 
-      if (leadNeedsFieldDispatchStamp(value.stage, null)) {
-        await rememberFirstFieldDispatch(db, value.id, now);
+      const dispatchWrite = fieldDispatchWrite({
+        previousStage: existing.stage,
+        nextStage: value.stage,
+      });
+      if (dispatchWrite.write) {
+        await rememberFieldDispatch(db, value.id, now, dispatchWrite.latest);
       }
 
       await db
@@ -684,8 +694,12 @@ async function write(
         .run();
 
       if (newAssignedTo) await rememberAssignedAt(db, value.id, now);
-      if (leadNeedsFieldDispatchStamp(value.stage, newFieldAssignedTo)) {
-        await rememberFirstFieldDispatch(db, value.id, now);
+      const createdDispatch = fieldDispatchWrite({
+        nextStage: value.stage,
+        nextField: newFieldAssignedTo,
+      });
+      if (createdDispatch.write) {
+        await rememberFieldDispatch(db, value.id, now, createdDispatch.latest);
       }
 
       const stored = await db

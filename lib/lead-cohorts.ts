@@ -20,7 +20,7 @@ export const COHORT_DEFINITIONS = {
   contacted: 'تم التواصل = العميل حالياً في مرحلة «تم التواصل» فقط.',
   overdue: 'متابعة متأخرة = تاريخ المتابعة قبل اليوم بتوقيت الرياض، والمرحلة ليست «مغلق» ولا «غير مهتم» ولا «غير مؤهل» ولا «وقع عقد» ولا «إفراغ».',
   scheduled: 'معاينات / متابعات مجدولة = عملاء النطاق الذين لديهم تاريخ متابعة مسجّل، ضمن نفس فلاتر الفترة والمصدر والمرحلة والموظف.',
-  period: 'الفترة تُطبَّق على تاريخ تسجيل العميل (created_at) بتوقيت الرياض.',
+  period: 'الفترة تُطبَّق على تاريخ تسجيل العميل (created_at) بتوقيت الرياض. عند تصفية مرحلة تفويج للميداني تُطبَّق الفترة على تاريخ التفويج (آخر تفويج، أو أول تفويج إن لم يُحفظ لاحق) بتوقيت الرياض وليس على تاريخ التسجيل.',
   assignment: 'الإسناد يُحسب من وقت الإسناد في lead_activity أو عمود assigned_at بتوقيت الرياض، لا من تاريخ التسجيل.',
   inactive: 'بلا نشاط = لم يُحدَّث سجل العميل منذ 7 أيام أو أكثر، باستثناء «مغلق» و«غير مهتم».',
   unassignedNew: 'جدد غير مسندين = مرحلة «عميل جديد» بلا موظف مبيعات.',
@@ -115,6 +115,19 @@ export function instantInRiyadhRange(value: unknown, from: string, to: string): 
   return createdInPeriod(value, from, to);
 }
 
+/**
+ * Latest field dispatch, otherwise the first time the lead entered تفويج للميداني.
+ * A blank value is not a registration date.
+ */
+export function fieldDispatchMoment(lead: {
+  field_dispatched_at?: unknown;
+  first_field_dispatch_at?: unknown;
+}): string {
+  const latest = String(lead.field_dispatched_at ?? '').trim();
+  if (latest) return latest;
+  return String(lead.first_field_dispatch_at ?? '').trim();
+}
+
 /** Stage filter «تفويج للميداني» means the lead entered that stage at least once. */
 export function isEverFieldDispatchFilter(stage: unknown): boolean {
   const text = String(stage ?? '').trim();
@@ -160,9 +173,7 @@ export function leadMatchesAssignmentCohort(
   }
   if (input.role === 'field') {
     if (!tokenHit([lead.field_assigned_to, lead.field_assigned_name, lead.field_assigned_username], tokens)) return false;
-    const dispatched = String(lead.field_dispatched_at ?? '').trim();
-    const at = dispatched || String(lead.first_field_dispatch_at ?? '').trim();
-    return instantInRiyadhRange(at, input.from, input.to);
+    return instantInRiyadhRange(fieldDispatchMoment(lead), input.from, input.to);
   }
   return false;
 }

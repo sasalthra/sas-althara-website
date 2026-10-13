@@ -3,7 +3,7 @@ import {propertyRequestText} from './assignment-email';
 import {crmDb,crmTransaction} from './crm-db';
 import {assigneesForReady,previewImport,type Assignment,type Mapping} from './lead-import';
 import {findLeadByNormalizedPhone,noteReregistration,type ExistingLead} from './lead-reregistration';
-import {leadNeedsFieldDispatchStamp, rememberAssignedAt, rememberFirstFieldDispatch} from './lead-stamps';
+import {fieldDispatchWrite, rememberAssignedAt, rememberFieldDispatch} from './lead-stamps';
 import {normalizeLeadPhone} from './phone';
 import {ApiError} from './secure-api';
 
@@ -46,7 +46,8 @@ export async function runImport(rows:string[][],mapping:Mapping,userId:string,co
     await db.prepare('INSERT INTO crm_import_rows (id,lead_id,source,raw_data,created_at) VALUES (?,?,?,?,?)').bind(crypto.randomUUID(),v.id,source,JSON.stringify(r.raw),now).run();
     await db.prepare('INSERT INTO lead_activity (id,lead_id,user_id,action,details) VALUES (?,?,?,?,?)').bind(crypto.randomUUID(),v.id,userId,'imported',JSON.stringify({source,assignedTo:assignedTo||null,stage:v.stage})).run();
     if(assignedTo)await rememberAssignedAt(db,v.id,now);
-    if(leadNeedsFieldDispatchStamp(v.stage,''))await rememberFirstFieldDispatch(db,v.id,now);
+    const dispatchWrite=fieldDispatchWrite({nextStage:v.stage});
+    if(dispatchWrite.write)await rememberFieldDispatch(db,v.id,now,dispatchWrite.latest);
     if(assignedTo)assignedClients.push({assignedTo,client:{name:v.name,phone:v.phone,stage:v.stage,source:leadSource,notes:v.notes,propertyRequest:propertyRequestText(v.propertyId,v.propertyOther),followUp:v.followUp}});
    }
    await db.prepare('INSERT INTO crm_audit (id,actor_id,action,target_id,details,created_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(),userId,'leads.import',source,JSON.stringify({inserted:ready.length,duplicates:reregistrations.length,assignment:assignment?.mode||'unassigned'}),now).run();
