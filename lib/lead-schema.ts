@@ -661,11 +661,12 @@ function runnerFromExecutor(executor: SqlExecutor): SqlRunner {
 }
 
 /**
- * One pass per process cache. A missing phone column or a locked account is
- * logged and skipped. Phones are rewritten first, then newer sheet-sync
- * duplicates are deleted, then any numbers that are still shared get one
- * phone_duplicate note. A second process run sees stored 05 numbers and
- * existing notes, so it does not write them again.
+ * One recorded pass. A missing phone column or a locked account is logged
+ * and skipped, and the flag stays unset so the next start can retry. Phones
+ * are rewritten first, then newer sheet-sync duplicates are deleted, then
+ * any numbers that are still shared get one phone_duplicate note. A later
+ * start sees lead_phone_normalize_v1 in crm_schema_meta and does not scan
+ * the leads table again.
  */
 async function normalizeExistingLeadPhones(executor: SqlExecutor) {
   if (await migrationApplied(executor, PHONE_MIGRATION)) return;

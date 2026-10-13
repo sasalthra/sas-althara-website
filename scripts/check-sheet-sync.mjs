@@ -1034,7 +1034,9 @@ try {
   await schema.ensureLeadSchema(sqliteExecutor(cleanDb));
   assert.equal(cleanDb.prepare('SELECT COUNT(*) AS n FROM leads').get().n, 7);
   const secondCleanup = cleanDb.prepare("SELECT deleted_count, total_deleted FROM crm_sheet_cleanup WHERE id = 'latest'").get();
-  assert.equal(Number(secondCleanup.deleted_count), 0);
+  // The repair is recorded in crm_schema_meta and is not run again on the next start.
+  assert.equal(cleanDb.prepare("SELECT name FROM crm_schema_meta WHERE name = 'lead_phone_normalize_v1'").get().name, 'lead_phone_normalize_v1');
+  assert.equal(Number(secondCleanup.deleted_count), 3);
   assert.equal(Number(secondCleanup.total_deleted), 3);
   cleanDb.close();
 

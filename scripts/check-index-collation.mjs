@@ -112,6 +112,9 @@ for (const engine of engines) {
         ('a1', 'lead-1', 'alice', 'note', '{"note":"sales note"}', '2026-10-03'),
         ('a2', 'lead-1', 'ahmad', 'note', '{"note":"field note"}', '2026-10-04')`
     );
+    const filler = [];
+    for (let i = 0; i < 400; i++) filler.push(`('x${i}', 'lead-x', 'alice', 'note', '{"note":"x"}', '2026-09-01')`);
+    await conn.query(`INSERT INTO lead_activity (id, lead_id, user_id, action, details, created_at) VALUES ${filler.join(',')}`);
 
     let mixed = false;
     try {
@@ -133,16 +136,16 @@ for (const engine of engines) {
     );
     check(nameJoin.length === 1, `${engine.name} CAST join across general_ci and unicode_ci does not raise 1267`);
 
-    const indexed = await explain(conn, `SELECT id FROM lead_activity WHERE lead_id = CAST(? AS BINARY)`, ['lead-1']);
+    const indexed = await explain(conn, `SELECT details FROM lead_activity WHERE lead_id = CAST(? AS BINARY)`, ['lead-1']);
     const indexedType = planType(indexed);
-    check(indexedType === 'range' || indexedType === 'ref' || indexedType === 'const', `${engine.name} lead_id = CAST(?) uses ${indexedType || 'no'} index`);
+    check(indexedType === 'range' || indexedType === 'ref' || indexedType === 'const', `${engine.name} lead_id = CAST(?) uses ${indexedType || 'no'} index ${JSON.stringify(indexed)}`);
 
     const wrapped = await explain(
       conn,
-      `SELECT id FROM lead_activity WHERE CAST(LOWER(TRIM(lead_id)) AS BINARY) = CAST(? AS BINARY)`,
+      `SELECT details FROM lead_activity WHERE CAST(LOWER(TRIM(lead_id)) AS BINARY) = CAST(? AS BINARY)`,
       ['lead-1']
     );
-    check(planType(wrapped) === 'ALL', `${engine.name} wrapped lead_id is a full scan (${planType(wrapped)})`);
+    check(planType(wrapped) === 'ALL', `${engine.name} wrapped lead_id is a full scan (${planType(wrapped)}) ${JSON.stringify(wrapped)}`);
 
     const assigned = await explain(conn, `SELECT id FROM leads WHERE assigned_to = CAST(? AS BINARY)`, ['alice']);
     const assignedType = planType(assigned);

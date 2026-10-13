@@ -36,10 +36,14 @@ function peelInLists(sql) {
 export function sqliteReportSql(sql) {
   const simple = String.raw`(\?|(?:\`?\w+\`?\.)*\`?\w+\`?|'(?:[^']|'')*')`;
   const cast = `CAST\\(\\s*${simple}\\s+AS BINARY\\s*\\)`;
-  const text = String(sql).replace(
+  let text = String(sql).replace(
     new RegExp(`((?:\\b\`?\\w+\`?\\.)?\`?\\w+\`?)\\s*=\\s*${cast}`, 'gi'),
     '$1 = $2'
   );
+  // JSON and other expressions stay bare on the left in MySQL. sqlite cannot
+  // compare that text to a BLOB parameter, so the bound cast becomes `?`.
+  // Date windows use >= and are left as blobs on both sides.
+  text = text.replace(/(?<![<>!])=\s*CAST\(\s*\?\s+AS BINARY\s*\)/gi, '= ?');
   return peelInLists(text).replaceAll(' AS BINARY', ' AS BLOB');
 }
 

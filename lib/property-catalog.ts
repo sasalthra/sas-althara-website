@@ -2,7 +2,7 @@ import {cache} from 'react';
 import properties from '@/data/properties.json';
 import {crmDb} from './crm-db';
 import {ensureTelegramTables} from './lead-schema';
-import {asBinary} from './sql-collation';
+import {paramEq} from './sql-collation';
 import {redirectLookupSql} from './telegram-sql';
 import type {CatalogProperty} from './property-types';
 
@@ -81,7 +81,7 @@ const PUBLISHED_COLUMNS = 'id, title, price, area, beds, baths, city, address, t
 function publishedSelect(withPriceFrom: boolean) {
   const columns = withPriceFrom ? PUBLISHED_COLUMNS.replace('price,', 'price, price_from,') : PUBLISHED_COLUMNS;
   return `SELECT ${columns}
-         FROM site_properties WHERE ${asBinary('status')} = ${asBinary('?')} ORDER BY updated_at DESC, id DESC`;
+         FROM site_properties WHERE ${paramEq('status')} ORDER BY updated_at DESC, id DESC`;
 }
 
 async function readPublished(): Promise<CatalogProperty[]> {
