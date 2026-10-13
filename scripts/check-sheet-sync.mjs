@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {sqliteReportSql} from './sqlite-report-sql.mjs';
 import {createHash} from 'node:crypto';
 import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {createRequire} from 'node:module';
@@ -11,7 +12,7 @@ const require = createRequire(import.meta.url);
 const output = mkdtempSync(join(tmpdir(), 'sas-sheets-'));
 
 function sqliteSql(sql) {
-  return String(sql).replaceAll(' AS BINARY', ' AS BLOB');
+  return sqliteReportSql(sql);
 }
 
 function sqliteExecutor(db) {
@@ -940,8 +941,9 @@ try {
   assert.match(repairRoute, /تم تصحيح مرحلة \$\{result\.updated\} عميل/);
   assert.doesNotMatch(repairRoute, /sendMail|assignment-notify/);
   assert.doesNotMatch(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /HEX\s*\(|CONVERT_TZ\s*\(/i);
-  assert.match(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /asBinary\(column\)/);
-  assert.match(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /asBinary\('\?'\)/);
+  assert.match(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /paramEq\(column\)/);
+  assert.match(readFileSync('lib/sql-collation.ts', 'utf8'), /\$\{column\} = \$\{asBinary\('\?'\)\}/);
+  assert.doesNotMatch(readFileSync('lib/imported-stage-repair.ts', 'utf8'), /asBinary\(column\)/);
   assert.doesNotMatch(readFileSync('lib/sheet-test-purge.ts', 'utf8'), /sendMail|assignment-notify/);
   assert.doesNotMatch(readFileSync('lib/sheet-sync-job.server.ts', 'utf8'), /sheet-test-purge|purgeSheetTest|executeSheetTestLeadPurge/);
   assert.doesNotMatch(readFileSync('lib/lead-schema.ts', 'utf8'), /sheet-test-purge|purgeSheetTest|executeSheetTestLeadPurge/);
@@ -1032,7 +1034,9 @@ try {
   await schema.ensureLeadSchema(sqliteExecutor(cleanDb));
   assert.equal(cleanDb.prepare('SELECT COUNT(*) AS n FROM leads').get().n, 7);
   const secondCleanup = cleanDb.prepare("SELECT deleted_count, total_deleted FROM crm_sheet_cleanup WHERE id = 'latest'").get();
-  assert.equal(Number(secondCleanup.deleted_count), 0);
+  // The repair is recorded in crm_schema_meta and is not run again on the next start.
+  assert.equal(cleanDb.prepare("SELECT name FROM crm_schema_meta WHERE name = 'lead_phone_normalize_v1'").get().name, 'lead_phone_normalize_v1');
+  assert.equal(Number(secondCleanup.deleted_count), 3);
   assert.equal(Number(secondCleanup.total_deleted), 3);
   cleanDb.close();
 

@@ -131,21 +131,21 @@ export async function importSheetGrid(
     )
     .bind(source.id)
     .run();
-  const known = new Set(
-    (await db.prepare('SELECT row_key FROM crm_sheet_rows WHERE source_id = ?').bind(source.id).all()).results.map(row =>
-      String(row.row_key ?? '')
-    )
-  );
+  const lookup = await loadSheetLookup(db, source.id);
+  const known = new Set(lookup.keys);
   const result = emptyResult();
   const now = new Date().toISOString();
-  const phones = indexLeadsByNormalizedPhone(
-    (await db
+  const leadRows = (
+    await db
       .prepare(
         `SELECT id, name, phone, stage, IFNULL(assigned_to, '') AS assigned_to, IFNULL(source, '') AS source, created_at FROM leads`
       )
       .bind()
-      .all()).results
-  );
+      .all()
+  ).results;
+  const stages = new Map<string, string>();
+  for (const row of leadRows) stages.set(String(row.id ?? ''), String(row.stage ?? ''));
+  const phones = indexLeadsByNormalizedPhone(leadRows);
   for (let index = 1; index < grid.length; index++) {
     const cells = (grid[index] || []).map(cell => String(cell ?? ''));
     const rowNumber = index + 1;
@@ -162,7 +162,7 @@ export async function importSheetGrid(
     const hashKey = sheetRowKey(rowNumber, cells);
     if ((stableKey && known.has(stableKey)) || known.has(hashKey)) {
       const draft = composePlannedLead(cells, source, plan);
-      const upgradedId = await upgradeKnownRow(db, source.id, [stableKey, hashKey], draft, now, result);
+      const upgradedId = await upgradeKnownRow(db, lookup, [stableKey, hashKey], draft, now, result, stages);
       if (upgradedId && draft.phone) {
         const cached = phones.get(normalizeLeadPhone(draft.phone));
         if (cached && cached.id === upgradedId) cached.stage = draft.stage;
@@ -185,6 +185,7 @@ export async function importSheetGrid(
       result.skippedRows += 1;
       if (result.errors.length < 30) result.errors.push(`صف ${rowNumber}: ${problem}`);
       await remember(db, source.id, key, '', 'invalid', now);
+      rememberLink(lookup, key, '', 'invalid');
       known.add(key);
       continue;
     }
@@ -201,11 +202,12 @@ export async function importSheetGrid(
           campaign: draft.campaign,
         });
         await remember(db, source.id, key, existing.id, SHEET_ROW_DUPLICATE, now);
+        rememberLink(lookup, key, existing.id, SHEET_ROW_DUPLICATE);
         known.add(key);
         if (existing.stage === 'new' && draft.stage !== 'new') {
           try {
-            if ((await sheetImportedLead(db, existing.id)) || (await excelImportedLead(db, existing.id))) {
-              const upgraded = await upgradeNewStage(db, existing.id, draft.stage, now);
+            if (lookup.importedLeads.has(existing.id) || lookup.excelLeads.has(existing.id)) {
+              const upgraded = await upgradeNewStage(db, existing.id, draft.stage, now, stages);
               if (upgraded) {
                 existing.stage = draft.stage;
                 result.stagesUpdated += 1;
@@ -249,7 +251,9 @@ export async function importSheetGrid(
         )
         .run();
       await remember(db, source.id, key, id, 'imported', now);
+      rememberLink(lookup, key, id, SHEET_ROW_IMPORTED);
       known.add(key);
+      stages.set(id, draft.stage);
       if (phone) {
         phones.set(phone, {
           id,
@@ -350,59 +354,101 @@ async function insertSheetLead(
 }
 
 function exactEq(column: string) {
-  return `${asBinary(column)} = ${asBinary('?')}`;
+  return `${column} = ${asBinary('?')}`;
 }
 
-async function linkedLeadId(db: LeadDb, sourceId: string, keys: string[], status: string) {
+type SheetLookup = {
+  keys: string[];
+  byStatusKey: Map<string, string>;
+  importedLeads: Set<string>;
+  excelLeads: Set<string>;
+};
+
+function statusKey(status: string, rowKey: string) {
+  return `${status}\0${rowKey}`;
+}
+
+function rememberLink(lookup: SheetLookup, rowKey: string, leadId: string, status: string) {
+  if (!rowKey) return;
+  lookup.keys.push(rowKey);
+  const id = leadId.trim();
+  if (id) lookup.byStatusKey.set(statusKey(status, rowKey), id);
+  if (status === SHEET_ROW_IMPORTED && id) lookup.importedLeads.add(id);
+}
+
+function linkedLeadId(lookup: SheetLookup, keys: string[], status: string) {
   for (const key of keys) {
     if (!key) continue;
-    const row = await db
-      .prepare(
-        `SELECT lead_id FROM crm_sheet_rows WHERE ${exactEq('source_id')} AND ${exactEq('row_key')} AND ${exactEq('status')} LIMIT 1`
-      )
-      .bind(sourceId, key, status)
-      .first<{lead_id?: string}>();
-    const id = String(row?.lead_id ?? '').trim();
+    const id = lookup.byStatusKey.get(statusKey(status, key)) || '';
     if (id) return id;
   }
   return '';
 }
 
-async function importedLeadId(db: LeadDb, sourceId: string, keys: string[]) {
-  return linkedLeadId(db, sourceId, keys, SHEET_ROW_IMPORTED);
-}
-
-async function sheetImportedLead(db: LeadDb, leadId: string) {
-  const row = await db
-    .prepare(`SELECT lead_id FROM crm_sheet_rows WHERE ${exactEq('lead_id')} AND ${exactEq('status')} LIMIT 1`)
-    .bind(leadId, SHEET_ROW_IMPORTED)
-    .first<{lead_id?: string}>();
-  return Boolean(String(row?.lead_id ?? '').trim());
-}
-
-/** Excel import rows use source `excel`. A missing table does not fail the sync. */
-async function excelImportedLead(db: LeadDb, leadId: string) {
+/** One read of this source's sheet rows, plus one read of excel import ids. */
+async function loadSheetLookup(db: LeadDb, sourceId: string): Promise<SheetLookup> {
+  const lookup: SheetLookup = {keys: [], byStatusKey: new Map(), importedLeads: new Set(), excelLeads: new Set()};
+  const rows = await db
+    .prepare(`SELECT row_key, lead_id, status FROM crm_sheet_rows WHERE ${exactEq('source_id')}`)
+    .bind(sourceId)
+    .all();
+  for (const row of rows.results || []) {
+    const key = String(row.row_key ?? '');
+    const leadId = String(row.lead_id ?? '').trim();
+    const status = String(row.status ?? '');
+    if (key) lookup.keys.push(key);
+    if (key && leadId) lookup.byStatusKey.set(statusKey(status, key), leadId);
+    if (status === SHEET_ROW_IMPORTED && leadId) lookup.importedLeads.add(leadId);
+  }
+  // A lead imported by any source still counts. One scan, not one query per row.
   try {
-    const row = await db
-      .prepare(`SELECT lead_id FROM crm_import_rows WHERE ${exactEq('lead_id')} AND ${exactEq('source')} LIMIT 1`)
-      .bind(leadId, 'excel')
-      .first<{lead_id?: string}>();
-    return Boolean(String(row?.lead_id ?? '').trim());
+    const imported = await db
+      .prepare(`SELECT lead_id FROM crm_sheet_rows WHERE ${exactEq('status')}`)
+      .bind(SHEET_ROW_IMPORTED)
+      .all();
+    for (const row of imported.results || []) {
+      const leadId = String(row.lead_id ?? '').trim();
+      if (leadId) lookup.importedLeads.add(leadId);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (/no such table|ER_NO_SUCH_TABLE|doesn't exist|does not exist/i.test(message)) return false;
-    throw error;
+    if (!/no such table|ER_NO_SUCH_TABLE|doesn't exist|does not exist/i.test(message)) throw error;
   }
+  try {
+    const excel = await db
+      .prepare(`SELECT lead_id FROM crm_import_rows WHERE ${exactEq('source')}`)
+      .bind('excel')
+      .all();
+    for (const row of excel.results || []) {
+      const leadId = String(row.lead_id ?? '').trim();
+      if (leadId) lookup.excelLeads.add(leadId);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/no such table|ER_NO_SUCH_TABLE|doesn't exist|does not exist|no such column|unknown column/i.test(message)) throw error;
+  }
+  return lookup;
 }
 
 /** Raise a lead that is still `new`. A later manual stage is left alone. */
-export async function upgradeNewStage(db: LeadDb, leadId: string, nextStage: string, now: string) {
+export async function upgradeNewStage(
+  db: LeadDb,
+  leadId: string,
+  nextStage: string,
+  now: string,
+  stages?: Map<string, string>
+) {
   if (!leadId || !nextStage || nextStage === 'new') return false;
-  const current = await db
-    .prepare(`SELECT stage FROM leads WHERE ${exactEq('id')} LIMIT 1`)
-    .bind(leadId)
-    .first<{stage?: string}>();
-  if (String(current?.stage ?? '') !== 'new') return false;
+  let current = stages?.get(leadId);
+  if (current === undefined) {
+    const row = await db
+      .prepare(`SELECT stage FROM leads WHERE ${exactEq('id')} LIMIT 1`)
+      .bind(leadId)
+      .first<{stage?: string}>();
+    current = String(row?.stage ?? '');
+    stages?.set(leadId, current);
+  }
+  if (current !== 'new') return false;
   await db
     .prepare(`UPDATE leads SET stage = ?, updated_at = ? WHERE ${exactEq('id')} AND ${exactEq('stage')}`)
     .bind(nextStage, now, leadId, 'new')
@@ -411,7 +457,9 @@ export async function upgradeNewStage(db: LeadDb, leadId: string, nextStage: str
     .prepare(`SELECT stage FROM leads WHERE ${exactEq('id')} LIMIT 1`)
     .bind(leadId)
     .first<{stage?: string}>();
-  if (String(after?.stage ?? '') !== nextStage) return false;
+  const stored = String(after?.stage ?? '');
+  stages?.set(leadId, stored);
+  if (stored !== nextStage) return false;
   const activityId = crypto.randomUUID();
   const note = `تم تحديث المرحلة من حالة الجدول إلى ${stageLabel(nextStage)}`;
   try {
@@ -434,25 +482,26 @@ export async function upgradeNewStage(db: LeadDb, leadId: string, nextStage: str
 }
 
 /** A duplicate row may point at an Excel lead that is still `new`. A manual lead is not upgraded. */
-async function excelDuplicateLeadId(db: LeadDb, sourceId: string, keys: string[]) {
-  const leadId = await linkedLeadId(db, sourceId, keys, SHEET_ROW_DUPLICATE);
-  if (!leadId || !(await excelImportedLead(db, leadId))) return '';
+function excelDuplicateLeadId(lookup: SheetLookup, keys: string[]) {
+  const leadId = linkedLeadId(lookup, keys, SHEET_ROW_DUPLICATE);
+  if (!leadId || !lookup.excelLeads.has(leadId)) return '';
   return leadId;
 }
 
 async function upgradeKnownRow(
   db: LeadDb,
-  sourceId: string,
+  lookup: SheetLookup,
   keys: string[],
   draft: SheetLeadDraft,
   now: string,
-  result: SheetImportResult
+  result: SheetImportResult,
+  stages: Map<string, string>
 ) {
   if (draft.stage === 'new' || sheetRowProblem(draft)) return '';
   try {
-    const leadId = (await importedLeadId(db, sourceId, keys)) || (await excelDuplicateLeadId(db, sourceId, keys));
+    const leadId = linkedLeadId(lookup, keys, SHEET_ROW_IMPORTED) || excelDuplicateLeadId(lookup, keys);
     if (!leadId) return '';
-    const upgraded = await upgradeNewStage(db, leadId, draft.stage, now);
+    const upgraded = await upgradeNewStage(db, leadId, draft.stage, now, stages);
     if (!upgraded) return '';
     result.stagesUpdated += 1;
     return leadId;

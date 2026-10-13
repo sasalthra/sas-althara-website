@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {createRequire} from 'node:module';
 import {DatabaseSync} from 'node:sqlite';
 import assert from 'node:assert/strict';
+import {sqliteReportSql} from './sqlite-report-sql.mjs';
 const output = mkdtempSync(join(tmpdir(), 'sas-tests-'));
 try {
   await build({entryPoints:['lib/lead-input.ts'],outfile:join(output,'domain.cjs'),bundle:true,platform:'node',format:'cjs'});
@@ -318,7 +319,7 @@ export {canToggleFeatured, compareClients, featuredControlsEnabled, isNewUnassig
   console.log('PASS featured permissions, Riyadh registration date, and retired won stage rules');
   await build({entryPoints:['lib/lead-schema.ts'],outfile:join(output,'lead-schema.cjs'),bundle:true,platform:'node',format:'cjs',external:['mysql2/promise']});
   const {ensureLeadSchema,resetLeadSchemaCache}=createRequire(import.meta.url)(join(output,'lead-schema.cjs'));
-  function sqliteExecutor(db){return {async execute(sql,values=[]){const text=String(sql).trim();if(text.startsWith('SHOW'))throw Error('near SHOW: syntax error');if(text.startsWith('SELECT'))return [db.prepare(text).all(...values)];return [{affectedRows:Number(db.prepare(text).run(...values).changes)}];}};}
+  function sqliteExecutor(db){return {async execute(sql,values=[]){const text=String(sql).trim();if(text.startsWith('SHOW'))throw Error('near SHOW: syntax error');if(text.startsWith('SELECT'))return [db.prepare(sqliteReportSql(text)).all(...values)];return [{affectedRows:Number(db.prepare(text).run(...values).changes)}];}};}
   const mem=new DatabaseSync(':memory:');
   mem.exec("CREATE TABLE leads(id TEXT PRIMARY KEY, stage TEXT, created_at TEXT); CREATE TABLE lead_activity(id TEXT PRIMARY KEY, lead_id TEXT, user_id TEXT, action TEXT, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP); INSERT INTO leads VALUES ('w1','won','2020-01-01'),('n1','new','2026-01-01'),('r1','received','2020-01-01'),('d1','data_received','2020-01-01'),('p1','properties_shown','2020-01-01'),('a1','تم عرض العقارات','2020-01-01'),('v1','viewing','2020-01-01'),('q1','visit_qualified','2020-01-01'),('c1','calculation_done','2020-01-01'),('b1','bank_approval','2020-01-01'),('h1','تم عمل حسبة للعميل','2020-01-01'),('k1','مؤهل بانتظار موافقة البنك','2020-01-01');");
   resetLeadSchemaCache();

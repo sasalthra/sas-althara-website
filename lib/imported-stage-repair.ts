@@ -1,6 +1,6 @@
 import {importedStageFromFields, stageLabel} from './lead-stages';
 import type {LeadDb} from './lead-reregistration';
-import {asBinary} from './sql-collation';
+import {paramEq} from './sql-collation';
 import {upgradeNewStage} from './sheet-sync';
 
 const SAMPLE_LIMIT = 20;
@@ -26,7 +26,7 @@ export type ImportedStageRepairResult = {
 type Candidate = ImportedStageSample;
 
 function exactEq(column: string) {
-  return `${asBinary(column)} = ${asBinary('?')}`;
+  return paramEq(column);
 }
 
 function resultOf(matches: Candidate[], extra: {skipped: boolean; reason: string; updated: number}): ImportedStageRepairResult {

@@ -407,7 +407,7 @@ export default function LeadDetailsPage() {
     try {
       const response =
         await fetch(
-          '/api/leads',
+          `/api/leads?id=${encodeURIComponent(params.id)}`,
           {
             cache: 'no-store',
           }
@@ -423,7 +423,7 @@ export default function LeadDetailsPage() {
         );
       }
 
-      setLeads(result);
+      setLeads(Array.isArray(result) ? result : (result.leads || []));
       setError('');
     } catch (error) {
       setError(

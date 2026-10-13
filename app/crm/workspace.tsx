@@ -32,8 +32,17 @@ import {canToggleFeatured, compareClients, featuredControlsEnabled, isFeaturedVa
 import LeadBulkBar from './lead-bulk-bar';
 import NewLeadBadge from '@/components/new-lead-badge';
 import {canonicalStage, displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
-import {leadMatchesReportFilters} from '@/lib/lead-cohorts';
-import {displayLeadPhone, leadPhoneMatchesQuery} from '@/lib/phone';
+import {
+  LEAD_PAGE_SIZE,
+  duplicatePhoneList,
+  followUpDue,
+  isLeadListPage,
+  leadListSearchParams,
+  leadMatchesClientFilters,
+  type LeadListCounts,
+  type LeadListFilters,
+} from '@/lib/lead-list';
+import {displayLeadPhone} from '@/lib/phone';
 
 import {
   Tabs,
@@ -156,6 +165,23 @@ export default function CRM({
   const [leads, setLeads] =
     useState<Lead[]>([]);
 
+  const [serverMode, setServerMode] = useState(false);
+
+  const [page, setPage] = useState(1);
+
+  const [pages, setPages] = useState(1);
+
+  const [filteredTotal, setFilteredTotal] = useState(0);
+
+  const [counts, setCounts] = useState<LeadListCounts>({
+    total: 0,
+    followUps: 0,
+    newUnassigned: 0,
+    duplicatePhones: [],
+  });
+
+  const [reloadKey, setReloadKey] = useState(0);
+
   const [loading, setLoading] =
     useState(true);
 
@@ -214,39 +240,9 @@ export default function CRM({
   const [edit, setEdit] =
     useState<Lead | undefined>();
 
-  const refresh =
-    useCallback(async () => {
-      setLoading(true);
-      try {
-        const response =
-          await fetch(
-            '/api/leads',
-            {
-              cache: 'no-store',
-            }
-          );
-
-        const result =
-          await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            result.error
-          );
-        }
-
-        setLeads(result);
-        setError('');
-      } catch (error) {
-        setError(
-          error instanceof Error
-            ? error.message
-            : 'تعذر التحميل'
-        );
-      } finally {
-        setLoading(false);
-      }
-    }, []);
+  const refresh = useCallback(() => {
+    setReloadKey(value => value + 1);
+  }, []);
 
   async function toggleFeatured(lead: Lead) {
     if (!canToggleFeatured({userId, role}, lead) || featureBusy) return;
@@ -269,14 +265,12 @@ export default function CRM({
     }
   }
 
+  const [search, setSearch] = useState('');
+
   useEffect(() => {
-    const controller=new AbortController();
-    fetch('/api/leads',{cache:'no-store',signal:controller.signal})
-      .then(async response=>{const result=await response.json();if(!response.ok)throw Error(result.error||'تعذر التحميل');setLeads(result);setError('');})
-      .catch(error=>{if(!controller.signal.aborted)setError(error instanceof Error?error.message:'تعذر التحميل');})
-      .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
-    return()=>controller.abort();
-  }, []);
+    const timer = setTimeout(() => setSearch(q.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [q]);
 
   useEffect(() => {
     function onLeadsChanged() {
@@ -286,91 +280,94 @@ export default function CRM({
     return () => window.removeEventListener('crm:leads-changed', onLeadsChanged);
   }, [refresh]);
 
-  const today =
-    new Date().toLocaleDateString(
-      'en-CA'
-    );
-
-  const needsFollowUp = (lead: Lead) =>
-    Boolean(
-      lead.follow_up &&
-      lead.follow_up <= today &&
-      !['won', 'closed'].includes(lead.stage)
-    );
-
-  const duplicatePhones = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const lead of leads) {
-      const phone = displayLeadPhone(lead.phone);
-      if (!phone) continue;
-      counts.set(phone, (counts.get(phone) || 0) + 1);
-    }
-    return [...counts.entries()].filter(([, count]) => count > 1).map(([phone]) => phone);
-  }, [leads]);
-  const duplicatePhoneSet = useMemo(() => new Set(duplicatePhones), [duplicatePhones]);
   const canReviewDuplicates = role === 'admin' || role === 'supervisor';
+  const listFilters: LeadListFilters = {
+    q: search,
+    view: leadView === 'followups' ? 'followups' : '',
+    stage: selectedStage,
+    from: listFrom,
+    to: listTo,
+    source: listSource,
+    sourceExact: listSourceExact,
+    employee: listEmployee,
+    employeeName: listEmployeeName,
+    employeeUser: listEmployeeUser,
+    stageGroup: listGroup,
+    overdue: listOverdue,
+    inactive: listInactive,
+    waiting: listWaiting,
+    scheduled: listScheduled,
+    duplicateOnly: duplicateOnly && canReviewDuplicates,
+    newOnly: role === 'admin' && newOnly,
+    page,
+    id: '',
+    picklist: false,
+  };
+  const listSignature = leadListSearchParams({...listFilters, page: 1});
+  const signatureRef = useRef(listSignature);
 
-  const shown =
-    leads.filter(lead => {
-      if (leadView === 'followups' && !needsFollowUp(lead)) {
-        return false;
-      }
+  useEffect(() => {
+    if (signatureRef.current === listSignature) return;
+    signatureRef.current = listSignature;
+    setPage(1);
+    setSelectedIds([]);
+  }, [listSignature]);
 
-      if (!listStage && stageFilter && displayStage(lead.stage) !== stageFilter) {
-        return false;
-      }
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = leadListSearchParams(listFilters);
+    setLoading(true);
+    fetch(`/api/leads?${params}`, {cache: 'no-store', signal: controller.signal})
+      .then(async response => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'تعذر التحميل');
+        if (isLeadListPage(result)) {
+          setServerMode(true);
+          setLeads(result.leads as Lead[]);
+          setPage(result.page);
+          setPages(result.pages);
+          setFilteredTotal(result.total);
+          setCounts(result.counts);
+        } else if (Array.isArray(result)) {
+          setServerMode(false);
+          setLeads(result);
+        } else {
+          throw new Error('تعذر التحميل');
+        }
+        setError('');
+      })
+      .catch(error => {
+        if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'تعذر التحميل');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [listSignature, page, reloadKey, role]);
 
-      if (!leadMatchesReportFilters(lead, {
-        from: listFrom,
-        to: listTo,
-        stage: listStage,
-        source: listSource,
-        sourceExact: listSourceExact,
-        employeeTokens: [listEmployee, listEmployeeName, listEmployeeUser],
-        stageGroup: listGroup,
-        overdue: listOverdue,
-        inactive: listInactive,
-        waiting: listWaiting,
-        scheduled: listScheduled,
-        today: riyadhDayKey(new Date()),
-        nowMs: Date.now(),
-      })) return false;
+  const todayKey = riyadhDayKey(new Date());
+  const localDuplicatePhones = useMemo(() => duplicatePhoneList(leads), [leads]);
+  const duplicatePhones = serverMode ? counts.duplicatePhones : localDuplicatePhones;
+  const shown = useMemo(() => {
+    if (serverMode) return leads;
+    const phones = new Set(localDuplicatePhones);
+    const filters: LeadListFilters = {
+      ...listFilters,
+      q: q.trim(),
+      page: 1,
+    };
+    return leads
+      .filter(lead => {
+        if (!listStage && stageFilter && displayStage(lead.stage) !== stageFilter) return false;
+        return leadMatchesClientFilters(lead, filters, phones, todayKey, Date.now());
+      })
+      .sort((a, b) => compareClients(a, b));
+  }, [serverMode, leads, localDuplicatePhones, listFilters, q, listStage, stageFilter, todayKey]);
 
-      if (duplicateOnly && canReviewDuplicates && !duplicatePhoneSet.has(displayLeadPhone(lead.phone))) {
-        return false;
-      }
-
-      if (role === 'admin' && newOnly && !isNewUnassignedLead(lead)) {
-        return false;
-      }
-
-      const property =
-        data.find(
-          property =>
-            property.id ===
-            lead.property_id
-        );
-
-      const phoneShown = displayLeadPhone(lead.phone);
-      const queryText = q.trim();
-      const searchable = [
-        lead.name,
-        phoneShown,
-        property?.title || lead.property_other || '',
-        lead.assigned_name || '',
-        lead.field_assigned_name || '',
-      ].join(' ');
-
-      if (!queryText) return true;
-      return searchable
-        .toLowerCase()
-        .includes(queryText.toLowerCase()) || leadPhoneMatchesQuery(phoneShown, queryText);
-    }).sort((a, b) => compareClients(a, b));
-
-  const followUps =
-    leads.filter(needsFollowUp).length;
-
-  const newUnassignedCount = leads.filter(isNewUnassignedLead).length;
+  const followUps = serverMode ? counts.followUps : leads.filter(lead => followUpDue(lead, todayKey)).length;
+  const newUnassignedCount = serverMode ? counts.newUnassigned : leads.filter(isNewUnassignedLead).length;
+  const scopeTotal = serverMode ? counts.total : leads.length;
+  const filteredCount = serverMode ? filteredTotal : leads.length;
 
   const bulkSelect = canBulkSelect(role);
   const shownIds = shown.map(lead => lead.id);
@@ -378,12 +375,13 @@ export default function CRM({
   const pageAllSelected = shownIds.length > 0 && selectedOnPage === shownIds.length;
 
   useEffect(() => {
+    if (serverMode) return;
     const live = new Set(leads.map(lead => lead.id));
     setSelectedIds(current => {
       const next = current.filter(id => live.has(id));
       return next.length === current.length ? current : next;
     });
-  }, [leads]);
+  }, [leads, serverMode]);
 
   useEffect(() => {
     const indeterminate = selectedOnPage > 0 && !pageAllSelected;
@@ -430,10 +428,10 @@ export default function CRM({
         {tab==='leads'&&<button className="primary" onClick={()=>{setEdit(undefined);setOpen(true);}}>+ إضافة عميل</button>}
       </header>
       <main className="crm-main" id="crm-main">
-        {tab==='leads'&&<div className="crm-summary"><button type="button" className="crm-summary-btn" data-active={leadView==='all'} onClick={()=>setLeadView('all')}>طلبات العملاء <strong>{loading?'—':leads.length}</strong></button><button type="button" className="crm-summary-btn" data-active={leadView==='followups'} onClick={()=>setLeadView('followups')}>تحتاج متابعة <strong>{loading?'—':followUps}</strong></button><span>العقارات <strong>{data.length}</strong></span></div>}
+        {tab==='leads'&&<div className="crm-summary"><button type="button" className="crm-summary-btn" data-active={leadView==='all'} onClick={()=>setLeadView('all')}>طلبات العملاء <strong>{loading?'—':scopeTotal}</strong></button><button type="button" className="crm-summary-btn" data-active={leadView==='followups'} onClick={()=>setLeadView('followups')}>تحتاج متابعة <strong>{loading?'—':followUps}</strong></button><span>العقارات <strong>{data.length}</strong></span></div>}
         <Tabs value={tab} dir="rtl">
           <TabsContent value="reports"><ReportsPanel role={role}/></TabsContent>
-          {role === 'admin' && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} leads={leads} initialLeadId={query.get('lead')||''}/></TabsContent>}
+          {role === 'admin' && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} initialLeadId={query.get('lead')||''}/></TabsContent>}
           <TabsContent value="hr"><HrPanel admin={role === 'admin'}/></TabsContent>
           {['admin', 'supervisor'].includes(role) && <TabsContent value="ai"><AiPanel admin={role === 'admin'} envModel={aiEnvModel}/></TabsContent>}
           {role === 'admin' && <TabsContent value="sheets"><SheetsPanel/></TabsContent>}
@@ -629,7 +627,7 @@ export default function CRM({
                                 />
                               </label>
                             ) : null}
-                            <span className="crm-lead-index">{index + 1}</span>
+                            <span className="crm-lead-index">{serverMode ? (page - 1) * LEAD_PAGE_SIZE + index + 1 : index + 1}</span>
                             {allowFeature ? (
                               <button
                                 type="button"
@@ -751,7 +749,7 @@ export default function CRM({
                                   </TableCell>
                                 ) : null}
                                 <TableCell className="px-2 text-center text-sm text-muted-foreground">
-                                  {index + 1}
+                                  {serverMode ? (page - 1) * LEAD_PAGE_SIZE + index + 1 : index + 1}
                                 </TableCell>
 
                                 <TableCell className="px-2">
@@ -916,8 +914,15 @@ export default function CRM({
                   </div>
 
                   <div className="mt-3 text-sm text-muted-foreground">
-                    عرض {shown.length} من أصل {leads.length} عميل
+                    عرض {shown.length} من أصل {filteredCount} عميل
                   </div>
+                  {serverMode && pages > 1 ? (
+                    <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+                      <button type="button" className="rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-black disabled:opacity-40" disabled={page <= 1} onClick={() => setPage(current => Math.max(1, current - 1))}>السابق</button>
+                      <span>صفحة {page} من {pages}</span>
+                      <button type="button" className="rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-black disabled:opacity-40" disabled={page >= pages} onClick={() => setPage(current => current + 1)}>التالي</button>
+                    </div>
+                  ) : null}
                 </>
               ) : (
                 !error && (

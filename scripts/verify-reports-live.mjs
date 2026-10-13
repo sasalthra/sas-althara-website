@@ -12,7 +12,7 @@ const {DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT} = process.env;
 const conn = await mysql.createConnection({host: DB_HOST, user: DB_USER, password: DB_PASSWORD,
   database: DB_NAME, port: Number(DB_PORT || 3306), charset: 'utf8mb4'});
 
-const leadFrom = 'leads l LEFT JOIN crm_users s ON CAST(LOWER(TRIM(s.id)) AS BINARY)=CAST(LOWER(TRIM(l.assigned_to)) AS BINARY) LEFT JOIN crm_users f ON CAST(LOWER(TRIM(f.id)) AS BINARY)=CAST(LOWER(TRIM(l.field_assigned_to)) AS BINARY)';
+const leadFrom = 'leads l LEFT JOIN crm_users s ON s.id = CAST(l.assigned_to AS BINARY) LEFT JOIN crm_users f ON f.id = CAST(l.field_assigned_to AS BINARY)';
 const leadFields = 'l.id,l.name,l.property_id,l.property_other,l.source,l.stage,l.follow_up,l.created_at,s.name AS sales,f.name AS field';
 let failures = 0;
 const ok = (pass, msg) => { console.log(`${pass ? '✓' : '✗'} ${msg}`); if (!pass) failures++; };

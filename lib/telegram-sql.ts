@@ -1,8 +1,8 @@
 import {asBinary} from './sql-collation';
 
-/** Exact byte match. Both sides are CAST AS BINARY so mixed collations cannot raise 1267. */
+/** Indexed column stays bare. The other side is CAST AS BINARY so mixed collations cannot raise 1267. */
 export function exactEq(left: string, right: string) {
-  return `${asBinary(left)} = ${asBinary(right)}`;
+  return `${left} = ${asBinary(right)}`;
 }
 
 export {asBinary};

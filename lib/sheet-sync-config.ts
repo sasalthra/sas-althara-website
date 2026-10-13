@@ -119,7 +119,7 @@ export const TIKTOK_SHEET_HEADERS = [
 ];
 
 /** In-process poll while the Node server is running. 0 disables it. */
-export const DEFAULT_SHEETS_SYNC_INTERVAL_MS = 180_000;
+export const DEFAULT_SHEETS_SYNC_INTERVAL_MS = 900_000;
 
 export function sheetsSyncIntervalMs() {
   const raw = process.env.SHEETS_SYNC_INTERVAL_MS;
