@@ -5,8 +5,9 @@ import {
   useEffect,
   useMemo,
   useState,
+  type ReactNode,
 } from 'react';
-import {useParams} from 'next/navigation';
+import {useParams, useRouter} from 'next/navigation';
 import {getSession} from 'next-auth/react';
 import {Star} from 'lucide-react';
 
@@ -19,6 +20,7 @@ import {canToggleFeatured, featuredControlsEnabled, isFeaturedValue} from '@/lib
 import NewLeadBadge from '@/components/new-lead-badge';
 import {displayStage, editableStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import {displayLeadPhone} from '@/lib/phone';
+import {safeCrmReturn} from '@/lib/report-return';
 
 import {
   Dialog,
@@ -330,6 +332,48 @@ function getActivityNote(
   }
 
   return 'تم تسجيل تحديث على العميل.';
+}
+
+function LeadBackLink({
+  className,
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}) {
+  const router = useRouter();
+  const [returnTo, setReturnTo] = useState('');
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setReturnTo(safeCrmReturn(params.get('returnTo')) || safeCrmReturn(params.get('from')) || '');
+  }, []);
+
+  return (
+    <a
+      href={returnTo || '/crm'}
+      className={className}
+      onClick={event => {
+        if (returnTo) return;
+        if (
+          event.defaultPrevented ||
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        ) {
+          return;
+        }
+        if (window.history.length > 1) {
+          event.preventDefault();
+          router.back();
+        }
+      }}
+    >
+      {returnTo.includes('tab=reports') ? '← العودة إلى التقرير' : children}
+    </a>
+  );
 }
 
 export default function LeadDetailsPage() {
@@ -786,12 +830,9 @@ export default function LeadDetailsPage() {
         dir="rtl"
         className="mx-auto max-w-7xl p-6"
       >
-        <a
-          href="/crm"
-          className="underline"
-        >
+        <LeadBackLink className="underline">
           العودة إلى العملاء
-        </a>
+        </LeadBackLink>
 
         <p className="mt-6 text-red-600">
           {error}
@@ -806,12 +847,9 @@ export default function LeadDetailsPage() {
         dir="rtl"
         className="mx-auto max-w-7xl p-6"
       >
-        <a
-          href="/crm"
-          className="underline"
-        >
+        <LeadBackLink className="underline">
           العودة إلى العملاء
-        </a>
+        </LeadBackLink>
 
         <p className="mt-6">
           العميل غير موجود أو لا تملك صلاحية لعرضه.
@@ -851,12 +889,9 @@ export default function LeadDetailsPage() {
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0">
-              <a
-                href="/crm"
-                className="mb-4 inline-flex text-sm text-muted-foreground hover:text-[#3F1A44]"
-              >
+              <LeadBackLink className="mb-4 inline-flex text-sm text-muted-foreground hover:text-[#3F1A44]">
                 ← العودة إلى سجل العملاء
-              </a>
+              </LeadBackLink>
 
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className={`inline-flex items-center gap-2 text-3xl font-bold ${isFeaturedValue(lead.is_featured) ? 'text-[#3F1A44]' : 'text-slate-900'}`}>

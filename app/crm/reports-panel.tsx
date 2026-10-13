@@ -1,11 +1,12 @@
 'use client';
-import {useEffect,useState,type FormEvent,type ReactNode} from 'react';
+import {useEffect,useState,type FormEvent,type MouseEvent,type ReactNode} from 'react';
 import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend,CartesianGrid,AreaChart,Area} from 'recharts';
 import {AlertCircle,BarChart3,Bell,Building2,Calendar,CheckCircle2,ClipboardList,Download,FileText,Filter,Home,Info,Layers,PieChart as PieIcon,TrendingUp,Users} from 'lucide-react';
 import {allowedReports,type ReportResult} from '@/lib/report-catalog';
 import type {ReportDashboard} from '@/lib/reports';
 import {COHORT_DEFINITIONS} from '@/lib/lead-cohorts';
 import {canonicalStage, displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
+import {buildReportPath,leadReturnHref,rememberReportScroll,restoreReportScroll} from '@/lib/report-return';
 import {CrmLink,navigateCrm,useCrmQuery} from './navigation';
 
 type Summary={id:string;label:string;kind:string;note:string;status:string;total:number|null;error?:string;metrics?:ReportResult['metrics']};
@@ -112,6 +113,38 @@ export default function ReportsPanel({role}:{role:string}){
  const [retry,setRetry]=useState(0),[exportError,setExportError]=useState(''),[exporting,setExporting]=useState(false);
  useEffect(()=>{const controller=new AbortController();fetch('/api/reports?'+key,{signal:controller.signal,cache:'no-store'}).then(async r=>{const data=await r.json();if(!r.ok)throw Error(data.error||'تعذر تحميل التقرير');return data;}).then(data=>setState({key,data})).catch(e=>{if(!controller.signal.aborted)setState({key,error:e instanceof Error?e.message:'تعذر التحميل'});});return()=>controller.abort();},[key,retry]);
  const current=state.key===key,stateData=current?state.data:undefined,report=stateData?.report,error=current?state.error:undefined,loading=!error&&!stateData;
+ const appliedFrom=stateData?.filters.from||'',appliedTo=stateData?.filters.to||'',appliedEmployee=stateData?.filters.employee||'',appliedSource=stateData?.filters.source||'',appliedStage=stateData?.filters.stage||'',appliedFunding=stateData?.filters.funding||'',appliedPage=stateData?.filters.page||1;
+ const reportPath=buildReportPath({
+  module:query.get('module')||'',
+  from:query.get('from')||appliedFrom,
+  to:query.get('to')||appliedTo,
+  reportEmployee:query.get('reportEmployee')||appliedEmployee,
+  source:query.get('source')||appliedSource,
+  stage:query.get('stage')||appliedStage,
+  funding:query.get('funding')||appliedFunding,
+  page:query.get('page')||(appliedPage>1?appliedPage:''),
+  pageSize:query.get('pageSize')||'',
+ });
+ useEffect(()=>{
+  if(!stateData)return;
+  const currentQuery=new URLSearchParams(window.location.search);
+  if(currentQuery.get('tab')!=='reports')return;
+  const desired=new URLSearchParams(currentQuery);
+  const fill=(name:string,value:string)=>{if(value&&!currentQuery.get(name))desired.set(name,value);};
+  fill('from',appliedFrom);fill('to',appliedTo);fill('reportEmployee',appliedEmployee);fill('source',appliedSource);fill('stage',appliedStage);fill('funding',appliedFunding);
+  if(appliedPage>1&&!currentQuery.get('page'))desired.set('page',String(appliedPage));
+  const next=desired.toString();
+  if(next===currentQuery.toString())return;
+  window.history.replaceState(window.history.state,'',window.location.pathname+'?'+next+window.location.hash);
+  window.dispatchEvent(new Event('crm:navigate'));
+ },[stateData,appliedFrom,appliedTo,appliedEmployee,appliedSource,appliedStage,appliedFunding,appliedPage]);
+ useEffect(()=>{if(!stateData)return;restoreReportScroll(reportPath);},[stateData,reportPath]);
+ useEffect(()=>{
+  const save=()=>rememberReportScroll(reportPath);
+  window.addEventListener('scroll',save,{passive:true});
+  window.addEventListener('pagehide',save);
+  return()=>{save();window.removeEventListener('scroll',save);window.removeEventListener('pagehide',save);};
+ },[reportPath]);
  function href(changes:Record<string,string>){const q=new URLSearchParams(query);q.set('tab','reports');for(const [k,v] of Object.entries(changes)){if(v)q.set(k,v);else q.delete(k);}return '/crm?'+q.toString();}
  function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const data=new FormData(e.currentTarget);const changes:Record<string,string>={page:'1'};for(const k of ['module','from','to','reportEmployee','source','stage','funding','pageSize'])changes[k]=String(data.get(k)||'');navigateCrm(href(changes));}
  async function download(moduleOverride?:string){
@@ -130,7 +163,8 @@ export default function ReportsPanel({role}:{role:string}){
   finally{setExporting(false);}
  }
  const page=report?.page||1,pages=Math.max(1,Math.ceil((report?.total||0)/(report?.pageSize||25)));
- function deepLink(column:string,value:unknown){if(value===null||value===undefined||value==='')return '';if(column==='lead_id'||(column==='id'&&['leads','followups'].includes(selectedModule)))return '/crm/leads/'+encodeURIComponent(String(value));if(column==='property_id'||(column==='id'&&selectedModule==='properties'&&!['other'].includes(String(value))))return '/properties/'+encodeURIComponent(String(value));return '';}
+ function deepLink(column:string,value:unknown){if(value===null||value===undefined||value==='')return '';if(column==='lead_id'||(column==='id'&&['leads','followups'].includes(selectedModule)))return leadReturnHref(String(value),reportPath);if(column==='property_id'||(column==='id'&&selectedModule==='properties'&&!['other'].includes(String(value))))return '/properties/'+encodeURIComponent(String(value));return '';}
+ function openReportLead(event:MouseEvent<HTMLAnchorElement>){if(event.currentTarget.href.includes('returnTo='))rememberReportScroll(reportPath);}
  function clientListHref(extra:Record<string,string>){
   const q=new URLSearchParams();q.set('tab','leads');
   const from=query.get('from')||stateData?.filters.from||'';const to=query.get('to')||stateData?.filters.to||'';
@@ -522,7 +556,7 @@ export default function ReportsPanel({role}:{role:string}){
     ))}
    </div>}
    {Object.entries(report.groups).map(([gkey,groups])=>groups.length>0&&<details className="report-group" key={gkey}><summary>{groupNames[gkey]||gkey} — توزيع السجلات ({groups.length})</summary><ul>{groups.map(g=><li key={g.label}>{['source','stage'].includes(gkey)&&g.label!=='غير محدد'?<CrmLink href={href({[gkey]:g.label,page:'1'})}>{g.label}</CrmLink>:g.label} <strong>{g.count}</strong></li>)}</ul></details>)}
-   {report.rows.length?<div className="report-table-scroll panel" tabIndex={0} aria-label="تفاصيل التقرير"><table className="report-detail-table"><thead><tr>{report.columns.map(c=><th key={c.key}>{c.label}</th>)}</tr></thead><tbody>{report.rows.map((r,i)=><tr key={String(r.id||r.user_id||i)+i}>{report.columns.map(c=>{const link=deepLink(c.key,r[c.key]);return <td key={c.key} data-label={c.label}>{link?<a href={link}>{String(r[c.key])}</a>:<bdi>{r[c.key]??'—'}</bdi>}</td>;})}</tr>)}</tbody></table></div>:<p className="panel">{report.total?'هذه الصفحة خارج النتائج؛ انتقل إلى الصفحة الأولى.':'لا توجد سجلات مطابقة في المصدر المقروء بنجاح.'}</p>}
+   {report.rows.length?<div className="report-table-scroll panel" tabIndex={0} aria-label="تفاصيل التقرير"><table className="report-detail-table"><thead><tr>{report.columns.map(c=><th key={c.key}>{c.label}</th>)}</tr></thead><tbody>{report.rows.map((r,i)=><tr key={String(r.id||r.user_id||i)+i}>{report.columns.map(c=>{const link=deepLink(c.key,r[c.key]);return <td key={c.key} data-label={c.label}>{link?<a href={link} onClick={openReportLead}>{String(r[c.key])}</a>:<bdi>{r[c.key]??'—'}</bdi>}</td>;})}</tr>)}</tbody></table></div>:<p className="panel">{report.total?'هذه الصفحة خارج النتائج؛ انتقل إلى الصفحة الأولى.':'لا توجد سجلات مطابقة في المصدر المقروء بنجاح.'}</p>}
    <nav className="report-pagination" aria-label="صفحات التقرير">{page>1&&<CrmLink className="crm-button" href={href({page:String(page-1)})}>السابق</CrmLink>}<CrmLink className="crm-button" href={href({page:'1'})}>الصفحة الأولى</CrmLink>{page<pages&&<CrmLink className="crm-button" href={href({page:String(page+1)})}>التالي</CrmLink>}</nav>
   </>}
  </section>;

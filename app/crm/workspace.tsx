@@ -450,10 +450,15 @@ export default function CRM({
                       ? 'العملاء الذين موعد متابعتهم اليوم أو قبله، باستثناء المغلق.'
                       : 'اضغط على اسم العميل لعرض الملف الكامل.'}
                   </p>
-                  {role === 'admin' ? (
-                    <p className="mt-3">
-                      <CrmLink className="crm-button" href="/crm?tab=users#purge-employee-clients">
-                        حذف عملاء موظف
+                  {role === 'admin' || role === 'supervisor' ? (
+                    <p className="mt-3 flex flex-wrap gap-2">
+                      {role === 'admin' ? (
+                        <CrmLink className="crm-button" href="/crm?tab=users#purge-employee-clients">
+                          حذف عملاء موظف
+                        </CrmLink>
+                      ) : null}
+                      <CrmLink className="crm-button" href="/crm?tab=import#property-cleanup">
+                        حذف حسب نص العقار
                       </CrmLink>
                     </p>
                   ) : null}
