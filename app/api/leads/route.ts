@@ -5,6 +5,7 @@ import {crmDb} from '@/lib/crm-db';
 import {leadSchema as schema} from '@/lib/lead-input';
 import {findLeadByNormalizedPhone, noteReregistration} from '@/lib/lead-reregistration';
 import {ensureLeadSchema, isMissingFeaturedColumn} from '@/lib/lead-schema';
+import {leadNeedsFieldDispatchStamp, rememberAssignedAt, rememberFirstFieldDispatch} from '@/lib/lead-stamps';
 import {loadLeadPage, parseLeadListFilters} from '@/lib/lead-list';
 import {stageWriteAllowed} from '@/lib/lead-stages';
 import {displayLeadPhone, normalizeLeadPhone} from '@/lib/phone';
@@ -379,6 +380,14 @@ async function write(
           )
           .run();
 
+        const nextAssigned = finalAssignedTo ?? '';
+        if (nextAssigned && nextAssigned !== String(existing.assigned_to ?? '')) {
+          await rememberAssignedAt(db, value.id, now);
+        }
+        if (leadNeedsFieldDispatchStamp(value.stage, finalFieldAssignedTo)) {
+          await rememberFirstFieldDispatch(db, value.id, now);
+        }
+
         await db
           .prepare(`
             INSERT INTO lead_activity (
@@ -518,6 +527,10 @@ async function write(
           value.id
         )
         .run();
+
+      if (leadNeedsFieldDispatchStamp(value.stage, null)) {
+        await rememberFirstFieldDispatch(db, value.id, now);
+      }
 
       await db
         .prepare(`
@@ -669,6 +682,11 @@ async function write(
           now
         )
         .run();
+
+      if (newAssignedTo) await rememberAssignedAt(db, value.id, now);
+      if (leadNeedsFieldDispatchStamp(value.stage, newFieldAssignedTo)) {
+        await rememberFirstFieldDispatch(db, value.id, now);
+      }
 
       const stored = await db
         .prepare(`

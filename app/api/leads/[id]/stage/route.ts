@@ -3,6 +3,7 @@ import {NextResponse} from 'next/server';
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
 import {stageWriteAllowed} from '@/lib/lead-stages';
+import {leadNeedsFieldDispatchStamp, rememberFirstFieldDispatch} from '@/lib/lead-stamps';
 import {clipFieldReport, fieldReportText, visitDoneBlocked} from '@/lib/field-report';
 import {STAGE_NOTE_INSERT_SQL, STAGE_NOTE_MAX, clipName} from '@/lib/stage-notes';
 
@@ -88,6 +89,10 @@ export async function PATCH(
       )
       .bind(...(saveReport ? [stage, at, filedReport, at, id] : [stage, at, id]))
       .run();
+
+    if (leadNeedsFieldDispatchStamp(stage, lead.field_assigned_to)) {
+      await rememberFirstFieldDispatch(crmDb(), id, at);
+    }
 
     await crmDb()
       .prepare(`

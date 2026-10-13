@@ -1,7 +1,7 @@
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
 import {allowedReports} from '@/lib/report-catalog';
-import {ReportError,authorizeReport,listReportEmployees,parseReportFilters,readReport,readReportDashboard,readReportSnapshots,reportCsv} from '@/lib/reports';
+import {ReportError,authorizeReport,listReportEmployees,parseReportFilters,readEmployeeAssignmentReport,readReport,readReportDashboard,readReportSnapshots,reportCsv,type EmployeeAssignmentReport} from '@/lib/reports';
 import {loadPublishedProperties} from '@/lib/property-catalog';
 import {paramEq} from '@/lib/sql-collation';
 export const dynamic='force-dynamic';
@@ -23,6 +23,7 @@ export async function GET(req:Request){
   if(employees.length>10000)throw new ReportError(422,'قائمة الموظفين أكبر من الحد المدعوم');
   if(filters.employee&&!employees.some(employee=>String(employee.id)===filters.employee))throw new ReportError(400,'الموظف المحدد غير موجود في النطاق المسموح');
   if(exporting){const report=await readReport(db,user,id,filters,{properties,exporting:true});return new Response(reportCsv(report),{headers:{...headers,'Content-Type':'text/csv; charset=utf-8','Content-Disposition':`attachment; filename="sas-report-${id}.csv"`}});}
+  const assignment=await loadAssignment(db,user,filters,explain);
   if(id==='overview'){
    const summaries=[];
    for(const meta of allowedReports(user.role)){
@@ -33,9 +34,9 @@ export async function GET(req:Request){
    let dashboard=null,dashboardError:string|undefined;
    try{dashboard=await readReportDashboard(db,user,filters);}
    catch(error){dashboardError=explain(error);}
-   return Response.json({summaries,snapshots,dashboard,dashboardError,employees,canExport:user.role==='admin',filters,generatedAt:new Date().toISOString()},{headers});
+   return Response.json({summaries,snapshots,dashboard,dashboardError,assignment,employees,canExport:user.role==='admin',filters,generatedAt:new Date().toISOString()},{headers});
   }
-  return Response.json({report:await readReport(db,user,id,filters,{properties}),employees,canExport:user.role==='admin',filters},{headers});
+  return Response.json({report:await readReport(db,user,id,filters,{properties}),assignment,employees,canExport:user.role==='admin',filters},{headers});
  } catch(error){const reveal=user.role==='admin';return Response.json({error:error instanceof ReportError?error.message:sourceError(error,reveal)},{status:error instanceof ReportError?error.status:503,headers});}
 }
 // A read failure must never look like a zero, and a schema gap must name itself
@@ -46,6 +47,10 @@ async function selfEmployee(db: ReturnType<typeof crmDb>, user: {userId: string;
   return [{id: user.userId, name: row?.name?.trim() || user.name, username: ''}];
 }
 
+async function loadAssignment(db:ReturnType<typeof crmDb>,user:{userId:string;role:string},filters:ReturnType<typeof parseReportFilters>,explain:(error:unknown)=>string):Promise<EmployeeAssignmentReport>{
+ try{return await readEmployeeAssignmentReport(db,user,filters);}
+ catch(error){return {status:'unavailable',from:filters.from,to:filters.to,employeeId:filters.employee,employeeName:'',employeeUser:'',role:'',basis:'',total:null,byStage:[],error:explain(error)};}
+}
 function dbErrorParts(error:unknown){
  const record=error&&typeof error==='object'?error as {code?:unknown;errno?:unknown;sqlMessage?:unknown}:{};
  const code=[typeof record.code==='string'?record.code:'',typeof record.errno==='number'?String(record.errno):''].filter(Boolean).join('/');

@@ -22,7 +22,7 @@ export function useCrmQuery() {
 export function navigateCrm(href: string) {
   const target = new URL(href, window.location.origin);
   const current = new URL(window.location.href);
-  for (const key of ["tab", "hr", "lead", "module", "from", "to", "source", "sourceExact", "stage", "funding", "page", "pageSize", "reportEmployee", "employee", "employeeName", "employeeUser", "overdue", "inactive", "noActivity", "waiting", "stageGroup", "scheduled"])
+  for (const key of ["tab", "hr", "lead", "module", "from", "to", "source", "sourceExact", "stage", "stageNow", "funding", "page", "pageSize", "reportEmployee", "employee", "employeeName", "employeeUser", "overdue", "inactive", "noActivity", "waiting", "stageGroup", "scheduled", "assignFrom", "assignTo", "assignRole", "returnTo"])
     current.searchParams.delete(key);
   target.searchParams.forEach((value, key) => current.searchParams.set(key, value));
   window.history.pushState(null, "", current.pathname + current.search + target.hash);

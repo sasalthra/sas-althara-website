@@ -27,7 +27,7 @@ export const COHORT_DEFINITIONS = {
   unassignedWait: 'جديد غير مسند = مرحلة «عميل جديد» بلا موظف مبيعات، ومرّ على تسجيله أكثر من 24 ساعة.',
 } as const;
 
-export type DirectoryUser = {id: string; name: string; username: string};
+export type DirectoryUser = {id: string; name: string; username: string; role?: string};
 
 export function normText(value: unknown): string {
   return String(value ?? '').replace(/[\u200B-\u200F\u202A-\u202E]/g, '').trim().toLowerCase();
@@ -108,6 +108,63 @@ export function createdInPeriod(createdAt: unknown, from: string, to: string): b
   if (from && day < from) return false;
   if (to && day > to) return false;
   return true;
+}
+
+/** Same Riyadh calendar window as registration, for assignment and dispatch stamps. */
+export function instantInRiyadhRange(value: unknown, from: string, to: string): boolean {
+  return createdInPeriod(value, from, to);
+}
+
+/** Stage filter «تفويج للميداني» means the lead entered that stage at least once. */
+export function isEverFieldDispatchFilter(stage: unknown): boolean {
+  const text = String(stage ?? '').trim();
+  if (!text) return false;
+  return stageKeyOf(canonicalStage(text) || text) === 'field_dispatch';
+}
+
+export function leadEverFieldDispatched(lead: {
+  stage?: unknown;
+  first_field_dispatch_at?: unknown;
+  field_dispatched_at?: unknown;
+  field_assigned_to?: unknown;
+}): boolean {
+  if (stageKeyOf(lead.stage) === 'field_dispatch') return true;
+  if (String(lead.first_field_dispatch_at ?? '').trim()) return true;
+  if (String(lead.field_dispatched_at ?? '').trim()) return true;
+  if (String(lead.field_assigned_to ?? '').trim()) return true;
+  return false;
+}
+
+function tokenHit(values: unknown[], tokens: string[]): boolean {
+  const wanted = new Set(tokens.map(normText).filter(Boolean));
+  if (!wanted.size) return false;
+  return values.some(value => wanted.has(normText(value)));
+}
+
+/**
+ * Leads assigned to one employee inside a Riyadh window.
+ * Sales uses assigned_at. Field uses the dispatch stamp, then the first-dispatch stamp.
+ */
+export function leadMatchesAssignmentCohort(
+  lead: LeadIdentity & {
+    assigned_at?: unknown;
+    field_dispatched_at?: unknown;
+    first_field_dispatch_at?: unknown;
+  },
+  input: {role: string; from: string; to: string; employeeTokens: string[]}
+): boolean {
+  const tokens = input.employeeTokens;
+  if (input.role === 'sales') {
+    if (!tokenHit([lead.assigned_to, lead.assigned_name, lead.assigned_username], tokens)) return false;
+    return instantInRiyadhRange(lead.assigned_at, input.from, input.to);
+  }
+  if (input.role === 'field') {
+    if (!tokenHit([lead.field_assigned_to, lead.field_assigned_name, lead.field_assigned_username], tokens)) return false;
+    const dispatched = String(lead.field_dispatched_at ?? '').trim();
+    const at = dispatched || String(lead.first_field_dispatch_at ?? '').trim();
+    return instantInRiyadhRange(at, input.from, input.to);
+  }
+  return false;
 }
 
 const SOURCE_RULES: {key: string; label: string; test: RegExp}[] = [

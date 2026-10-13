@@ -50,6 +50,11 @@
  * created, existing, skipped, and error_message are added the same way.
  * Field dispatch stores leads.field_dispatched_at, field_report, field_report_at,
  * and field_report_alert_at. The report body is TEXT and is never a key.
+ * leads.first_field_dispatch_at is the first time a lead entered تفويج للميداني
+ * or was dispatched to a field employee. leads.assigned_at is the sales
+ * assignment time. Both are VARCHAR(40), never keys. Each is backfilled once
+ * from lead_activity (and the dispatch columns) and the pass is recorded in
+ * crm_schema_meta so later requests do not scan history again.
  * crm_user_alerts keeps one in-app notice per user and dispatch; its primary
  * key and dedupe_key are VARCHAR/CHAR, not TEXT. Existing open dispatches are
  * backfilled once and the pass is recorded in crm_schema_meta.
@@ -58,7 +63,7 @@
 import {createHash} from 'node:crypto';
 import {planLeadPhoneMigration} from './phone';
 import {paramEq} from './sql-collation';
-import {retiredStageMoves, stageEnumValues} from './lead-stages';
+import {retiredStageMap, retiredStageMoves, stageEnumValues} from './lead-stages';
 import {
   STAGE_CHANGED_NOTES_SQL,
   STAGE_NOTE_INSERT_SQL,
@@ -1315,6 +1320,196 @@ async function ensureFieldReportSchema(executor: SqlExecutor) {
   }
 }
 
+const ASSIGNED_AT_MIGRATION = 'assigned_at_backfill_v1';
+const FIRST_DISPATCH_MIGRATION = 'first_field_dispatch_at_v1';
+const ASSIGN_ACTIONS = ['assigned', 'assignment', 'reassigned', 'imported', 'created', 'updated'];
+const DISPATCH_ACTIONS = ['field_dispatched', 'stage_changed'];
+
+function detailsObject(value: unknown): Record<string, unknown> {
+  let parsed: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+}
+
+function assigneeFromDetails(value: unknown) {
+  const data = detailsObject(value);
+  return String(data.assignedTo ?? data.assigned_to ?? data.assignee ?? '').trim();
+}
+
+function sameAssignee(stored: string, candidate: string) {
+  if (!stored || !candidate) return false;
+  return stored === candidate || stored.toLowerCase() === candidate.toLowerCase();
+}
+
+function isDispatchStageName(value: unknown) {
+  const text = String(value ?? '').trim();
+  if (!text) return false;
+  if (text === 'field_dispatch' || text === 'viewing' || text === 'visit_qualified') return true;
+  return retiredStageMap[text] === 'field_dispatch';
+}
+
+function earlierStamp(current: string, next: string) {
+  if (!next) return current;
+  if (!current) return next;
+  const left = stampMillis(current);
+  const right = stampMillis(next);
+  if (!left) return next;
+  if (!right) return current;
+  return left <= right ? current : next;
+}
+
+function laterStamp(current: string, next: string) {
+  if (!next) return current;
+  if (!current) return next;
+  const left = stampMillis(current);
+  const right = stampMillis(next);
+  if (!left) return next;
+  if (!right) return current;
+  return left >= right ? current : next;
+}
+
+function actionWhere(actions: readonly string[]) {
+  return {
+    sql: actions.map(() => paramEq('action')).join(' OR '),
+    args: [...actions],
+  };
+}
+
+/**
+ * One pass. Matching is done in JS so mixed collations are not compared.
+ * Explicit assignment actions win. A form save (`updated`) is used only when
+ * no assignment action names the current sales employee, and then the earliest
+ * save is kept so a later edit is not treated as a new assignment.
+ * created_at is never copied into assigned_at.
+ */
+async function backfillAssignedAt(executor: SqlExecutor) {
+  if (await columnMissing(executor, 'leads', 'assigned_at')) return;
+  if (await migrationApplied(executor, ASSIGNED_AT_MIGRATION)) return;
+  const leads = rowsOf(await run(executor, 'SELECT id, assigned_to, assigned_at FROM leads'));
+  const where = actionWhere(ASSIGN_ACTIONS);
+  const activities = rowsOf(await run(
+    executor,
+    `SELECT lead_id, action, details, created_at FROM lead_activity WHERE ${where.sql}`,
+    where.args
+  ));
+  const events = new Map<string, Array<{at: string; assignee: string; updated: boolean}>>();
+  for (const row of activities) {
+    const id = String(row.lead_id ?? '');
+    const at = activityStamp(row.created_at);
+    const assignee = assigneeFromDetails(row.details);
+    if (!id || !at || !assignee) continue;
+    const list = events.get(id) || [];
+    list.push({at, assignee, updated: String(row.action ?? '') === 'updated'});
+    events.set(id, list);
+  }
+  let ok = true;
+  for (const lead of leads) {
+    const id = String(lead.id ?? '');
+    const assignedTo = String(lead.assigned_to ?? '').trim();
+    if (!id || !assignedTo || String(lead.assigned_at ?? '').trim()) continue;
+    const matching = (events.get(id) || []).filter(event => sameAssignee(assignedTo, event.assignee));
+    const explicit = matching.filter(event => !event.updated);
+    const forms = matching.filter(event => event.updated);
+    const pool = explicit.length ? explicit : forms;
+    if (!pool.length) continue;
+    const at = pool.reduce((best, event) => explicit.length ? laterStamp(best, event.at) : earlierStamp(best, event.at), '');
+    if (!at) continue;
+    try {
+      await run(executor, `UPDATE leads SET assigned_at = ? WHERE ${paramEq('id')}`, [at, id]);
+    } catch (error) {
+      ok = false;
+      console.error('assigned_at backfill was not saved', error);
+    }
+  }
+  if (ok) await markMigration(executor, ASSIGNED_AT_MIGRATION);
+}
+
+/**
+ * One pass from stage history, field_dispatched activity, and the dispatch
+ * columns. The stored value is the earliest evidence, so a later stage change
+ * does not erase that the lead was dispatched. Recorded in crm_schema_meta.
+ */
+async function backfillFirstFieldDispatch(executor: SqlExecutor) {
+  if (await columnMissing(executor, 'leads', 'first_field_dispatch_at')) return;
+  if (await migrationApplied(executor, FIRST_DISPATCH_MIGRATION)) return;
+  let leads: Record<string, unknown>[] = [];
+  try {
+    leads = rowsOf(await run(
+      executor,
+      'SELECT id, stage, field_assigned_to, field_dispatched_at, first_field_dispatch_at, updated_at, created_at FROM leads'
+    ));
+  } catch (error) {
+    if (!/field_dispatched_at|unknown column|no such column|ER_BAD_FIELD_ERROR/i.test(messageOf(error))) throw error;
+    leads = rowsOf(await run(
+      executor,
+      'SELECT id, stage, field_assigned_to, first_field_dispatch_at, updated_at, created_at FROM leads'
+    ));
+  }
+  const where = actionWhere(DISPATCH_ACTIONS);
+  const activities = rowsOf(await run(
+    executor,
+    `SELECT lead_id, action, details, created_at FROM lead_activity WHERE ${where.sql}`,
+    where.args
+  ));
+  const earliest = new Map<string, string>();
+  const note = (id: string, at: string) => {
+    if (!id || !at) return;
+    earliest.set(id, earlierStamp(earliest.get(id) || '', at));
+  };
+  for (const row of activities) {
+    const id = String(row.lead_id ?? '');
+    const at = activityStamp(row.created_at);
+    const action = String(row.action ?? '');
+    if (!id || !at) continue;
+    if (action === 'field_dispatched') {
+      note(id, at);
+      continue;
+    }
+    if (action !== 'stage_changed') continue;
+    const data = detailsObject(row.details);
+    if (isDispatchStageName(data.stage) || isDispatchStageName(data.previousStage)) note(id, at);
+  }
+  let ok = true;
+  for (const lead of leads) {
+    const id = String(lead.id ?? '');
+    if (!id || String(lead.first_field_dispatch_at ?? '').trim()) continue;
+    let at = earliest.get(id) || '';
+    const dispatchedAt = activityStamp(lead.field_dispatched_at);
+    if (dispatchedAt) at = earlierStamp(at, dispatchedAt);
+    const open = isDispatchStageName(lead.stage) || Boolean(String(lead.field_assigned_to ?? '').trim());
+    if (!at && open) at = activityStamp(lead.updated_at) || activityStamp(lead.created_at);
+    if (!at) continue;
+    try {
+      await run(executor, `UPDATE leads SET first_field_dispatch_at = ? WHERE ${paramEq('id')}`, [at, id]);
+    } catch (error) {
+      ok = false;
+      console.error('first_field_dispatch_at backfill was not saved', error);
+    }
+  }
+  if (ok) await markMigration(executor, FIRST_DISPATCH_MIGRATION);
+}
+
+async function ensureAssignmentStamps(executor: SqlExecutor) {
+  await ensureColumn(executor, 'leads', 'assigned_at', 'VARCHAR(40) NULL');
+  await ensureColumn(executor, 'leads', 'first_field_dispatch_at', 'VARCHAR(40) NULL');
+  try {
+    await backfillAssignedAt(executor);
+  } catch (error) {
+    console.error('assigned_at backfill failed', error);
+  }
+  try {
+    await backfillFirstFieldDispatch(executor);
+  } catch (error) {
+    console.error('first field dispatch backfill failed', error);
+  }
+}
+
 async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
   await relaxSessionLocks(executor);
   try {
@@ -1363,6 +1558,11 @@ async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
     await ensureFieldReportSchema(executor);
   } catch (error) {
     console.error('field report schema check failed', error);
+  }
+  try {
+    await ensureAssignmentStamps(executor);
+  } catch (error) {
+    console.error('assignment stamp schema check failed', error);
   }
   let featured = false;
   const existing = await hasFeaturedColumn(executor);

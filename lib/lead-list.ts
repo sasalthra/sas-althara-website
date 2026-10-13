@@ -1,5 +1,5 @@
 import properties from '@/data/properties.json';
-import {leadMatchesReportFilters} from './lead-cohorts';
+import {isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort, leadMatchesReportFilters} from './lead-cohorts';
 import {riyadhDayKey} from './lead-dates';
 import {compareClients, isNewUnassignedLead} from './lead-featured';
 import {displayLeadPhone, leadPhoneMatchesQuery} from './phone';
@@ -14,6 +14,10 @@ export type LeadListFilters = {
   q: string;
   view: string;
   stage: string;
+  stageNow: boolean;
+  assignFrom: string;
+  assignTo: string;
+  assignRole: '' | 'sales' | 'field';
   from: string;
   to: string;
   source: string;
@@ -78,6 +82,8 @@ type ListLead = {
   assigned_to?: string | null;
   field_assigned_to?: string | null;
   field_dispatched_at?: string | null;
+  first_field_dispatch_at?: string | null;
+  assigned_at?: string | null;
   field_report?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -90,6 +96,10 @@ export function emptyLeadFilters(page = 1): LeadListFilters {
     q: '',
     view: '',
     stage: '',
+    stageNow: false,
+    assignFrom: '',
+    assignTo: '',
+    assignRole: '',
     from: '',
     to: '',
     source: '',
@@ -120,6 +130,10 @@ export function parseLeadListFilters(url: URL | null, role: string): LeadListFil
     q: text('q').trim(),
     view: params?.get('view') === 'followups' ? 'followups' : '',
     stage: text('stage'),
+    stageNow: params?.get('stageNow') === '1',
+    assignFrom: /^\d{4}-\d{2}-\d{2}$/.test(text('assignFrom')) ? text('assignFrom') : '',
+    assignTo: /^\d{4}-\d{2}-\d{2}$/.test(text('assignTo')) ? text('assignTo') : '',
+    assignRole: params?.get('assignRole') === 'field' ? 'field' : params?.get('assignRole') === 'sales' ? 'sales' : '',
     from: text('from'),
     to: text('to'),
     source: text('source'),
@@ -153,6 +167,10 @@ export function leadListSearchParams(filters: LeadListFilters): string {
   if (filters.q) params.set('q', filters.q);
   if (filters.view === 'followups') params.set('view', 'followups');
   if (filters.stage) params.set('stage', filters.stage);
+  if (filters.stageNow) params.set('stageNow', '1');
+  if (filters.assignFrom) params.set('assignFrom', filters.assignFrom);
+  if (filters.assignTo) params.set('assignTo', filters.assignTo);
+  if (filters.assignRole) params.set('assignRole', filters.assignRole);
   if (filters.from) params.set('from', filters.from);
   if (filters.to) params.set('to', filters.to);
   if (filters.source) params.set('source', filters.source);
@@ -221,13 +239,18 @@ export function leadMatchesClientFilters(
   nowMs: number
 ) {
   if (filters.view === 'followups' && !followUpDue(lead, today)) return false;
+  // «تفويج للميداني» on the clients filter means the lead ever entered that stage.
+  // Report drill-downs pass stageNow or an assignment cohort and keep the current stage.
+  // The flag is on the lead row, so paging does not join lead_activity.
+  const cohort = filters.assignRole === 'sales' || filters.assignRole === 'field';
+  const everDispatch = !filters.stageNow && !cohort && isEverFieldDispatchFilter(filters.stage);
   if (!leadMatchesReportFilters(lead, {
     from: filters.from,
     to: filters.to,
-    stage: filters.stage,
+    stage: everDispatch ? '' : filters.stage,
     source: filters.source,
     sourceExact: filters.sourceExact,
-    employeeTokens: [filters.employee, filters.employeeName, filters.employeeUser],
+    employeeTokens: cohort ? [] : [filters.employee, filters.employeeName, filters.employeeUser],
     stageGroup: filters.stageGroup,
     overdue: filters.overdue,
     inactive: filters.inactive,
@@ -235,6 +258,13 @@ export function leadMatchesClientFilters(
     scheduled: filters.scheduled,
     today,
     nowMs,
+  })) return false;
+  if (everDispatch && !leadEverFieldDispatched(lead)) return false;
+  if (cohort && !leadMatchesAssignmentCohort(lead, {
+    role: filters.assignRole,
+    from: filters.assignFrom,
+    to: filters.assignTo,
+    employeeTokens: [filters.employee, filters.employeeName, filters.employeeUser],
   })) return false;
   if (filters.duplicateOnly && !duplicatePhones.has(displayLeadPhone(String(lead.phone ?? '')))) return false;
   if (filters.newOnly && !isNewUnassignedLead(lead)) return false;
