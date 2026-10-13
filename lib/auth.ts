@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs';
 import {crmDb} from './crm-db';
 import {allowedGoogleProfile, ADMIN_EMAIL} from './auth-policy';
 
-type CrmRole = 'admin' | 'supervisor' | 'sales' | 'field';
+type CrmRole = 'admin' | 'supervisor' | 'sales' | 'field' | 'accounts';
 
 type CrmUserRow = {
   id: string;

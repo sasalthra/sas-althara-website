@@ -71,7 +71,8 @@ type CrmRole =
   | 'admin'
   | 'supervisor'
   | 'sales'
-  | 'field';
+  | 'field'
+  | 'accounts';
 
 type AssignableUser = {
   id: string;

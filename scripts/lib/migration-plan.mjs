@@ -29,7 +29,7 @@ export const STAGES = [
   'contract_signed','transferred','unqualified','not_interested',
   'viewing','negotiation','won','closed',
   'awaiting_offers','field_dispatch','bank_referred','postponed','properties_shown',
-  'interested',
+  'interested','debt_payoff',
 ];
 
 export const STAGE_MOVES = [

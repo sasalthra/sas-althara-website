@@ -20,7 +20,7 @@ type CrmUser = {
   name: string;
   email: string | null;
   phone: string | null;
-  role: 'admin' | 'supervisor' | 'sales' | 'field';
+  role: 'admin' | 'supervisor' | 'sales' | 'field' | 'accounts';
   active: number;
   created_at: string;
 };
@@ -30,6 +30,7 @@ const roleLabels = {
   supervisor: 'مشرف',
   sales: 'مبيعات',
   field: 'ميداني',
+  accounts: 'موظف الحسابات',
 };
 
 export default function UsersPanel({
@@ -360,6 +361,7 @@ export default function UsersPanel({
               <option value="supervisor">مشرف</option>
               <option value="sales">مبيعات</option>
               <option value="field">ميداني</option>
+              <option value="accounts">موظف الحسابات</option>
             </select>
           </div>
 

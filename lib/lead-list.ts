@@ -310,7 +310,7 @@ function userJoins() {
 }
 
 function scopeClause(role: string, userId: string) {
-  if (role === 'admin' || role === 'supervisor') return {sql: '', args: [] as string[]};
+  if (role === 'admin' || role === 'supervisor' || role === 'accounts') return {sql: '', args: [] as string[]};
   const column = role === 'field' ? 'leads.field_assigned_to' : role === 'sales' ? 'leads.assigned_to' : '';
   if (!column) return {sql: ' WHERE 1 = 0', args: [] as string[]};
   return {

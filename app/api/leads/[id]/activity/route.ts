@@ -33,7 +33,8 @@ function canAccessLead(
 ) {
   if (
     user.role === 'admin' ||
-    user.role === 'supervisor'
+    user.role === 'supervisor' ||
+    user.role === 'accounts'
   ) {
     return true;
   }

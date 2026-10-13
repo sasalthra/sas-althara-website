@@ -17,7 +17,7 @@ ALTER TABLE leads MODIFY COLUMN stage ENUM(
   'contract_signed','transferred','unqualified','not_interested',
   'viewing','negotiation','won','closed',
   'awaiting_offers','field_dispatch','bank_referred','postponed','properties_shown',
-  'interested'
+  'interested','debt_payoff'
 ) NOT NULL DEFAULT 'new';
 
 -- `interested` («مهتم») is a new empty stage. No existing rows are moved into it.

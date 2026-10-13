@@ -15,6 +15,7 @@ const activeStageEntries = [
   ['property_visited', 'تم زيارة العقار'],
   ['negotiation', 'تفاوض'],
   ['bank_referred', 'تمت إحالة معاملة العميل للبنك'],
+  ['debt_payoff', 'سداد مديونية'],
   ['deposit_paid', 'دفع عربون'],
   ['contract_signed', 'وقع عقد'],
   ['transferred', 'إفراغ'],
@@ -58,6 +59,7 @@ export const stageEnumValues = [
   'viewing',
   'won',
   'interested',
+  'debt_payoff',
 ] as const;
 
 /** Stored value -> the stage that replaces it in the UI, import, and reports. */
@@ -141,6 +143,10 @@ export const stageAliasGroups: Record<string, string[]> = {
     'إحالة للبنك', 'احالة للبنك', 'تمت الاحالة للبنك', 'تحويل للبنك',
     'bank referral', 'bank_referred', 'referred to bank',
     'مؤهل بانتظار موافقة البنك', 'موافقة البنك', 'انتظار البنك', 'بانتظار موافقة البنك', 'bank approval', 'bank_approval',
+  ],
+  debt_payoff: [
+    'سداد مديونية', 'سداد المديونية', 'سداد مديونيه', 'سداد الدين',
+    'debt payoff', 'debt_payoff', 'debt settlement',
   ],
   deposit_paid: ['دفع عربون', 'عربون', 'تم دفع العربون', 'deposit'],
   contract_signed: ['وقع عقد', 'توقيع عقد', 'تم توقيع العقد', 'عقد موقع', 'signed', 'مكسب', 'رابح', 'تم البيع', 'مباع', 'won', 'sold'],

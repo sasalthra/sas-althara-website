@@ -55,6 +55,7 @@ const createUserSchema = z.object({
     'supervisor',
     'sales',
     'field',
+    'accounts',
   ]),
 });
 

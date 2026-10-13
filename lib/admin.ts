@@ -1,7 +1,7 @@
 import {getServerSession} from 'next-auth';
 import {authConfigured, authOptions} from './auth';
 
-export type CrmRole = 'admin' | 'supervisor' | 'sales' | 'field';
+export type CrmRole = 'admin' | 'supervisor' | 'sales' | 'field' | 'accounts';
 
 export async function getCrmUser() {
   if (!authConfigured()) return null;

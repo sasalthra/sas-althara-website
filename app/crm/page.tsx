@@ -11,7 +11,8 @@ type CrmRole =
   | 'admin'
   | 'supervisor'
   | 'sales'
-  | 'field';
+  | 'field'
+  | 'accounts';
 
 export default async function CrmPage() {
   let session: Session | null = null;
