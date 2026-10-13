@@ -1,6 +1,7 @@
 import {assignmentChanged, propertyRequestText, type AssignmentClient} from './assignment-email';
 import {ApiError} from './secure-api';
 import {SHEET_DUPLICATE_CHILD_TABLES} from './sheet-duplicate-cleanup';
+import {inParams} from './sql-collation';
 import {SHEET_ROW_PURGED} from './sheet-test-purge';
 
 /** One request stays inside a normal JSON body and a short InnoDB transaction. */
@@ -210,10 +211,27 @@ async function markSheetRowsPurged(db: BulkDb, ids: string[]) {
   return rowsMarked;
 }
 
+/** Stage notes have no foreign key. A missing table is an older database, not a failed delete. */
+async function deleteStageNotes(db: BulkDb, ids: string[]) {
+  let notes = 0;
+  for (const group of chunks(ids, CHUNK)) {
+    try {
+      notes += changes(
+        await db.prepare(`DELETE FROM lead_stage_notes WHERE ${inParams('lead_id', group.length)}`).bind(...group).run()
+      );
+    } catch (error) {
+      if (missingTable(error)) return notes;
+      throw error;
+    }
+  }
+  return notes;
+}
+
 /**
  * Deletes the selected leads and the rows that reference them, in an order
  * InnoDB foreign keys accept. Sheet row keys stay, with status `purged`, so a
- * later sheet sync treats them as already seen.
+ * later sheet sync treats them as already seen. Stage notes are removed with
+ * the activity rows. The lead id comparison casts the parameter, not the column.
  */
 export async function deleteLeadsBulk(db: BulkDb, input: {actorId: string; ids: readonly string[]}) {
   const ids = uniqueLeadIds(input.ids);
@@ -223,6 +241,7 @@ export async function deleteLeadsBulk(db: BulkDb, input: {actorId: string; ids: 
   const found = leads.map(lead => lead.id);
 
   const rowsMarked = await markSheetRowsPurged(db, found);
+  const notes = await deleteStageNotes(db, found);
   let activity = 0;
   let transactions = 0;
   let importRows = 0;
@@ -255,7 +274,7 @@ export async function deleteLeadsBulk(db: BulkDb, input: {actorId: string; ids: 
       input.actorId,
       'leads.bulk_delete',
       input.actorId,
-      JSON.stringify({deleted, requested: ids.length, rowsMarked, activity, transactions, importRows}),
+      JSON.stringify({deleted, requested: ids.length, rowsMarked, activity, notes, transactions, importRows}),
       now
     )
     .run();
@@ -265,6 +284,7 @@ export async function deleteLeadsBulk(db: BulkDb, input: {actorId: string; ids: 
     deleted,
     rowsMarked,
     activity,
+    notes,
     transactions,
     importRows,
     message: `تم حذف ${deleted} عميل`,

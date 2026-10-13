@@ -5,6 +5,7 @@ import {importFields,suggestMapping,type Assignment,type Mapping} from '@/lib/le
 import {stageLabel} from '@/lib/lead-stages';
 import {Table,TableHeader,TableHead,TableBody,TableRow,TableCell} from '@/components/ui/table';
 import ImportedStageRepair from './imported-stage-repair';
+import PropertyCleanup from './property-cleanup';
 
 type Preview={row:number;status:string;errors:string[];warnings?:string[];raw:string[];lead:{name:string;phone:string;propertyOther:string;stage?:string;followUp?:string}|null};
 type AssignableUser={id:string;username:string;name:string;role:'sales'|'field';active:number};
@@ -122,6 +123,7 @@ export default function ImportPanel({onSaved,canRepairStages=false}:{onSaved:()=
   <h2>استيراد العملاء من Excel</h2>
   <p>الاسم والجوال فقط مطلوبان لاستيراد الصف. الأعمدة غير المربوطة (الطلب، المصدر، الملاحظات، المرحلة، التواريخ…) اختيارية ولا تُبطل الصف. إن كان الطلب فارغاً أو «-» يُحفظ «غير محدد». الجوال السعودي يُحفظ بصيغة 05XXXXXXXX. التكرار بحسب الجوال؛ لا يُنشأ عميل جديد وتُسجَّل إعادة التسجيل على العميل الحالي. المرحلة تُطابق مراحل النظام فقط. إذا كان عمود المرحلة فارغاً أو غير معروف، يُستخدم أول عمود آخر غير الاسم والجوال إذا كان نصه مرحلة مثل «غير مهتم»، ويبقى النص في وصف العقار. الصفوف غير الصالحة لا تُحذف من الملف. افتراضياً يُعيَّن كل العملاء لمندوب مبيعات واحد حتى يظهروا في العملاء والمتابعات.</p>
   {canRepairStages ? <ImportedStageRepair onDone={onSaved}/> : null}
+  <PropertyCleanup onDone={onSaved}/>
   <input type="file" accept=".xlsx" aria-label="ملف العملاء" disabled={busy} onChange={e=>void open(e.target.files?.[0])}/>
   <p role="status">{message}</p>
   {sheets.length>0&&<>
