@@ -1544,6 +1544,8 @@ a.reports-kpi-card:hover{border-color:#3F1A44;}
 .reports-stage-link:hover{background:#f3eaf4}
 .reports-stage-swatch{width:10px;height:10px;border-radius:999px;flex:0 0 auto;border:1px solid #e5e7eb}
 .reports-stage-name{color:#111827}
+.reports-dispatch-total{display:flex;align-items:baseline;gap:12px;margin:8px 0 14px;flex-wrap:wrap}
+.reports-dispatch-total .reports-kpi-value{font-size:2.4rem}
 .reports-num-link{color:#3F1A44;font-weight:800;text-decoration:underline;text-underline-offset:3px}
 .reports-num-link:hover{color:#5B245F}
 .reports-filter-banner{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin:0 0 14px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;color:#111827}

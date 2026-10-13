@@ -4,7 +4,7 @@ import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,L
 import {AlertCircle,BarChart3,Bell,Building2,Calendar,CheckCircle2,ClipboardList,Download,FileText,Filter,Home,Info,Layers,PieChart as PieIcon,TrendingUp,Users} from 'lucide-react';
 import {allowedReports,type ReportResult} from '@/lib/report-catalog';
 import type {EmployeeAssignmentReport,ReportDashboard} from '@/lib/reports';
-import {COHORT_DEFINITIONS} from '@/lib/lead-cohorts';
+import {COHORT_DEFINITIONS, isEverFieldDispatchFilter} from '@/lib/lead-cohorts';
 import {canonicalStage, displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import {buildReportPath,leadReturnHref,rememberReportScroll,restoreReportScroll} from '@/lib/report-return';
 import {CrmLink,navigateCrm,useCrmQuery} from './navigation';
@@ -174,9 +174,12 @@ export default function ReportsPanel({role}:{role:string}){
   const q=new URLSearchParams();q.set('tab','leads');
   const from=query.get('from')||stateData?.filters.from||'';const to=query.get('to')||stateData?.filters.to||'';
   if(from)q.set('from',from);if(to)q.set('to',to);
-  const source=query.get('source')||'';if(source){q.set('source',source);q.set('sourceExact','1');}else if(extra.source)q.set('source',extra.source);
-  const stage=query.get('stage')||'';if(stage&&!extra.stage&&!extra.stageGroup)q.set('stage',stage);
-  const employee=extra.employee||query.get('reportEmployee')||'';
+  const source=query.get('source')||stateData?.filters.source||'';if(source){q.set('source',source);q.set('sourceExact','1');}else if(extra.source)q.set('source',extra.source);
+  const stage=query.get('stage')||stateData?.filters.stage||'';
+  const fieldPeriod=isEverFieldDispatchFilter(stage);
+  if(fieldPeriod)q.set('dispatched','1');
+  else if(stage&&!extra.stage&&!extra.stageGroup)q.set('stage',stage);
+  const employee=extra.employee||query.get('reportEmployee')||stateData?.filters.employee||'';
   if(employee){
    q.set('employee',employee);
    const person=stateData?.employees.find(item=>item.id===employee)||stateData?.dashboard?.employees.find(item=>item.id===employee);
@@ -184,12 +187,15 @@ export default function ReportsPanel({role}:{role:string}){
    if(name)q.set('employeeName',name);if(username)q.set('employeeUser',username);
   }
   for(const [key,value] of Object.entries(extra)){if(!value||key==='employee'||key==='employeeName'||key==='employeeUser'||(key==='source'&&source))continue;q.set(key,value);}
-  if(q.get('stage'))q.set('stageNow','1');
+  if(fieldPeriod&&extra.stage)q.set('stageNow','1');
+  else if(!fieldPeriod&&q.get('stage'))q.set('stageNow','1');
+  q.set('returnTo',reportPath);
   return '/crm?'+q.toString();
  }
  function assignmentListHref(stage?:string){
   const assignment=stateData?.assignment;
   if(!assignment||assignment.status!=='ok')return '/crm?tab=leads';
+  if(assignment.dispatched)return dispatchListHref(stage?{stage}:{});
   const q=new URLSearchParams();
   q.set('tab','leads');
   q.set('employee',assignment.employeeId);
@@ -198,11 +204,45 @@ export default function ReportsPanel({role}:{role:string}){
   q.set('assignFrom',assignment.from);
   q.set('assignTo',assignment.to);
   q.set('assignRole',assignment.role);
-  if(stage){q.set('stage',stage);q.set('stageNow','1');}
+  const source=query.get('source')||stateData?.filters.source||'';
+  if(source){q.set('source',source);q.set('sourceExact','1');}
+  const stageValue=stage||query.get('stage')||stateData?.filters.stage||'';
+  if(stageValue){q.set('stage',stageValue);q.set('stageNow','1');}
+  q.set('returnTo',reportPath);
+  return '/crm?'+q.toString();
+ }
+ function dispatchListHref(extra:{stage?:string;fieldId?:string;fieldName?:string;fieldUser?:string;fieldUnassigned?:boolean}){
+  const assignment=stateData?.assignment;
+  if(!assignment)return '/crm?tab=leads';
+  const q=new URLSearchParams();
+  q.set('tab','leads');
+  q.set('dispatched','1');
+  q.set('from',assignment.from);
+  q.set('to',assignment.to);
+  if(assignment.employeeId){
+   q.set('employee',assignment.employeeId);
+   if(assignment.employeeName)q.set('employeeName',assignment.employeeName);
+   if(assignment.employeeUser)q.set('employeeUser',assignment.employeeUser);
+  }
+  const source=query.get('source')||stateData?.filters.source||'';
+  if(source){q.set('source',source);q.set('sourceExact','1');}
+  if(extra.stage){q.set('stage',extra.stage);q.set('stageNow','1');}
+  if(extra.fieldUnassigned)q.set('fieldUnassigned','1');
+  else if(extra.fieldId||extra.fieldName){
+   if(extra.fieldId)q.set('fieldEmployee',extra.fieldId);
+   if(extra.fieldName)q.set('fieldEmployeeName',extra.fieldName);
+   if(extra.fieldUser)q.set('fieldEmployeeUser',extra.fieldUser);
+  }
   q.set('returnTo',reportPath);
   return '/crm?'+q.toString();
  }
  function openAssignmentList(){rememberReportScroll(reportPath);}
+ function withReportReturn(href:string){
+  if(!href||href.includes('returnTo='))return href;
+  const url=new URL(href, 'https://crm.local');
+  url.searchParams.set('returnTo', reportPath);
+  return url.pathname+url.search;
+ }
 
  function groupChartData(){
   if(!report)return null;
@@ -243,7 +283,7 @@ export default function ReportsPanel({role}:{role:string}){
   const rows:{tone:'info'|'warn'|'muted';tag:string;message:string;time:string;href:string}[]=[];
   const gen=stateData?.generatedAt?new Date(stateData.generatedAt):new Date();
   const timeLabel=gen.toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Riyadh'});
-  if(dash)for(const alert of dash.alerts)rows.push({tone:alert.tone,tag:alert.tag,message:alert.message,time:timeLabel,href:alert.href});
+  if(dash)for(const alert of dash.alerts)rows.push({tone:alert.tone,tag:alert.tag,message:alert.message,time:timeLabel,href:alert.href?withReportReturn(alert.href):''});
   else if(stateData?.dashboardError)rows.push({tone:'warn',tag:'تنبيه',message:stateData.dashboardError,time:timeLabel,href:''});
   if(snap?.clients.status==='unavailable')rows.push({tone:'warn',tag:'تنبيه',message:`لقطة العملاء غير متاحة: ${snap.clients.error}`,time:timeLabel,href:''});
   if(snap?.properties.status==='unavailable')rows.push({tone:'warn',tag:'تنبيه',message:`لقطة العقارات غير متاحة: ${snap.properties.error}`,time:timeLabel,href:''});
@@ -305,10 +345,10 @@ export default function ReportsPanel({role}:{role:string}){
      <button className="primary report-primary-btn" type="submit">تطبيق التصفية</button>
     </div>
    </div>
-   <p className="report-filter-help">التصدير إلى CSV يتبع نفس الفلاتر المطبقة أعلاه. الفترة لبطاقات العملاء هي تاريخ التسجيل created_at بتوقيت الرياض، والافتراضي آخر 30 يوماً. عند اختيار مرحلة تفويج للميداني تُحسب الفترة من تاريخ التفويج بتوقيت الرياض (آخر تفويج، أو أول تفويج إن لم يُحفظ لاحق) وليس من تاريخ التسجيل. بطاقة الإسناد تستخدم نفس الفترة ونفس الموظف: تاريخ الإسناد للمبيعات، وتاريخ التفويج للميدان. حدود اليوم تُحسب في التطبيق لمنطقة الرياض (UTC+3).</p>
+   <p className="report-filter-help">التصدير إلى CSV يتبع نفس الفلاتر المطبقة أعلاه. الفترة لبطاقات العملاء هي تاريخ التسجيل created_at بتوقيت الرياض، والافتراضي آخر 30 يوماً. عند اختيار مرحلة تفويج للميداني تُحسب الفترة من تاريخ التفويج بتوقيت الرياض (آخر تفويج، أو أول تفويج إن لم يُحفظ لاحق) وليس من تاريخ التسجيل، ويُحسب كل عميل فُوِّج خلال الفترة حتى لو تغيّرت مرحلته الحالية. بطاقة الإسناد تحترم المرحلة: لغير التفويج العدد هو المرحلة الحالية مع تاريخ الإسناد للمبيعات أو تاريخ التفويج للميدان. عند تفويج للميداني يظهر عدد المفوجين للموظف المحدد أو للجميع، مع التوزيع حسب المرحلة الحالية وموظف الميدان. المصدر والموظف والفترة تُطبَّق على البطاقات والجداول نفسها. حدود اليوم تُحسب في التطبيق لمنطقة الرياض (UTC+3).</p>
   </form>
 
-  <p className="report-scope">الفترة المطبقة: {stateData?.filters.from||'…'} — {stateData?.filters.to||'…'}. بطاقات العملاء والدونات وجدول الموظفين والمصادر والتنبيهات وقائمة العملاء تستخدم تاريخ تسجيل العميل (created_at) بتوقيت الرياض، مع المرحلة والمصدر والموظف معاً. مرحلة تفويج للميداني تستثنى من ذلك: فترتها تاريخ التفويج بتوقيت الرياض. الإسناد يطابق رقم الموظف أو اسم المستخدم أو الاسم الظاهر، ويُحسب من وقت الإسناد أو التفويج لا من تاريخ التسجيل. اللقطات الحالية للعقارات ليست تاريخاً للحالة. الرابط يحفظ المرشحات.</p>
+  <p className="report-scope">الفترة المطبقة: {stateData?.filters.from||'…'} — {stateData?.filters.to||'…'}. بطاقات العملاء والدونات وجدول الموظفين والمصادر والتنبيهات وقائمة العملاء تستخدم تاريخ تسجيل العميل (created_at) بتوقيت الرياض، مع المرحلة والمصدر والموظف معاً. مرحلة تفويج للميداني تستثنى من ذلك: فترتها تاريخ التفويج بتوقيت الرياض وتشمل من انتقلت مرحلته بعد التفويج. الإسناد يطابق رقم الموظف أو اسم المستخدم أو الاسم الظاهر، ويحترم مرحلة التصفية. اللقطات الحالية للعقارات ليست تاريخاً للحالة. الرابط يحفظ المرشحات.</p>
 
   {loading&&<p role="status">جارٍ تحميل التقارير…</p>}
   {error&&<div role="alert" className="error">{error} <button onClick={()=>setRetry(n=>n+1)}>إعادة المحاولة</button></div>}
@@ -320,14 +360,53 @@ export default function ReportsPanel({role}:{role:string}){
      <section className="panel reports-assignment" aria-label="العملاء المسندون خلال الفترة">
       <div className="reports-perf-head">
        <div>
-        <h3>العملاء المسندون خلال الفترة</h3>
+        <h3>{stateData.assignment.dispatched?'العملاء المفوجون للميدان خلال الفترة':'العملاء المسندون خلال الفترة'}</h3>
         <p className="subtle">{stateData.assignment.basis}</p>
        </div>
       </div>
       {stateData.assignment.status==='idle'?<p>اختر موظفاً من المبيعات أو الميدان في التصفية، ثم اضغط تطبيق التصفية.</p>:null}
       {stateData.assignment.status==='unsupported'?<p>{stateData.assignment.basis}</p>:null}
       {stateData.assignment.status==='unavailable'?<p role="alert" className="error">{stateData.assignment.error||'تعذرت قراءة الإسناد، ولا يمثل ذلك صفراً.'}</p>:null}
-      {stateData.assignment.status==='ok'?(
+      {stateData.assignment.status==='ok'&&stateData.assignment.dispatched?(
+       <>
+        <p>الموظف: <strong>{stateData.assignment.employeeId?stateData.assignment.employeeName:(role==='admin'?'جميع الموظفين':'ضمن صلاحيتك')}</strong>{stateData.assignment.role==='field'?' · ميدان':stateData.assignment.role==='sales'?' · مبيعات':''} · الفترة {stateData.assignment.from} — {stateData.assignment.to}</p>
+        <p className="reports-dispatch-total">
+         <NumLink href={dispatchListHref({})} onNavigate={openAssignmentList}><strong className="reports-kpi-value">{fmt(stateData.assignment.total)}</strong></NumLink>
+         <span>عميل فُوِّج للميدان خلال الفترة</span>
+        </p>
+        <div className="report-table-scroll" tabIndex={0} aria-label="مراحل العملاء المفوجين">
+         <table className="reports-perf-table">
+          <thead><tr><th>المرحلة الحالية</th><th>العدد</th></tr></thead>
+          <tbody>
+           {stateData.assignment.byStage.length===0?(
+            <tr><td colSpan={2}>لا عملاء مفوجون في هذه الفترة.</td></tr>
+           ):stateData.assignment.byStage.map(row=>(
+            <tr key={row.stage}>
+             <th scope="row">{row.label}</th>
+             <td><NumLink href={dispatchListHref({stage:row.stage})} onNavigate={openAssignmentList}>{fmt(row.count)}</NumLink></td>
+            </tr>
+           ))}
+          </tbody>
+         </table>
+        </div>
+        <div className="report-table-scroll" tabIndex={0} aria-label="موظفو الميدان للعملاء المفوجين">
+         <table className="reports-perf-table">
+          <thead><tr><th>موظف الميدان</th><th>العدد</th></tr></thead>
+          <tbody>
+           {(stateData.assignment.byField||[]).length===0?(
+            <tr><td colSpan={2}>لا يوجد توزيع على موظفي الميدان.</td></tr>
+           ):stateData.assignment.byField.map(row=>(
+            <tr key={row.id||row.name}>
+             <th scope="row">{row.name}</th>
+             <td><NumLink href={dispatchListHref(row.id?{fieldId:row.id,fieldName:row.name,fieldUser:row.username}:{fieldUnassigned:true})} onNavigate={openAssignmentList}>{fmt(row.count)}</NumLink></td>
+            </tr>
+           ))}
+          </tbody>
+         </table>
+        </div>
+        <p className="subtle reports-chart-caption">النقر يفتح قائمة هؤلاء العملاء. المرحلة في الجدول هي الحالية. العودة من ملف العميل ترجع إلى هذه القائمة ثم إلى التقرير.</p>
+       </>
+      ):stateData.assignment.status==='ok'?(
        <>
         <p>الموظف: <strong>{stateData.assignment.employeeName}</strong> · {stateData.assignment.role==='field'?'ميدان':'مبيعات'} · الفترة {stateData.assignment.from} — {stateData.assignment.to}</p>
         <p>عدد العملاء المسندين: <NumLink href={assignmentListHref()} onNavigate={openAssignmentList}>{fmt(stateData.assignment.total)}</NumLink></p>

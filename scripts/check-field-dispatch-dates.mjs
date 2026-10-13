@@ -123,6 +123,26 @@ try {
     false,
     'other stages still use created_at'
   );
+  assert.equal(
+    leadMatchesClientFilters(base, filters({dispatched: true, from: today, to: today}), new Set(), today, riyadhNoon),
+    true,
+    'the report drill-down dates the dispatch even when the current stage is not تفويج'
+  );
+  assert.equal(
+    leadMatchesClientFilters(base, filters({dispatched: true, from: today, to: today, stage: 'negotiation', stageNow: true}), new Set(), today, riyadhNoon),
+    true,
+    'a current-stage slice still requires the dispatch day'
+  );
+  assert.equal(
+    leadMatchesClientFilters(base, filters({dispatched: true, from: today, to: today, stage: 'new', stageNow: true}), new Set(), today, riyadhNoon),
+    false,
+    'a different current stage is excluded from the dispatch drill-down'
+  );
+  assert.equal(
+    leadMatchesClientFilters({...base, field_assigned_to: 'field-2'}, filters({dispatched: true, from: today, to: today, fieldEmployee: 'field-1'}), new Set(), today, riyadhNoon),
+    false,
+    'the field-employee slice keeps only that field assignee'
+  );
 
   const sql = new DatabaseSync(':memory:');
   sql.function('JSON_UNQUOTE', value => value);
@@ -169,7 +189,41 @@ try {
   assert.equal(assigned.total, 1, 'sales assignment counts the Riyadh day of assigned_at, not created_at');
   const fieldAssign = await readEmployeeAssignmentReport(db, admin, {...reportFilters, employee: 'field-1', stage: ''});
   assert.equal(fieldAssign.status, 'ok');
+  assert.equal(fieldAssign.dispatched, false);
   assert.equal(fieldAssign.total, 3, 'field assignment counts use the dispatch date in Asia/Riyadh');
+
+  sql.prepare(`INSERT INTO crm_users (id,name,username,role,active,created_at) VALUES ('sales-2','نورة','noura','sales',1,'2026-01-01')`).run();
+  sql.prepare(`INSERT INTO crm_users (id,name,username,role,active,created_at) VALUES ('field-2','سالم','salem','field',1,'2026-01-01')`).run();
+  insert.run('n1', 'sales-1', '', 'n1', 'negotiation', '2026-08-01T08:00:00.000Z', '2026-10-13T08:00:00.000Z', '2026-08-01T08:00:00.000Z', '2026-10-13T08:00:00.000Z', '2026-08-01T00:00:00.000Z');
+  insert.run('other', 'sales-2', 'field-2', 'other', 'property_visited', '2026-08-01T08:00:00.000Z', '2026-10-13T08:00:00.000Z', null, '2026-10-13T09:00:00.000Z', '2026-08-02T00:00:00.000Z');
+  insert.run('old-stage', 'sales-1', 'field-1', 'old-stage', 'contacted', '2026-10-13T08:00:00.000Z', '2026-10-13T08:00:00.000Z', '2026-10-13T08:00:00.000Z', '2026-09-01T08:00:00.000Z', '2026-09-01T00:00:00.000Z');
+  const dispatchFilters = {...reportFilters, employee: 'sales-1'};
+  const {readReportDashboard} = require(join(out, 'reports.js'));
+  const dispatched = await readEmployeeAssignmentReport(db, admin, dispatchFilters);
+  const dash = await readReportDashboard(db, admin, dispatchFilters, new Date('2026-10-13T12:00:00.000Z'));
+  assert.equal(dispatched.status, 'ok');
+  assert.equal(dispatched.dispatched, true);
+  assert.equal(dispatched.total, 4, 'عهود: dispatched in the Riyadh period, including leads that left تفويج');
+  assert.equal(dash.total, dispatched.total, 'client cards use the same dispatched population');
+  assert.equal(dispatched.byStage.find(row => row.stage === 'negotiation').count, 1);
+  assert.equal(dispatched.byStage.find(row => row.stage === 'field_dispatch').count, 3);
+  assert.equal(dispatched.byStage.some(row => row.count === 0), false, 'the dispatch breakdown lists only stages that occurred');
+  assert.equal(dispatched.byField.find(row => row.name === 'خالد').count, 3);
+  assert.equal(dispatched.byField.find(row => row.name === 'غير مسند لميداني').count, 1);
+  const everyone = await readEmployeeAssignmentReport(db, admin, reportFilters);
+  assert.equal(everyone.total, 5, 'no employee means every lead dispatched in the period');
+  assert.equal(everyone.byField.find(row => row.id === 'field-2').count, 1);
+  const narrowed = await readEmployeeAssignmentReport(db, admin, {...dispatchFilters, source: 'manual'});
+  assert.equal(narrowed.total, dispatched.total, 'the fixture source is manual');
+  assert.equal((await readEmployeeAssignmentReport(db, admin, {...dispatchFilters, source: 'tiktok'})).total, 0);
+  const moved = await readReport(db, admin, 'leads', dispatchFilters);
+  assert.ok(moved.rows.some(row => row.id === 'n1'), 'the leads report keeps a dispatched lead whose current stage moved on');
+  assert.equal(moved.rows.some(row => row.id === 'other'), false, 'another employee stays out');
+  assert.equal(moved.rows.some(row => row.id === 'old-stage'), false, 'an older dispatch is not the period');
+  const salesStage = await readEmployeeAssignmentReport(db, admin, {...reportFilters, employee: 'sales-1', stage: 'تفاوض'});
+  assert.equal(salesStage.dispatched, false);
+  assert.equal(salesStage.total, 1, 'other stages filter the assignment count by the current stage');
+  assert.equal(salesStage.byStage.every(row => row.stage === 'negotiation'), true);
 
   const mem = new DatabaseSync(':memory:');
   mem.exec(`CREATE TABLE leads(

@@ -208,6 +208,13 @@ try {
  assert.equal(fieldAssign.total,1,'field count uses the dispatch date, not an older first dispatch');
  assert.equal(fieldAssign.byStage.find(stage=>stage.stage==='contract_signed').count,1,'breakdown is the current stage');
  assert.equal((await readEmployeeAssignmentReport(db,admin,{...filters,employee:''})).status,'idle');
+ const salesStage=await readEmployeeAssignmentReport(db,admin,{...filters,from:'2026-10-07',to:'2026-10-07',employee:'ohoud',stage:'تفاوض'});
+ assert.equal(salesStage.dispatched,false);
+ assert.equal(salesStage.total,1,'a non-dispatch stage keeps only the current stage');
+ assert.equal(salesStage.byStage.every(stage=>stage.stage==='negotiation'),true);
+ assert.equal((await readEmployeeAssignmentReport(db,admin,{...filters,from:'2026-10-07',to:'2026-10-07',employee:'ohoud',stage:'تم التواصل'})).total,0);
+ assert.equal((await readEmployeeAssignmentReport(db,admin,{...filters,from:'2026-10-07',to:'2026-10-07',employee:'ohoud',source:'website'})).total,0,'assignment respects the source filter');
+ assert.equal((await readEmployeeAssignmentReport(db,admin,{...filters,from:'2026-10-07',to:'2026-10-07',employee:'field1',stage:'وقع عقد'})).total,1);
  assert.equal(leadEverFieldDispatched({stage:'negotiation',first_field_dispatch_at:'2026-01-01T00:00:00.000Z'}),true);
  assert.equal(leadEverFieldDispatched({stage:'new',field_assigned_to:'field1'}),true);
  assert.equal(leadEverFieldDispatched({stage:'new'}),false);
