@@ -27,6 +27,8 @@ import LeadForm, {
   Lead,
 } from '@/app/lead-form';
 import {formatRiyadhDate, riyadhDayKey} from '@/lib/lead-dates';
+import {isEverFieldDispatchFilter} from '@/lib/lead-cohorts';
+import {safeCrmReturn} from '@/lib/report-return';
 import {canBulkSelect} from '@/lib/bulk-lead-access';
 import {canToggleFeatured, compareClients, featuredControlsEnabled, isFeaturedValue, isNewUnassignedLead} from '@/lib/lead-featured';
 import LeadBulkBar from './lead-bulk-bar';
@@ -197,6 +199,11 @@ export default function CRM({
   const [stageFilter, setStageFilter] =
     useState('');
   const listStage = query.get('stage') || '';
+  const listStageNow = query.get('stageNow') === '1';
+  const listAssignFrom = query.get('assignFrom') || '';
+  const listAssignTo = query.get('assignTo') || '';
+  const listAssignRole = query.get('assignRole') === 'field' ? 'field' : query.get('assignRole') === 'sales' ? 'sales' : '';
+  const listReturn = safeCrmReturn(query.get('returnTo'));
   const listSource = query.get('source') || '';
   const listSourceExact = query.get('sourceExact') === '1';
   const listEmployee = query.get('employee') || '';
@@ -290,6 +297,10 @@ export default function CRM({
     q: search,
     view: leadView === 'followups' ? 'followups' : '',
     stage: selectedStage,
+    stageNow: listStageNow,
+    assignFrom: /^\d{4}-\d{2}-\d{2}$/.test(listAssignFrom) ? listAssignFrom : '',
+    assignTo: /^\d{4}-\d{2}-\d{2}$/.test(listAssignTo) ? listAssignTo : '',
+    assignRole: listAssignRole,
     from: listFrom,
     to: listTo,
     source: listSource,
@@ -380,6 +391,12 @@ export default function CRM({
   const newUnassignedCount = serverMode ? counts.newUnassigned : leads.filter(isNewUnassignedLead).length;
   const scopeTotal = serverMode ? counts.total : leads.length;
   const filteredCount = serverMode ? filteredTotal : leads.length;
+  const listBack = (() => {
+    const back = new URLSearchParams(query);
+    if (!back.get('tab')) back.set('tab', 'leads');
+    return '/crm?' + back.toString();
+  })();
+  const leadHref = (id: string) => `/crm/leads/${encodeURIComponent(id)}?returnTo=${encodeURIComponent(listBack)}`;
 
   const bulkSelect = canBulkSelect(role);
   const shownIds = shown.map(lead => lead.id);
@@ -488,6 +505,7 @@ export default function CRM({
                       const next = new URLSearchParams(query);
                       next.set('tab', 'leads');
                       if (value) next.set('stage', value); else next.delete('stage');
+                      next.delete('stageNow');
                       navigateCrm('/crm?' + next.toString());
                     }}
                     className="w-full rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-black"
@@ -588,9 +606,14 @@ export default function CRM({
                 </p>
               )}
 
-              {(listStage || listSource || listEmployee || listEmployeeName || listOverdue || listInactive || listWaiting || listGroup || listFrom || listTo) ? (
+              {(listStage || listSource || listEmployee || listEmployeeName || listOverdue || listInactive || listWaiting || listGroup || listFrom || listTo || listAssignRole || listReturn) ? (
                 <div className="reports-filter-banner" role="status">
                   <p>
+                    {listReturn ? <CrmLink href={listReturn}>← العودة إلى التقرير</CrmLink> : null}
+                    {' '}
+                    {listAssignRole === 'sales' ? 'عملاء أُسندوا لموظف المبيعات خلال الفترة حسب تاريخ الإسناد. المرحلة في الجدول هي الحالية. ' : ''}
+                    {listAssignRole === 'field' ? 'عملاء فُوِّجوا للموظف الميداني خلال الفترة حسب تاريخ التفويج. المرحلة في الجدول هي الحالية. ' : ''}
+                    {!listStageNow && !listAssignRole && isEverFieldDispatchFilter(selectedStage) ? 'تفويج للميداني: كل عميل دخل هذه المرحلة أو فُوِّج لميداني، حتى لو تغيّرت مرحلته لاحقاً. العمود يعرض المرحلة الحالية. ' : ''}
                     {listOverdue ? 'مواعيد متابعة متأخرة: الموظف في عمود المبيعات، والموعد في عمود المتابعة. ' : ''}
                     {listWaiting ? 'عملاء جدد غير مسندين منذ أكثر من 24 ساعة. ' : ''}
                     {listInactive ? 'عملاء بلا تحديث منذ 7 أيام أو أكثر. ' : ''}
@@ -661,7 +684,7 @@ export default function CRM({
                             ) : featured ? (
                               <Star className="size-3.5 shrink-0 fill-[#3F1A44] text-[#3F1A44]" aria-hidden />
                             ) : null}
-                            <a href={`/crm/leads/${lead.id}`} className="crm-lead-card-name">{lead.name}</a>
+                            <a href={leadHref(lead.id)} className="crm-lead-card-name">{lead.name}</a>
                             <NewLeadBadge lead={lead} />
                             {role === 'field' && fieldReportRequired(lead) ? (
                               <span className="inline-flex rounded-full bg-red-600 px-2 py-0.5 text-[11px] font-bold text-white">تقرير مطلوب</span>
@@ -791,7 +814,7 @@ export default function CRM({
                                       <Star className="size-3.5 shrink-0 fill-[#3F1A44] text-[#3F1A44]" aria-hidden />
                                     ) : null}
                                     <a
-                                      href={`/crm/leads/${lead.id}`}
+                                      href={leadHref(lead.id)}
                                       className={`block min-w-0 truncate font-semibold underline underline-offset-4 ${featured ? 'font-bold text-[#3F1A44] decoration-[#3F1A44]/50' : 'text-[#5b2a72] decoration-[#5b2a72]/40 hover:decoration-[#5b2a72]'}`}
                                       title={lead.name}
                                     >

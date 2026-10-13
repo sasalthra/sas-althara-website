@@ -139,8 +139,8 @@ export async function assignLeadsBulk(
   for (const lead of leads) {
     if (!assignmentChanged(lead.assigned_to, assignedTo)) continue;
     await db
-      .prepare(`UPDATE leads SET assigned_to = ?, updated_at = ? WHERE id = ?`)
-      .bind(assignedTo, now, lead.id)
+      .prepare(`UPDATE leads SET assigned_to = ?, assigned_at = ?, updated_at = ? WHERE id = ?`)
+      .bind(assignedTo, now, now, lead.id)
       .run();
     await db
       .prepare(

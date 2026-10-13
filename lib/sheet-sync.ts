@@ -22,6 +22,7 @@ import {
 } from './sheet-duplicate-cleanup';
 import {normalizeLeadPhone} from './phone';
 import {stageLabel} from './lead-stages';
+import {leadNeedsFieldDispatchStamp, rememberFirstFieldDispatch} from './lead-stamps';
 import {asBinary} from './sql-collation';
 import {clipName, STAGE_NOTE_INSERT_SQL} from './stage-notes';
 
@@ -351,6 +352,9 @@ async function insertSheetLead(
       .bind(...values)
       .run();
   }
+  if (leadNeedsFieldDispatchStamp(lead.stage, '')) {
+    await rememberFirstFieldDispatch(db, lead.id, lead.now);
+  }
 }
 
 function exactEq(column: string) {
@@ -477,6 +481,9 @@ export async function upgradeNewStage(
       .run();
   } catch (error) {
     console.error('sheet stage note was not written', publicSyncError(error));
+  }
+  if (leadNeedsFieldDispatchStamp(nextStage, '')) {
+    await rememberFirstFieldDispatch(db, leadId, now);
   }
   return true;
 }

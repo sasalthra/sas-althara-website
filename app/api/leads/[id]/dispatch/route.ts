@@ -4,6 +4,7 @@ import {getCrmUser} from '@/lib/admin';
 import {notifyFieldDispatch} from '@/lib/assignment-notify';
 import {propertyRequestText} from '@/lib/assignment-email';
 import {crmDb} from '@/lib/crm-db';
+import {rememberFirstFieldDispatch} from '@/lib/lead-stamps';
 import properties from '@/data/properties.json';
 
 type LeadRow = {
@@ -129,6 +130,8 @@ export async function POST(
     `)
     .bind(fieldUserId, now, now, id)
     .run();
+
+  await rememberFirstFieldDispatch(crmDb(), id, now);
 
   await crmDb()
     .prepare(`

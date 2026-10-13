@@ -3,7 +3,7 @@ import {useEffect,useState,type FormEvent,type MouseEvent,type ReactNode} from '
 import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend,CartesianGrid,AreaChart,Area} from 'recharts';
 import {AlertCircle,BarChart3,Bell,Building2,Calendar,CheckCircle2,ClipboardList,Download,FileText,Filter,Home,Info,Layers,PieChart as PieIcon,TrendingUp,Users} from 'lucide-react';
 import {allowedReports,type ReportResult} from '@/lib/report-catalog';
-import type {ReportDashboard} from '@/lib/reports';
+import type {EmployeeAssignmentReport,ReportDashboard} from '@/lib/reports';
 import {COHORT_DEFINITIONS} from '@/lib/lead-cohorts';
 import {canonicalStage, displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import {buildReportPath,leadReturnHref,rememberReportScroll,restoreReportScroll} from '@/lib/report-return';
@@ -15,7 +15,7 @@ type ReportSnapshotsPayload={
  clients:{status:'ok';total:number;interested:number;notInterested:number;byStage:{stage:string;label:string;count:number}[]}|{status:'unavailable';error:string};
  properties:{status:'ok';total:number;byNeighborhood:{label:string;count:number}[]}|{status:'unavailable';error:string};
 };
-type Payload={report?:ReportResult;summaries?:Summary[];snapshots?:ReportSnapshotsPayload;dashboard?:ReportDashboard|null;dashboardError?:string;employees:{id:string;name:string;username?:string}[];canExport:boolean;filters:{from:string;to:string;employee:string;source:string;stage:string;funding:string;page:number;pageSize:number};generatedAt?:string};
+type Payload={report?:ReportResult;summaries?:Summary[];snapshots?:ReportSnapshotsPayload;dashboard?:ReportDashboard|null;dashboardError?:string;assignment?:EmployeeAssignmentReport;employees:{id:string;name:string;username?:string;role?:string}[];canExport:boolean;filters:{from:string;to:string;employee:string;source:string;stage:string;funding:string;page:number;pageSize:number};generatedAt?:string};
 type Metric=NonNullable<ReportResult['metrics']>[number];
 
 const groupNames:Record<string,string>={source:'المصادر',stage:'المراحل',sales:'المبيعات',field:'الميدان',follow_up_age:'عمر المتابعة',city:'المدن',action:'الأعمال',user_id:'المستخدمون',name:'الموظفون',department:'الأقسام',schedule_status:'الدوام',type:'الخدمات',status:'الحالات',role:'الأدوار',active:'تفعيل الحساب',actor_id:'الفاعلون',fundingEntity:'جهات التمويل',debtPayer:'جهة السداد',requestStage:'مرحلة الطلب'};
@@ -85,8 +85,13 @@ function stageFilterExtra(raw:string){
  return <option value={selected}>{selected}</option>;
 }
 
-function NumLink({href,children}:{href:string;children:ReactNode}){
- return <CrmLink className="reports-num-link" href={href}>{children}</CrmLink>;
+function NumLink({href,children,onNavigate}:{href:string;children:ReactNode;onNavigate?:()=>void}){
+ return <CrmLink className="reports-num-link" href={href} onNavigate={onNavigate}>{children}</CrmLink>;
+}
+function employeeOptionLabel(employee:{name:string;username?:string;role?:string}){
+ const role=employee.role==='sales'?'مبيعات':employee.role==='field'?'ميدان':'';
+ const base=employee.username?`${employee.name} (${employee.username})`:employee.name;
+ return role?`${base} — ${role}`:base;
 }
 function StageLegend({items,hrefFor}:{items:{stage:string;label:string;count:number;pct:number;color:string}[];hrefFor:(stage:string)=>string}){
  return <ul className="reports-stage-legend">
@@ -179,8 +184,25 @@ export default function ReportsPanel({role}:{role:string}){
    if(name)q.set('employeeName',name);if(username)q.set('employeeUser',username);
   }
   for(const [key,value] of Object.entries(extra)){if(!value||key==='employee'||key==='employeeName'||key==='employeeUser'||(key==='source'&&source))continue;q.set(key,value);}
+  if(q.get('stage'))q.set('stageNow','1');
   return '/crm?'+q.toString();
  }
+ function assignmentListHref(stage?:string){
+  const assignment=stateData?.assignment;
+  if(!assignment||assignment.status!=='ok')return '/crm?tab=leads';
+  const q=new URLSearchParams();
+  q.set('tab','leads');
+  q.set('employee',assignment.employeeId);
+  if(assignment.employeeName)q.set('employeeName',assignment.employeeName);
+  if(assignment.employeeUser)q.set('employeeUser',assignment.employeeUser);
+  q.set('assignFrom',assignment.from);
+  q.set('assignTo',assignment.to);
+  q.set('assignRole',assignment.role);
+  if(stage){q.set('stage',stage);q.set('stageNow','1');}
+  q.set('returnTo',reportPath);
+  return '/crm?'+q.toString();
+ }
+ function openAssignmentList(){rememberReportScroll(reportPath);}
 
  function groupChartData(){
   if(!report)return null;
@@ -266,7 +288,7 @@ export default function ReportsPanel({role}:{role:string}){
      :<select name="stage" defaultValue={stageFilterValue(query.get('stage')||'')}><option value="">كل المراحل</option>{stageChoices().map(([key,label])=><option key={key} value={label}>{label}</option>)}{stageFilterExtra(query.get('stage')||'')}</select>
     }</label>
     <label>مصدر العميل<input name="source" placeholder="كل المصادر" defaultValue={query.get('source')||''}/></label>
-    <label>الموظف<select name="reportEmployee" defaultValue={query.get('reportEmployee')||''}><option value="">{role==='admin'?'جميع الموظفين':'نطاقي فقط'}</option>{stateData?.employees.map(e=><option key={e.id} value={e.id}>{e.username?`${e.name} (${e.username})`:e.name}</option>)}</select></label>
+    <label>الموظف<select name="reportEmployee" defaultValue={query.get('reportEmployee')||''}><option value="">{role==='admin'?'جميع الموظفين':'نطاقي فقط'}</option>{stateData?.employees.map(e=><option key={e.id} value={e.id}>{employeeOptionLabel(e)}</option>)}</select></label>
     <label>الوحدة التقريرية<select name="module" defaultValue={selectedModule}><option value="overview">نظرة عامة — كل المسموح</option>{modules.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
     {!isOverview?(
      <>
@@ -283,7 +305,7 @@ export default function ReportsPanel({role}:{role:string}){
      <button className="primary report-primary-btn" type="submit">تطبيق التصفية</button>
     </div>
    </div>
-   <p className="report-filter-help">التصدير إلى CSV يتبع نفس الفلاتر المطبقة أعلاه. الفترة لبطاقات العملاء هي تاريخ التسجيل created_at بتوقيت الرياض، والافتراضي آخر 30 يوماً.</p>
+   <p className="report-filter-help">التصدير إلى CSV يتبع نفس الفلاتر المطبقة أعلاه. الفترة لبطاقات العملاء هي تاريخ التسجيل created_at بتوقيت الرياض، والافتراضي آخر 30 يوماً. بطاقة الإسناد تستخدم نفس الفترة ونفس الموظف: تاريخ الإسناد للمبيعات، وتاريخ التفويج للميدان.</p>
   </form>
 
   <p className="report-scope">الفترة المطبقة: {stateData?.filters.from||'…'} — {stateData?.filters.to||'…'}. بطاقات العملاء والدونات وجدول الموظفين والمصادر والتنبيهات وقائمة العملاء تستخدم تاريخ تسجيل العميل (created_at) بتوقيت الرياض، مع المرحلة والمصدر والموظف معاً. الإسناد يطابق رقم الموظف أو اسم المستخدم أو الاسم الظاهر. اللقطات الحالية للعقارات ليست تاريخاً للحالة. الرابط يحفظ المرشحات.</p>
@@ -294,6 +316,39 @@ export default function ReportsPanel({role}:{role:string}){
 
   {stateData&&isOverview&&(
    <div className="reports-overview" aria-label="لوحة نظرة عامة">
+    {stateData.assignment?(
+     <section className="panel reports-assignment" aria-label="العملاء المسندون خلال الفترة">
+      <div className="reports-perf-head">
+       <div>
+        <h3>العملاء المسندون خلال الفترة</h3>
+        <p className="subtle">{stateData.assignment.basis}</p>
+       </div>
+      </div>
+      {stateData.assignment.status==='idle'?<p>اختر موظفاً من المبيعات أو الميدان في التصفية، ثم اضغط تطبيق التصفية.</p>:null}
+      {stateData.assignment.status==='unsupported'?<p>{stateData.assignment.basis}</p>:null}
+      {stateData.assignment.status==='unavailable'?<p role="alert" className="error">{stateData.assignment.error||'تعذرت قراءة الإسناد، ولا يمثل ذلك صفراً.'}</p>:null}
+      {stateData.assignment.status==='ok'?(
+       <>
+        <p>الموظف: <strong>{stateData.assignment.employeeName}</strong> · {stateData.assignment.role==='field'?'ميدان':'مبيعات'} · الفترة {stateData.assignment.from} — {stateData.assignment.to}</p>
+        <p>عدد العملاء المسندين: <NumLink href={assignmentListHref()} onNavigate={openAssignmentList}>{fmt(stateData.assignment.total)}</NumLink></p>
+        <div className="report-table-scroll" tabIndex={0} aria-label="مراحل العملاء المسندين">
+         <table className="reports-perf-table">
+          <thead><tr><th>المرحلة الحالية</th><th>العدد</th></tr></thead>
+          <tbody>
+           {stateData.assignment.byStage.map(row=>(
+            <tr key={row.stage}>
+             <th scope="row">{row.label}</th>
+             <td><NumLink href={assignmentListHref(row.stage)} onNavigate={openAssignmentList}>{fmt(row.count)}</NumLink></td>
+            </tr>
+           ))}
+          </tbody>
+         </table>
+        </div>
+        <p className="subtle reports-chart-caption">النقر يفتح قائمة هؤلاء العملاء مع مرحلتهم الحالية. العودة من ملف العميل ترجع إلى هذه القائمة ثم إلى التقرير.</p>
+       </>
+      ):null}
+     </section>
+    ):null}
     <div className="reports-kpis" aria-label="مؤشرات رئيسية">
      <KpiCard value={fmt(employeesCount)} label="عدد الموظفين" icon={<Users size={18}/>} chip={stateData?.filters.employee?'الموظف المحدد':employeesCount!=null?`ضمن الفلاتر`:'—'}/>
      <KpiCard value={fmt(scheduledFollowups)} label="معاينات / متابعات مجدولة" icon={<Calendar size={18}/>} href={dash?clientListHref({scheduled:'1'}):undefined} chip={dash&&dash.total>0&&scheduledFollowups!=null?`${Math.round((scheduledFollowups/dash.total)*100)}% من العملاء المفلترين`:undefined}/>
