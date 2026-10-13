@@ -1,11 +1,12 @@
 import {z} from 'zod';
 import {crmDb,crmTransaction} from '@/lib/crm-db';
 import {actor,body,endpoint,reply,ApiError} from '@/lib/secure-api';
-import {binEq,binJoin} from '@/lib/sql-collation';
+import {binEq,binJoin,paramEq} from '@/lib/sql-collation';
 import {
-  canEditTransactions,
+  canAccessLeadFinance,
   canReviewTransactions,
   confirmedDue,
+  financeFullAccess,
   nextClientSerial,
   transactionSchema,
   type ReviewStatus,
@@ -13,7 +14,7 @@ import {
 } from '@/lib/transactions';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
-const editors=['admin','accounts','sales'] as const;
+const financeActors=['admin','accounts','sales','field','supervisor'] as const;
 const schema=z.object({
   id:z.string().uuid(),
   version:z.number().int().min(0),
@@ -104,6 +105,20 @@ async function writeColumns(db: Sql, id: string, data: TransactionInput, reviewS
   }
 }
 
+/**
+ * Stage and assignee are decided in JS. Comparing those strings in SQL can
+ * raise MySQL error 1267 when collations differ. The lead id predicate casts
+ * only the bound parameter.
+ */
+async function requireAssignedDebtPayoff(db: Sql, role: string, userId: string, leadId: string) {
+  const lead = await db.prepare(`SELECT id, stage, assigned_to, field_assigned_to FROM leads WHERE ${paramEq('id')}`).bind(leadId).first<Row>();
+  if (!lead) throw new ApiError(404, 'العميل غير موجود');
+  if (!canAccessLeadFinance(role, lead.stage, lead, userId)) {
+    throw new ApiError(403, 'لا تملك صلاحية معاملة هذا العميل');
+  }
+  return lead;
+}
+
 function present(row: Row) {
   const data = parsedData(row.data);
   if (!data.ownerCommission && row.owner_commission) data.ownerCommission = String(row.owner_commission);
@@ -128,15 +143,15 @@ function present(row: Row) {
 }
 
 export async function GET(req: Request){return endpoint(async()=>{
- const user = await actor(undefined, [...editors]);
+ const user = await actor(undefined, [...financeActors]);
  const leadId = new URL(req.url).searchParams.get('leadId') || '';
  if (leadId && !z.string().uuid().safeParse(leadId).success) throw new ApiError(400, 'العميل غير صالح');
+ if (!financeFullAccess(user.role)) {
+  if (!leadId) throw new ApiError(403, 'لا تملك الصلاحية');
+  await requireAssignedDebtPayoff(crmDb(), user.role, user.userId, leadId);
+ }
  const scope: string[] = [];
  const args: string[] = [];
- if (user.role === 'sales') {
-  scope.push(`(${binEq('l.assigned_to')} OR ${binEq('l.created_by')} OR ${binEq('l.owner')})`);
-  args.push(user.userId, user.userId, user.userId);
- }
  if (leadId) {
   scope.push(binEq('t.lead_id'));
   args.push(leadId);
@@ -150,14 +165,19 @@ export async function GET(req: Request){return endpoint(async()=>{
 });}
 
 export async function POST(req:Request){return endpoint(async()=>{
- const user=await actor(req,[...editors]);
- if (!canEditTransactions(user.role)) throw new ApiError(403, 'لا تملك الصلاحية');
- const input=schema.parse(await body(req));
+ const user=await actor(req,[...financeActors]);
+ const raw=await body(req);
+ const parsed=schema.safeParse(raw);
+ if (!parsed.success) {
+  if (!financeFullAccess(user.role) && user.role !== 'sales') throw new ApiError(403, 'لا تملك الصلاحية');
+  throw parsed.error;
+ }
+ const input=parsed.data;
  if (input.decision && !canReviewTransactions(user.role)) throw new ApiError(403, 'اعتماد المعاملة لموظف الحسابات أو الإدارة');
  const saved=await crmTransaction(async db=>{
-  const lead=await db.prepare('SELECT id, assigned_to, created_by, owner FROM leads WHERE id=?').bind(input.data.leadId).first<Row>();
+  const lead=await db.prepare(`SELECT id, stage, assigned_to, field_assigned_to FROM leads WHERE ${paramEq('id')}`).bind(input.data.leadId).first<Row>();
   if(!lead)throw new ApiError(404,'العميل غير موجود');
-  if (user.role === 'sales' && text(lead.assigned_to) !== user.userId && text(lead.created_by) !== user.userId && text(lead.owner) !== user.userId) {
+  if (!financeFullAccess(user.role) && !canAccessLeadFinance(user.role, lead.stage, lead, user.userId)) {
    throw new ApiError(403, 'لا تملك صلاحية معاملة هذا العميل');
   }
   if(input.data.financeEmployeeId){const employee=await db.prepare('SELECT id FROM crm_users WHERE id=? AND active=1').bind(input.data.financeEmployeeId).first();if(!employee)throw new ApiError(400,'موظف التمويل غير صالح');}
@@ -172,7 +192,7 @@ export async function POST(req:Request){return endpoint(async()=>{
   let reviewedBy = text(current?.reviewed_by || previous.reviewedBy);
   let reviewedAt = text(current?.reviewed_at || previous.reviewedAt);
   let reviewedByName = text(previous.reviewedByName);
-  if (user.role === 'sales') {
+  if (!canReviewTransactions(user.role)) {
    reviewStatus = 'pending';
    reviewedBy = '';
    reviewedAt = '';

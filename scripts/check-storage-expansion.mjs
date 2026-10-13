@@ -1,6 +1,7 @@
 // Real SQL execution against disposable in-memory SQLite. No .env, network or customer data.
 // MySQL row locks/upsert syntax are adapted only at the driver boundary; staging MySQL remains required.
 import {DatabaseSync} from 'node:sqlite';
+import {sqliteReportSql} from './sqlite-report-sql.mjs';
 import {build} from 'esbuild';
 import {createRequire} from 'node:module';
 import {mkdtempSync,rmSync} from 'node:fs';
@@ -28,7 +29,7 @@ let failAudit=false;
 globalThis.storageUser={userId:admin,role:'admin',name:'Synthetic admin'};
 const driver={async execute(query,args){
  if(failAudit&&query.includes('INSERT INTO crm_audit'))throw Error('injected audit failure');
- query=query.replace(/ FOR UPDATE/g,'').replace(/ON DUPLICATE KEY UPDATE /g,'ON CONFLICT DO UPDATE SET ').replace(/VALUES\((\w+)\)/g,'excluded.$1');
+ query=sqliteReportSql(query.replace(/ FOR UPDATE/g,'').replace(/ON DUPLICATE KEY UPDATE /g,'ON CONFLICT DO UPDATE SET ').replace(/VALUES\((\w+)\)/g,'excluded.$1'));
  const statement=sql.prepare(query);
  return /^SELECT/.test(query.trim())?[statement.all(...args)]:[{affectedRows:Number(statement.run(...args).changes)}];
 },async beginTransaction(){sql.exec('BEGIN');},async commit(){sql.exec('COMMIT');},async rollback(){sql.exec('ROLLBACK');},release(){}};

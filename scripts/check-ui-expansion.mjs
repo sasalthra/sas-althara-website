@@ -54,6 +54,8 @@ try {
  for(const html of [admin,supervisor])assert.match(html,/المساعد الإداري/,'managers can open the admin assistant');
  assert.doesNotMatch(sales,/المساعد الإداري/,'sales do not see the admin assistant');
  assert.doesNotMatch(sales,/المساعد الداخلي/);
+ assert.match(admin,/المعاملات والمالية/,'admin keeps the finance module');
+ assert.doesNotMatch(sales,/المعاملات والمالية/,'sales do not get the finance nav or the finance page');
  console.log('PASS rendered workspace navigation: Sheets admin-only, import managers-only, admin assistant for admin and supervisor');
  await build({stdin:{contents:`import React from 'react';import {renderToStaticMarkup} from 'react-dom/server';import HrPanel from './app/crm/hr-panel';export const html=renderToStaticMarkup(<HrPanel admin={false}/>);`,resolveDir:process.cwd(),loader:'tsx'},outfile:join(out,'hr-ui.cjs'),bundle:true,platform:'node',format:'cjs'});
  const {html}=createRequire(import.meta.url)(join(out,'hr-ui.cjs'));

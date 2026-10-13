@@ -46,6 +46,7 @@ import {
 } from '@/lib/lead-list';
 import {displayLeadPhone} from '@/lib/phone';
 import {fieldReportRequired} from '@/lib/field-report';
+import {canSeeLeadFinance} from '@/lib/transactions';
 import UserAlerts from './user-alerts';
 
 import {
@@ -123,6 +124,34 @@ function compactText(
   return clean.length <= limit
     ? clean
     : `${clean.slice(0, limit)}…`;
+}
+
+function FinanceListAction({
+  role,
+  userId,
+  lead,
+  leadPageHref,
+}: {
+  role: string;
+  userId: string;
+  lead: Lead;
+  leadPageHref: string;
+}) {
+  if (role !== 'sales' || !canSeeLeadFinance({
+    role,
+    stage: lead.stage,
+    userId,
+    assignedTo: lead.assigned_to,
+    fieldAssignedTo: lead.field_assigned_to,
+  })) return null;
+  return (
+    <a
+      href={`${leadPageHref}#client-finance`}
+      className="mt-1 inline-flex text-xs font-semibold text-[#3F1A44] underline underline-offset-2"
+    >
+      معاملات العميل والمالية
+    </a>
+  );
 }
 
 function compactPropertyTitle(
@@ -472,7 +501,7 @@ export default function CRM({
         {tab==='leads'&&<div className="crm-summary"><button type="button" className="crm-summary-btn" data-active={leadView==='all'} onClick={()=>setLeadView('all')}>طلبات العملاء <strong>{loading?'—':scopeTotal}</strong></button><button type="button" className="crm-summary-btn" data-active={leadView==='followups'} onClick={()=>setLeadView('followups')}>تحتاج متابعة <strong>{loading?'—':followUps}</strong></button>{role==='field'&&<button type="button" className="crm-summary-btn" data-active={reportOnly} onClick={()=>setReportOnly(value=>!value)}>تقرير مطلوب <strong>{loading?'—':counts.reportRequired}</strong></button>}<span>العقارات <strong>{data.length}</strong></span></div>}
         <Tabs value={tab} dir="rtl">
           <TabsContent value="reports"><ReportsPanel role={role}/></TabsContent>
-          {['admin', 'accounts', 'sales'].includes(role) && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} initialLeadId={query.get('lead')||''} role={role}/></TabsContent>}
+          {['admin', 'accounts'].includes(role) && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} initialLeadId={query.get('lead')||''} role={role}/></TabsContent>}
           <TabsContent value="hr"><HrPanel admin={role === 'admin'}/></TabsContent>
           {['admin', 'supervisor'].includes(role) && <TabsContent value="ai"><AiPanel admin={role === 'admin'} envModel={aiEnvModel}/></TabsContent>}
           {role === 'admin' && <TabsContent value="sheets"><SheetsPanel/></TabsContent>}
@@ -708,6 +737,7 @@ export default function CRM({
                           {featured ? <span className="mt-1 inline-flex rounded-full bg-[#3F1A44] px-1.5 py-0.5 text-[10px] font-semibold text-white">عميل مميز</span> : null}
                           <p dir="ltr">{displayLeadPhone(lead.phone)}</p>
                           <p>{stageLabel(lead.stage)} · {lead.assigned_name || 'بدون تعيين'}</p>
+                          <FinanceListAction role={role} userId={userId} lead={lead} leadPageHref={leadHref(lead.id)} />
                           <p>{compactPropertyTitle(property?.title || lead.property_other)}</p>
                         </article>
                       );
@@ -885,6 +915,7 @@ export default function CRM({
                                       lead.stage
                                     )}
                                   </span>
+                                  <FinanceListAction role={role} userId={userId} lead={lead} leadPageHref={leadHref(lead.id)} />
                                 </TableCell>
 
                                 <TableCell className="px-2 text-sm">
