@@ -6,20 +6,41 @@ import assert from 'node:assert/strict';
  * can use an index. Tests compare the original strings, and leave real
  * expression casts (SUBSTR/REPLACE) as BLOBs.
  */
+function peelInLists(sql) {
+  const cast = /CAST\(\s*(\?|(?:`?\w+`?\.)*`?\w+`?|'(?:[^']|'')*')\s+AS BINARY\s*\)/gi;
+  let out = '';
+  const marker = /\bIN\s*\(/gi;
+  let last = 0;
+  for (const match of sql.matchAll(marker)) {
+    const open = match.index + match[0].length - 1;
+    let depth = 0;
+    let end = -1;
+    for (let i = open; i < sql.length; i++) {
+      if (sql[i] === '(') depth++;
+      else if (sql[i] === ')') {
+        depth--;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    if (end < 0) break;
+    const inner = sql.slice(open + 1, end).replace(cast, '$1');
+    out += sql.slice(last, open + 1) + inner;
+    last = end;
+  }
+  return out + sql.slice(last);
+}
+
 export function sqliteReportSql(sql) {
   const simple = String.raw`(\?|(?:\`?\w+\`?\.)*\`?\w+\`?|'(?:[^']|'')*')`;
   const cast = `CAST\\(\\s*${simple}\\s+AS BINARY\\s*\\)`;
-  let text = String(sql).replace(
+  const text = String(sql).replace(
     new RegExp(`((?:\\b\`?\\w+\`?\\.)?\`?\\w+\`?)\\s*=\\s*${cast}`, 'gi'),
     '$1 = $2'
   );
-  const paramCast = /CAST\(\s*(\?|(?:`?\w+`?\.)*`?\w+`?)\s+AS BINARY\s*\)/gi;
-  text = text.replace(paramCast, (match, inner, offset, whole) => {
-    const before = whole.slice(0, offset);
-    if (/\bIN\s*\([^)]*$/i.test(before)) return inner;
-    return match;
-  });
-  return text.replaceAll(' AS BINARY', ' AS BLOB');
+  return peelInLists(text).replaceAll(' AS BINARY', ' AS BLOB');
 }
 
 function skipSpace(sql, index, dir) {
