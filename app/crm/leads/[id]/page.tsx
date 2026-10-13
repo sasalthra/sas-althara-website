@@ -18,6 +18,7 @@ import LeadForm, {
 import {formatRiyadhDate} from '@/lib/lead-dates';
 import {canToggleFeatured, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
 import NewLeadBadge from '@/components/new-lead-badge';
+import {fieldReportRequired, fieldReportText} from '@/lib/field-report';
 import {displayStage, editableStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import {displayLeadPhone} from '@/lib/phone';
 import {safeCrmReturn} from '@/lib/report-return';
@@ -439,6 +440,9 @@ export default function LeadDetailsPage() {
   const [fieldUpdateNote, setFieldUpdateNote] =
     useState('');
 
+  const [markVisitDone, setMarkVisitDone] =
+    useState(false);
+
   const [saving, setSaving] =
     useState(false);
 
@@ -685,6 +689,16 @@ export default function LeadDetailsPage() {
     event.preventDefault();
 
     if (
+      nextStage === 'property_visited' &&
+      lead &&
+      fieldReportRequired(lead) &&
+      !(role === 'field' && stageNote.trim().length >= 1)
+    ) {
+      setDialogError('أدخل تقرير الزيارة قبل تعليم الزيارة كمكتملة.');
+      return;
+    }
+
+    if (
       nextStage === editableStage(lead?.stage) &&
       !stageNote.trim()
     ) {
@@ -787,9 +801,14 @@ export default function LeadDetailsPage() {
     }
   }
 
-  async function saveFieldUpdate(event: FormEvent) {
-    event.preventDefault();
-    if (fieldUpdateNote.trim().length < 2) {
+  async function saveFieldUpdate(markVisit: boolean) {
+    const text = fieldUpdateNote.trim();
+    const hasReport = fieldReportText(lead?.field_report);
+    if (markVisit && !text && !hasReport) {
+      setDialogError('أدخل تقرير الزيارة قبل تعليم الزيارة كمكتملة.');
+      return;
+    }
+    if (text.length < 2 && !(markVisit && hasReport)) {
       setDialogError('اكتب ملاحظة الزيارة (حرفان على الأقل).');
       return;
     }
@@ -799,7 +818,7 @@ export default function LeadDetailsPage() {
       const response = await fetch(`/api/leads/${params.id}/field-update`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({note: fieldUpdateNote}),
+        body: JSON.stringify({note: fieldUpdateNote, visitDone: markVisit}),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'تعذر حفظ التحديث الميداني');
@@ -911,6 +930,11 @@ export default function LeadDetailsPage() {
                 <span className="inline-flex rounded-full border border-[#e8e3e9] bg-[#f3eaf4] px-2.5 py-1 text-[#3F1A44]">
                   {stageLabel(lead.stage)}
                 </span>
+                {fieldReportRequired(lead) && (
+                  <span className="inline-flex rounded-full bg-red-600 px-2.5 py-1 text-xs font-bold text-white">
+                    تقرير مطلوب
+                  </span>
+                )}
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
@@ -982,11 +1006,14 @@ export default function LeadDetailsPage() {
                   onClick={() => {
                     setDialogError('');
                     setFieldUpdateNote('');
+                    setMarkVisitDone(false);
                     setDialogMode('field-update');
                   }}
-                  className="rounded-xl border border-[#3F1A44]/20 bg-[#3F1A44]/5 px-4 py-2.5 text-sm font-semibold text-[#3F1A44] transition hover:bg-[#3F1A44]/10"
+                  className={fieldReportRequired(lead)
+                    ? 'rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-red-700'
+                    : 'rounded-xl border border-[#3F1A44]/20 bg-[#3F1A44]/5 px-4 py-2.5 text-sm font-semibold text-[#3F1A44] transition hover:bg-[#3F1A44]/10'}
                 >
-                  تحديث ميداني
+                  {fieldReportRequired(lead) ? 'تقرير مطلوب' : 'تحديث ميداني'}
                 </button>
               )}
 
@@ -1057,6 +1084,16 @@ export default function LeadDetailsPage() {
               <div className="mt-1 text-sm text-slate-600">
                 بواسطة {dispatchedByName}
               </div>
+            )}
+            {fieldReportRequired(lead) && (
+              <div className="mt-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800">
+                تقرير مطلوب قبل تعليم الزيارة كمكتملة.
+              </div>
+            )}
+            {fieldReportText(lead.field_report) && (
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                {lead.field_report}
+              </p>
             )}
           </div>
 
@@ -1603,6 +1640,11 @@ export default function LeadDetailsPage() {
                   )
                 )}
               </select>
+              {nextStage === 'property_visited' && fieldReportRequired(lead) && (
+                <p className="mt-2 text-sm font-medium text-red-700">
+                  تقرير مطلوب قبل تعليم الزيارة كمكتملة.
+                </p>
+              )}
             </div>
 
             {stageNotes.some(item => item.stage === nextStage) && (
@@ -1690,7 +1732,7 @@ export default function LeadDetailsPage() {
           <DialogHeader>
             <DialogTitle>تفويج للميداني</DialogTitle>
             <DialogDescription>
-              اختر الموظف الميداني. تُحدَّث المرحلة إلى تفويج للميداني ويصله إشعار بالعميل.
+              اختر الموظف الميداني. تُحدَّث المرحلة إلى تفويج للميداني ويصله إشعار بالعميل، ويصبح تقرير الزيارة مطلوباً.
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-5" onSubmit={saveDispatch}>
@@ -1741,14 +1783,16 @@ export default function LeadDetailsPage() {
       >
         <DialogContent dir="rtl" className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>تحديث ميداني</DialogTitle>
+            <DialogTitle>{fieldReportRequired(lead) ? 'تقرير مطلوب' : 'تحديث ميداني'}</DialogTitle>
             <DialogDescription>
-              سجّل ملاحظة الزيارة أو مستجدات الميدان. تظهر للمبيعات في متابعة العميل.
+              {fieldReportRequired(lead)
+                ? 'اكتب تقرير الزيارة. لا تُعلَّم الزيارة كمكتملة قبل تقرير غير فارغ.'
+                : 'سجّل ملاحظة الزيارة أو مستجدات الميدان. تظهر للمبيعات في متابعة العميل.'}
             </DialogDescription>
           </DialogHeader>
-          <form className="space-y-5" onSubmit={saveFieldUpdate}>
+          <form className="space-y-5" onSubmit={event => {event.preventDefault(); void saveFieldUpdate(displayStage(lead.stage) === 'field_dispatch' && markVisitDone);}}>
             <div>
-              <label className="mb-2 block text-sm font-medium">ملاحظة الزيارة</label>
+              <label className="mb-2 block text-sm font-medium">تقرير الزيارة</label>
               <textarea
                 rows={5}
                 value={fieldUpdateNote}
@@ -1757,11 +1801,21 @@ export default function LeadDetailsPage() {
                 className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-[#3F1A44]"
               />
             </div>
+            {displayStage(lead.stage) === 'field_dispatch' && (
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={markVisitDone}
+                  onChange={event => setMarkVisitDone(event.target.checked)}
+                />
+                تمّت الزيارة
+              </label>
+            )}
             {dialogError && <p className="text-sm text-red-600">{dialogError}</p>}
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setDialogMode(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold">إلغاء</button>
               <button type="submit" disabled={saving} className="rounded-xl bg-[#3F1A44] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60">
-                {saving ? 'جارٍ الحفظ...' : 'حفظ التحديث'}
+                {saving ? 'جارٍ الحفظ...' : markVisitDone ? 'حفظ التقرير وتمّت الزيارة' : 'حفظ التقرير'}
               </button>
             </div>
           </form>

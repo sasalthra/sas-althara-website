@@ -3,6 +3,7 @@ import {leadMatchesReportFilters} from './lead-cohorts';
 import {riyadhDayKey} from './lead-dates';
 import {compareClients, isNewUnassignedLead} from './lead-featured';
 import {displayLeadPhone, leadPhoneMatchesQuery} from './phone';
+import {fieldReportRequired} from './field-report';
 import {binJoin, inParams, paramEq} from './sql-collation';
 
 export const LEAD_PAGE_SIZE = 100;
@@ -27,6 +28,7 @@ export type LeadListFilters = {
   scheduled: boolean;
   duplicateOnly: boolean;
   newOnly: boolean;
+  reportRequired: boolean;
   page: number;
   id: string;
   picklist: boolean;
@@ -36,6 +38,7 @@ export type LeadListCounts = {
   total: number;
   followUps: number;
   newUnassigned: number;
+  reportRequired: number;
   duplicatePhones: string[];
 };
 
@@ -73,6 +76,9 @@ type ListLead = {
   assigned_name?: string | null;
   field_assigned_name?: string | null;
   assigned_to?: string | null;
+  field_assigned_to?: string | null;
+  field_dispatched_at?: string | null;
+  field_report?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   source?: string | null;
@@ -98,6 +104,7 @@ export function emptyLeadFilters(page = 1): LeadListFilters {
     scheduled: false,
     duplicateOnly: false,
     newOnly: false,
+    reportRequired: false,
     page,
     id: '',
     picklist: false,
@@ -127,6 +134,7 @@ export function parseLeadListFilters(url: URL | null, role: string): LeadListFil
     scheduled: params?.get('scheduled') === '1',
     duplicateOnly: canReviewDuplicates && params?.get('duplicate') === '1',
     newOnly: role === 'admin' && params?.get('newOnly') === '1',
+    reportRequired: params?.get('report') === '1',
     page: Number.isFinite(pageRaw) && pageRaw >= 1 ? Math.floor(pageRaw) : 1,
     id: text('id').trim(),
     picklist: params?.get('picklist') === '1',
@@ -159,6 +167,7 @@ export function leadListSearchParams(filters: LeadListFilters): string {
   if (filters.scheduled) params.set('scheduled', '1');
   if (filters.duplicateOnly) params.set('duplicate', '1');
   if (filters.newOnly) params.set('newOnly', '1');
+  if (filters.reportRequired) params.set('report', '1');
   return params.toString();
 }
 
@@ -181,6 +190,7 @@ export function leadListCounts(leads: ListLead[], today: string): LeadListCounts
     total: leads.length,
     followUps: leads.filter(lead => followUpDue(lead, today)).length,
     newUnassigned: leads.filter(lead => isNewUnassignedLead(lead)).length,
+    reportRequired: leads.filter(lead => fieldReportRequired(lead)).length,
     duplicatePhones: duplicatePhoneList(leads),
   };
 }
@@ -228,6 +238,7 @@ export function leadMatchesClientFilters(
   })) return false;
   if (filters.duplicateOnly && !duplicatePhones.has(displayLeadPhone(String(lead.phone ?? '')))) return false;
   if (filters.newOnly && !isNewUnassignedLead(lead)) return false;
+  if (filters.reportRequired && !fieldReportRequired(lead)) return false;
   return leadMatchesSearch(lead, filters.q);
 }
 
@@ -385,7 +396,13 @@ export async function loadLeadPage(
   const duplicatePhones = new Set(counts.duplicatePhones);
   const filtered = leads
     .filter(lead => leadMatchesClientFilters(lead, filters, duplicatePhones, today, Date.now()))
-    .sort((a, b) => compareClients(a, b));
+    .sort((a, b) => {
+      if (user.role === 'field') {
+        const rank = Number(fieldReportRequired(b)) - Number(fieldReportRequired(a));
+        if (rank) return rank;
+      }
+      return compareClients(a, b);
+    });
   const pages = Math.max(1, Math.ceil(filtered.length / LEAD_PAGE_SIZE));
   const page = Math.min(filters.page, pages);
   const slice = filtered.slice((page - 1) * LEAD_PAGE_SIZE, page * LEAD_PAGE_SIZE);

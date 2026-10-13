@@ -120,8 +120,14 @@ export async function POST(
   const now = new Date().toISOString().replace('T', ' ').replace('Z', '');
 
   await crmDb()
-    .prepare(`UPDATE leads SET field_assigned_to = ?, stage = 'field_dispatch', updated_at = ? WHERE id = ?`)
-    .bind(fieldUserId, now, id)
+    .prepare(`
+      UPDATE leads
+      SET field_assigned_to = ?, stage = 'field_dispatch', field_dispatched_at = ?,
+          field_report = NULL, field_report_at = NULL, field_report_alert_at = NULL,
+          updated_at = ?
+      WHERE id = ?
+    `)
+    .bind(fieldUserId, now, now, id)
     .run();
 
   await crmDb()

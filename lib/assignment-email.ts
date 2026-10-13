@@ -353,6 +353,17 @@ export type SheetBackfillMailInput = {
 };
 
 /** One admin note for the first import of a sheet source. Counts only — no per-client mail. */
+export function fieldReportOverdueEmail(input: {message: string; url: string}) {
+  const subject = 'تقرير ميداني متأخر';
+  const message = input.message.trim();
+  const text = [message, '', `رابط صفحة العميل: ${input.url}`].join('\n');
+  const html = wrapHtml(
+    subject,
+    `<p style="color:#111">${escapeHtml(message)}</p><p><a href="${escapeHtml(input.url)}" style="color:#3F1A44">فتح صفحة العميل</a></p><p style="color:#6b7280">${escapeHtml(input.url)}</p>`
+  );
+  return {subject, text, html};
+}
+
 export function sheetBackfillSummaryEmail(input: SheetBackfillMailInput) {
   const label = input.label.trim() || 'نموذج الإعلانات';
   const subject = `ملخص أول مزامنة — ${input.inserted} جدد، ${input.duplicates} موجودون`;

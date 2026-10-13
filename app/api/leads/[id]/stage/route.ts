@@ -3,6 +3,7 @@ import {NextResponse} from 'next/server';
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
 import {stageWriteAllowed} from '@/lib/lead-stages';
+import {clipFieldReport, fieldReportText, visitDoneBlocked} from '@/lib/field-report';
 import {STAGE_NOTE_INSERT_SQL, STAGE_NOTE_MAX, clipName} from '@/lib/stage-notes';
 
 type LeadRow = {
@@ -12,6 +13,8 @@ type LeadRow = {
   field_assigned_to: string | null;
   created_by: string | null;
   stage: string;
+  field_report: string | null;
+  field_dispatched_at: string | null;
 };
 
 function canAccess(user: {userId: string; role: string}, lead: LeadRow) {
@@ -47,7 +50,8 @@ export async function PATCH(
 
   const lead = await crmDb()
     .prepare(`
-      SELECT id, owner, assigned_to, field_assigned_to, created_by, stage
+      SELECT id, owner, assigned_to, field_assigned_to, created_by, stage,
+             field_report, field_dispatched_at
       FROM leads
       WHERE id = ?
       LIMIT 1
@@ -57,6 +61,11 @@ export async function PATCH(
 
   if (!lead) return NextResponse.json({error: 'Lead not found'}, {status: 404});
   if (!canAccess(user, lead)) return NextResponse.json({error: 'Forbidden'}, {status: 403});
+
+  const filedReport = user.role === 'field' ? clipFieldReport(note) : '';
+  if (visitDoneBlocked(lead, stage, filedReport)) {
+    return NextResponse.json({error: 'أدخل تقرير الزيارة قبل تعليم الزيارة كمكتملة.'}, {status: 400});
+  }
 
   const previousStage = lead.stage;
   const stageChanged = stage !== previousStage;
@@ -68,11 +77,16 @@ export async function PATCH(
   const byName = clipName(user.name || user.username || 'النظام') || 'النظام';
   const byUserId = clipName(user.userId);
   const activityId = randomUUID();
+  const saveReport = Boolean(filedReport) && !fieldReportText(lead.field_report) && stage === 'property_visited';
 
   if (stageChanged) {
     await crmDb()
-      .prepare(`UPDATE leads SET stage = ?, updated_at = ? WHERE id = ?`)
-      .bind(stage, at, id)
+      .prepare(
+        saveReport
+          ? `UPDATE leads SET stage = ?, updated_at = ?, field_report = ?, field_report_at = ? WHERE id = ?`
+          : `UPDATE leads SET stage = ?, updated_at = ? WHERE id = ?`
+      )
+      .bind(...(saveReport ? [stage, at, filedReport, at, id] : [stage, at, id]))
       .run();
 
     await crmDb()

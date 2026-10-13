@@ -5,7 +5,8 @@ import {notifyNewLeads, notifyReregistrationBatch, notifySheetBackfillSummaries,
 import {cronAuthorized} from './cron-auth';
 import {readSheetGrid} from './sheet-fetch.server';
 import {importSheetGrid, type SheetCreatedLead, type SheetImportResult, type SheetReregistration, type StoredSheetSource} from './sheet-sync';
-import {publicSyncError, sheetsSyncIntervalMs, type SheetMapping} from './sheet-sync-config';
+import {checkOverdueFieldReports} from './field-report-job.server';
+import {DEFAULT_SHEETS_SYNC_INTERVAL_MS, publicSyncError, sheetsSyncIntervalMs, type SheetMapping} from './sheet-sync-config';
 import {ApiError} from './secure-api';
 import {
   acquireSheetSyncLock,
@@ -375,22 +376,35 @@ export function syncAllSheets(): Promise<SheetSyncReport> {
   return inflight;
 }
 
+function runFieldReportCheck() {
+  void checkOverdueFieldReports().catch(error => {
+    console.error('field report check failed', publicSyncError(error));
+  });
+}
+
 export function startSheetSyncInterval() {
   const globalState = globalThis as typeof globalThis & {__sasSheetSync?: boolean; __sasSheetSyncAt?: number};
   const interval = sheetsSyncIntervalMs();
-  if (!interval) return;
   const tick = () => {
-    if (inflight) return;
+    runFieldReportCheck();
+    if (!interval || inflight) return;
     globalState.__sasSheetSyncAt = Date.now();
     void syncAllSheets().catch(error => {
       console.error('sheet sync interval failed', publicSyncError(error));
     });
   };
   if (globalState.__sasSheetSync) {
-    if (Date.now() - (globalState.__sasSheetSyncAt || 0) >= interval) tick();
+    if (interval && Date.now() - (globalState.__sasSheetSyncAt || 0) >= interval) tick();
     return;
   }
   globalState.__sasSheetSync = true;
+  if (!interval) {
+    const starter = setTimeout(runFieldReportCheck, 20_000);
+    const timer = setInterval(runFieldReportCheck, DEFAULT_SHEETS_SYNC_INTERVAL_MS);
+    starter.unref?.();
+    timer.unref?.();
+    return;
+  }
   globalState.__sasSheetSyncAt = Date.now();
   const starter = setTimeout(tick, 20_000);
   const timer = setInterval(tick, interval);
