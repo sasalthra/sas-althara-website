@@ -51,6 +51,10 @@ export default function UsersPanel({
     phone: opened?.phone ?? '',
   });
   const [contactSaving, setContactSaving] = useState(false);
+  const [passwordUser, setPasswordUser] = useState<CrmUser | null>(null);
+  const [passwordDraft, setPasswordDraft] = useState({password: '', confirm: ''});
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
 
   const [form, setForm] = useState({
     username: '',
@@ -153,6 +157,59 @@ export default function UsersPanel({
     });
     setError('');
     setSuccess('');
+  }
+
+  function openPassword(user: CrmUser) {
+    setPasswordUser(user);
+    setPasswordDraft({password: '', confirm: ''});
+    setPasswordError('');
+  }
+
+  async function savePassword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!passwordUser) return;
+
+    if (passwordDraft.password.length < 8 || passwordDraft.confirm.length < 8) {
+      setPasswordError('كلمة المرور يجب أن تكون 8 أحرف على الأقل');
+      return;
+    }
+    if (passwordDraft.password !== passwordDraft.confirm) {
+      setPasswordError('كلمتا المرور غير متطابقتين');
+      return;
+    }
+
+    setPasswordSaving(true);
+    setPasswordError('');
+    setError('');
+    setSuccess('');
+
+    try {
+      const response = await fetch('/api/crm-users/password', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          id: passwordUser.id,
+          password: passwordDraft.password,
+          confirm: passwordDraft.confirm,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'تعذر تغيير كلمة المرور');
+      }
+
+      setPasswordUser(null);
+      setPasswordDraft({password: '', confirm: ''});
+      setSuccess('تم تغيير كلمة المرور');
+    } catch (saveError) {
+      setPasswordError(
+        saveError instanceof Error
+          ? saveError.message
+          : 'تعذر تغيير كلمة المرور'
+      );
+    } finally {
+      setPasswordSaving(false);
+    }
   }
 
   async function saveContact(event: React.FormEvent<HTMLFormElement>) {
@@ -437,6 +494,9 @@ export default function UsersPanel({
                         <button type="button" className="crm-button" onClick={() => startEdit(user)}>
                           تعديل بيانات الموظف
                         </button>
+                        <button type="button" className="crm-button" onClick={() => openPassword(user)}>
+                          تغيير كلمة المرور
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -527,6 +587,81 @@ export default function UsersPanel({
                   className="rounded-lg border border-[#d1d5db] bg-white px-4 py-2 text-black"
                   onClick={() => setEditing(null)}
                   disabled={contactSaving}
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={passwordUser !== null}
+          onOpenChange={open => {
+            if (!open && !passwordSaving) {
+              setPasswordUser(null);
+              setPasswordError('');
+            }
+          }}
+        >
+          <DialogContent dir="rtl" className="border border-[#d1d5db] bg-white text-black sm:max-w-lg">
+            <DialogHeader className="text-right sm:text-right">
+              <DialogTitle className="text-black">تغيير كلمة المرور</DialogTitle>
+              <DialogDescription className="rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-sm text-black">
+                أدخل كلمة المرور الجديدة ثم أكدها. كلمة المرور الحالية لا تُعرض.
+                {passwordUser ? ` الموظف: ${passwordUser.name}.` : ''}
+              </DialogDescription>
+            </DialogHeader>
+            <form onSubmit={savePassword} className="space-y-3">
+              <label className="block text-sm font-medium text-black">
+                كلمة المرور الجديدة
+                <input
+                  required
+                  minLength={8}
+                  maxLength={100}
+                  type="password"
+                  autoComplete="new-password"
+                  aria-label="كلمة المرور الجديدة"
+                  value={passwordDraft.password}
+                  onChange={event => setPasswordDraft({...passwordDraft, password: event.target.value})}
+                  className={`${fieldClass} mt-1`}
+                  dir="ltr"
+                />
+              </label>
+              <label className="block text-sm font-medium text-black">
+                تأكيد كلمة المرور
+                <input
+                  required
+                  minLength={8}
+                  maxLength={100}
+                  type="password"
+                  autoComplete="new-password"
+                  aria-label="تأكيد كلمة المرور"
+                  value={passwordDraft.confirm}
+                  onChange={event => setPasswordDraft({...passwordDraft, confirm: event.target.value})}
+                  className={`${fieldClass} mt-1`}
+                  dir="ltr"
+                />
+              </label>
+              {passwordError ? (
+                <p className="text-sm text-red-600" role="alert">{passwordError}</p>
+              ) : null}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="submit"
+                  className="rounded-lg border border-[#3F1A44] bg-[#3F1A44] px-4 py-2 font-semibold text-white disabled:opacity-60"
+                  disabled={passwordSaving}
+                >
+                  {passwordSaving ? 'جارٍ الحفظ...' : 'حفظ كلمة المرور'}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-[#d1d5db] bg-white px-4 py-2 text-black"
+                  onClick={() => {
+                    setPasswordUser(null);
+                    setPasswordError('');
+                  }}
+                  disabled={passwordSaving}
                 >
                   إلغاء
                 </button>

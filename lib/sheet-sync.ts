@@ -22,7 +22,7 @@ import {
 } from './sheet-duplicate-cleanup';
 import {normalizeLeadPhone} from './phone';
 import {stageLabel} from './lead-stages';
-import {leadNeedsFieldDispatchStamp, rememberFirstFieldDispatch} from './lead-stamps';
+import {fieldDispatchWrite, rememberFieldDispatch} from './lead-stamps';
 import {asBinary} from './sql-collation';
 import {clipName, STAGE_NOTE_INSERT_SQL} from './stage-notes';
 
@@ -352,8 +352,9 @@ async function insertSheetLead(
       .bind(...values)
       .run();
   }
-  if (leadNeedsFieldDispatchStamp(lead.stage, '')) {
-    await rememberFirstFieldDispatch(db, lead.id, lead.now);
+  const createdDispatch = fieldDispatchWrite({nextStage: lead.stage});
+  if (createdDispatch.write) {
+    await rememberFieldDispatch(db, lead.id, lead.now, createdDispatch.latest);
   }
 }
 
@@ -482,8 +483,9 @@ export async function upgradeNewStage(
   } catch (error) {
     console.error('sheet stage note was not written', publicSyncError(error));
   }
-  if (leadNeedsFieldDispatchStamp(nextStage, '')) {
-    await rememberFirstFieldDispatch(db, leadId, now);
+  const dispatchWrite = fieldDispatchWrite({previousStage: 'new', nextStage});
+  if (dispatchWrite.write) {
+    await rememberFieldDispatch(db, leadId, now, dispatchWrite.latest);
   }
   return true;
 }

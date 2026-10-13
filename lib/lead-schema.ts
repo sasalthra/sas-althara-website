@@ -52,9 +52,11 @@
  * and field_report_alert_at. The report body is TEXT and is never a key.
  * leads.first_field_dispatch_at is the first time a lead entered تفويج للميداني
  * or was dispatched to a field employee. leads.assigned_at is the sales
- * assignment time. Both are VARCHAR(40), never keys. Each is backfilled once
- * from lead_activity (and the dispatch columns) and the pass is recorded in
- * crm_schema_meta so later requests do not scan history again.
+ * assignment time. Both are VARCHAR(40), never keys. Each is backfilled from
+ * lead_activity (and the dispatch columns). The first pass is recorded in
+ * crm_schema_meta. A later null refill still runs when that marker exists and
+ * only fills blank stamps, then records its own marker. It does not overwrite
+ * a stamp that was already saved.
  * crm_user_alerts keeps one in-app notice per user and dispatch; its primary
  * key and dedupe_key are VARCHAR/CHAR, not TEXT. Existing open dispatches are
  * backfilled once and the pass is recorded in crm_schema_meta.
@@ -1321,7 +1323,9 @@ async function ensureFieldReportSchema(executor: SqlExecutor) {
 }
 
 const ASSIGNED_AT_MIGRATION = 'assigned_at_backfill_v1';
+const ASSIGNED_AT_REFILL = 'assigned_at_null_v2';
 const FIRST_DISPATCH_MIGRATION = 'first_field_dispatch_at_v1';
+const FIRST_DISPATCH_REFILL = 'first_field_dispatch_at_null_v2';
 const ASSIGN_ACTIONS = ['assigned', 'assignment', 'reassigned', 'imported', 'created', 'updated'];
 const DISPATCH_ACTIONS = ['field_dispatched', 'stage_changed'];
 
@@ -1390,7 +1394,10 @@ function actionWhere(actions: readonly string[]) {
  */
 async function backfillAssignedAt(executor: SqlExecutor) {
   if (await columnMissing(executor, 'leads', 'assigned_at')) return;
-  if (await migrationApplied(executor, ASSIGNED_AT_MIGRATION)) return;
+  // v1 may already be recorded while assignments made after that deploy left
+  // assigned_at NULL. This refill still runs, writes only blank values, and
+  // records its own marker so a later boot does not scan history again.
+  if (await migrationApplied(executor, ASSIGNED_AT_REFILL)) return;
   const leads = rowsOf(await run(executor, 'SELECT id, assigned_to, assigned_at FROM leads'));
   const where = actionWhere(ASSIGN_ACTIONS);
   const activities = rowsOf(await run(
@@ -1427,7 +1434,10 @@ async function backfillAssignedAt(executor: SqlExecutor) {
       console.error('assigned_at backfill was not saved', error);
     }
   }
-  if (ok) await markMigration(executor, ASSIGNED_AT_MIGRATION);
+  if (ok) {
+    await markMigration(executor, ASSIGNED_AT_MIGRATION);
+    await markMigration(executor, ASSIGNED_AT_REFILL);
+  }
 }
 
 /**
@@ -1437,7 +1447,9 @@ async function backfillAssignedAt(executor: SqlExecutor) {
  */
 async function backfillFirstFieldDispatch(executor: SqlExecutor) {
   if (await columnMissing(executor, 'leads', 'first_field_dispatch_at')) return;
-  if (await migrationApplied(executor, FIRST_DISPATCH_MIGRATION)) return;
+  // v1 may already be recorded while leads dispatched after that deploy were
+  // left NULL. This refill still runs and only writes a blank stamp.
+  if (await migrationApplied(executor, FIRST_DISPATCH_REFILL)) return;
   let leads: Record<string, unknown>[] = [];
   try {
     leads = rowsOf(await run(
@@ -1492,7 +1504,10 @@ async function backfillFirstFieldDispatch(executor: SqlExecutor) {
       console.error('first_field_dispatch_at backfill was not saved', error);
     }
   }
-  if (ok) await markMigration(executor, FIRST_DISPATCH_MIGRATION);
+  if (ok) {
+    await markMigration(executor, FIRST_DISPATCH_MIGRATION);
+    await markMigration(executor, FIRST_DISPATCH_REFILL);
+  }
 }
 
 async function ensureAssignmentStamps(executor: SqlExecutor) {

@@ -1,4 +1,4 @@
-import {stageKeyOf} from './lead-cohorts';
+import {isEverFieldDispatchFilter} from './lead-cohorts';
 import {paramEq} from './sql-collation';
 
 type StampDb = {
@@ -17,7 +17,31 @@ function missingColumn(error: unknown) {
 
 /** A lead counted as ever dispatched: the stage itself, or a field employee. */
 export function leadNeedsFieldDispatchStamp(stage: unknown, fieldAssignedTo: unknown) {
-  return stageKeyOf(stage) === 'field_dispatch' || Boolean(String(fieldAssignedTo ?? '').trim());
+  return isEverFieldDispatchFilter(stage) || Boolean(String(fieldAssignedTo ?? '').trim());
+}
+
+/** True when this save moves the lead into تفويج للميداني from any other stage. */
+export function enteringFieldDispatch(previousStage: unknown, nextStage: unknown) {
+  return isEverFieldDispatchFilter(nextStage) && !isEverFieldDispatchFilter(previousStage);
+}
+
+/**
+ * Whether this save must record a dispatch.
+ * `latest` is the field-dispatch button, a stage change into تفويج للميداني,
+ * or a new field employee. A later note on the same stage does not move it.
+ */
+export function fieldDispatchWrite(input: {
+  previousStage?: unknown;
+  nextStage: unknown;
+  previousField?: unknown;
+  nextField?: unknown;
+}) {
+  const entering = enteringFieldDispatch(input.previousStage, input.nextStage);
+  const nextField = String(input.nextField ?? '').trim();
+  const previousField = String(input.previousField ?? '').trim();
+  const fieldChanged = Boolean(nextField) && nextField !== previousField;
+  const write = entering || fieldChanged || leadNeedsFieldDispatchStamp(input.nextStage, nextField);
+  return {write, latest: entering || fieldChanged};
 }
 
 /** Overwrite the sales assignment time. Call only when the assignee changes. */
@@ -48,4 +72,21 @@ export async function rememberFirstFieldDispatch(db: StampDb, id: string, at: st
     if (missingColumn(error)) return;
     throw error;
   }
+}
+
+/** Overwrite the latest dispatch time. The first-dispatch stamp stays. */
+export async function rememberLatestFieldDispatch(db: StampDb, id: string, at: string) {
+  if (!id || !at) return;
+  try {
+    await db.prepare(`UPDATE leads SET field_dispatched_at = ? WHERE ${paramEq('id')}`).bind(at, id).run();
+  } catch (error) {
+    if (missingColumn(error)) return;
+    throw error;
+  }
+}
+
+/** Record a dispatch now. The first time is kept; the latest time moves when asked. */
+export async function rememberFieldDispatch(db: StampDb, id: string, at: string, latest = false) {
+  await rememberFirstFieldDispatch(db, id, at);
+  if (latest) await rememberLatestFieldDispatch(db, id, at);
 }

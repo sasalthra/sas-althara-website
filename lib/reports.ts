@@ -1,17 +1,18 @@
 import {reportCatalog,type ReportColumn,type ReportResult,type ReportRow,type ReportId} from './report-catalog';
 import {retiredStageMap, stageLabel, stageMatchKeys, stagePipelineIndex} from './lead-stages';
-import {COHORT_DEFINITIONS,countAssignmentEvents,completionRate,conversionRate,hasScheduledFollowUp,instantInRiyadhRange,isClosedStage,isContactedStage,isInactiveLead,isInterestedStage,isNotInterestedStage,isOverdueFollowUp,isPastFreshStage,isSignedStage,isUnassignedNew,isUnassignedNewWaiting,leadMatchesReportFilters,matchUser,normalizeSource,orderedStages,stageKeyOf,type AssignmentEvent,type DirectoryUser} from './lead-cohorts';
-import {formatRiyadhDateTime} from './lead-dates';
+import {COHORT_DEFINITIONS,countAssignmentEvents,completionRate,conversionRate,fieldDispatchMoment,hasScheduledFollowUp,instantInRiyadhRange,isClosedStage,isContactedStage,isEverFieldDispatchFilter,isInactiveLead,isInterestedStage,isNotInterestedStage,isOverdueFollowUp,isPastFreshStage,isSignedStage,isUnassignedNew,isUnassignedNewWaiting,leadMatchesReportFilters,matchUser,normalizeSource,orderedStages,stageKeyOf,type AssignmentEvent,type DirectoryUser} from './lead-cohorts';
+import {formatRiyadhDateTime, riyadhDayKey} from './lead-dates';
 import {commissionTotal} from './transactions';
 import {asBinary,binEq,binJoin} from './sql-collation';
 export {leadMatchesReportFilters};
-export {instantInRiyadhRange, isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort} from './lead-cohorts';
+export {fieldDispatchMoment, instantInRiyadhRange, isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort} from './lead-cohorts';
 export class ReportError extends Error {constructor(public status:number,message:string){super(message);}}
 type Actor={userId:string;role:string};
 type Database={prepare(sql:string):{bind(...args:(string|number|null)[]):{all():Promise<{results:Record<string,unknown>[]}>}}};
 export type ReportFilters={from:string;to:string;employee:string;source:string;stage:string;funding:string;page:number;pageSize:number};
 const REPORT_QUERY_KEYS=new Set(['module','format','from','to','employee','source','stage','funding','page','pageSize']);
-function riyadhDay(now:Date){return new Date(now.getTime()+3*60*60*1000).toISOString().slice(0,10);}
+/** Asia/Riyadh calendar day. The offset is fixed UTC+3 and is computed in JS, never CONVERT_TZ. */
+function riyadhDay(now:Date){return riyadhDayKey(now);}
 export function parseReportFilters(query:URLSearchParams,now=new Date()):ReportFilters {
  for(const key of query.keys())if(!REPORT_QUERY_KEYS.has(key))throw new ReportError(400,'مرشح غير معروف');
  for(const key of REPORT_QUERY_KEYS)if(query.getAll(key).length>1)throw new ReportError(400,'لا يسمح بتكرار المرشح');
@@ -35,6 +36,17 @@ function dateWindow(column:string,from:string,to:string){
  if(local){const expr=asBinary(`SUBSTR(${column},1,10)`);return {sql:`${expr} >= ${asBinary('?')} AND ${expr} < ${asBinary('?')}`,args:[from,nextCalendarDay(to)]};}
  const expr=timestampExpr(column);
  return {sql:`${expr} >= ${asBinary('?')} AND ${expr} < ${asBinary('?')}`,args:[riyadhMidnightUtc(from),riyadhMidnightUtc(nextCalendarDay(to))]};
+}
+/**
+ * تفويج للميداني uses the latest dispatch time when one is stored, otherwise
+ * the first dispatch. Both bounds are Riyadh midnights shifted in JS.
+ */
+function dispatchDateWindow(from:string,to:string){
+ const latest=dateWindow('l.field_dispatched_at',from,to);
+ const first=dateWindow('l.first_field_dispatch_at',from,to);
+ const hasLatest=`l.field_dispatched_at IS NOT NULL AND l.field_dispatched_at <> ${asBinary("''")}`;
+ const noLatest=`(l.field_dispatched_at IS NULL OR l.field_dispatched_at = ${asBinary("''")})`;
+ return {sql:`((${hasLatest} AND ${latest.sql}) OR (${noLatest} AND ${first.sql}))`,args:[...latest.args,...first.args]};
 }
 const leadFrom=`leads l LEFT JOIN crm_users s ON ${binJoin('s.id','l.assigned_to')} LEFT JOIN crm_users f ON ${binJoin('f.id','l.field_assigned_to')}`;
 const leadFields='l.id,l.name,l.property_id,l.property_other,l.source,l.stage,l.follow_up,l.created_at,l.updated_at,s.name AS sales,f.name AS field,l.assigned_to AS assigned_raw,l.field_assigned_to AS field_raw';
@@ -104,7 +116,11 @@ function where(spec:Spec,user:Actor,f:ReportFilters,employeeTokens:string[]=[]){
   else if(f.employee){const tokens=employeeTokens.length?employeeTokens:[f.employee];const match=matchAny([spec.employee],tokens);add(match.sql,...match.args);}
  }
  // Date-only fields are already local work/calendar days. UTC stamps are compared as bytes to a Riyadh window shifted in JS, so CONVERT_TZ never mixes coercible collations.
- if(spec.date){const window=dateWindow(spec.date,f.from,f.to);add(window.sql,...window.args);}
+ // تفويج للميداني dates the dispatch, not lead registration.
+ if(spec.date){
+  const window=spec.date==='l.created_at'&&isEverFieldDispatchFilter(f.stage)?dispatchDateWindow(f.from,f.to):dateWindow(spec.date,f.from,f.to);
+  add(window.sql,...window.args);
+ }
  return {sql:clauses.length?' WHERE '+clauses.join(' AND '):'',args};
 }
 const tokenCache=new WeakMap<object,Map<string,Promise<string[]>>>();
@@ -526,7 +542,7 @@ export async function readEmployeeAssignmentReport(db:Database,user:Actor,filter
  }
  if(results.length>10000)throw new ReportError(422,'أكثر من 10000 عميل مسند في الفترة؛ ضيق الفترة. لم يعرض مجموع جزئي');
  const kept=results.filter(row=>{
-  const at=role==='sales'?row.assigned_at:String(row.field_dispatched_at??'').trim()||String(row.first_field_dispatch_at??'').trim();
+  const at=role==='sales'?row.assigned_at:fieldDispatchMoment(row);
   return instantInRiyadhRange(at,filters.from,filters.to);
  });
  return {...named,status:'ok',role,basis,total:kept.length,byStage:stageBreakdown(kept)};

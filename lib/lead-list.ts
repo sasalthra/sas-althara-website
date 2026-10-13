@@ -1,5 +1,5 @@
 import properties from '@/data/properties.json';
-import {isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort, leadMatchesReportFilters} from './lead-cohorts';
+import {fieldDispatchMoment, instantInRiyadhRange, isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort, leadMatchesReportFilters} from './lead-cohorts';
 import {riyadhDayKey} from './lead-dates';
 import {compareClients, isNewUnassignedLead} from './lead-featured';
 import {displayLeadPhone, leadPhoneMatchesQuery} from './phone';
@@ -244,9 +244,12 @@ export function leadMatchesClientFilters(
   // The flag is on the lead row, so paging does not join lead_activity.
   const cohort = filters.assignRole === 'sales' || filters.assignRole === 'field';
   const everDispatch = !filters.stageNow && !cohort && isEverFieldDispatchFilter(filters.stage);
+  // تفويج للميداني plus a period uses the dispatch time, not created_at.
+  // Assignment cohorts keep their own assignFrom/assignTo window.
+  const dispatchPeriod = !cohort && isEverFieldDispatchFilter(filters.stage) && Boolean(filters.from || filters.to);
   if (!leadMatchesReportFilters(lead, {
-    from: filters.from,
-    to: filters.to,
+    from: dispatchPeriod ? '' : filters.from,
+    to: dispatchPeriod ? '' : filters.to,
     stage: everDispatch ? '' : filters.stage,
     source: filters.source,
     sourceExact: filters.sourceExact,
@@ -260,6 +263,7 @@ export function leadMatchesClientFilters(
     nowMs,
   })) return false;
   if (everDispatch && !leadEverFieldDispatched(lead)) return false;
+  if (dispatchPeriod && !instantInRiyadhRange(fieldDispatchMoment(lead), filters.from, filters.to)) return false;
   if (cohort && !leadMatchesAssignmentCohort(lead, {
     role: filters.assignRole,
     from: filters.assignFrom,
