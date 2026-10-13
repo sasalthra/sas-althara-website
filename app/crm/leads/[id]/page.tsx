@@ -21,6 +21,7 @@ import NewLeadBadge from '@/components/new-lead-badge';
 import {fieldReportRequired, fieldReportText} from '@/lib/field-report';
 import {displayStage, editableStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import TransactionsPanel from '@/app/crm/transactions-panel';
+import {canSeeLeadFinance} from '@/lib/transactions';
 import {displayLeadPhone} from '@/lib/phone';
 import {safeCrmReturn} from '@/lib/report-return';
 
@@ -405,6 +406,9 @@ export default function LeadDetailsPage() {
   const [role, setRole] =
     useState<CrmRole>('sales');
 
+  const [financeRole, setFinanceRole] =
+    useState<CrmRole | null>(null);
+
   const [userId, setUserId] =
     useState('');
 
@@ -558,6 +562,10 @@ export default function LeadDetailsPage() {
             crmSession.crmRole
           );
         }
+
+        setFinanceRole(
+          crmSession?.crmRole ?? null
+        );
 
         if (
           crmSession?.crmUserId
@@ -883,6 +891,13 @@ export default function LeadDetailsPage() {
 
   const stageNoteGroups = groupStageNotes(stageNotes);
   const currentStageKey = displayStage(lead.stage);
+  const showClientFinance = canSeeLeadFinance({
+    role: financeRole || '',
+    stage: lead.stage,
+    userId,
+    assignedTo: lead.assigned_to,
+    fieldAssignedTo: lead.field_assigned_to,
+  });
   const latestDispatch = activities.find(
     item => item.action === 'field_dispatched'
   );
@@ -963,7 +978,14 @@ export default function LeadDetailsPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {(role === 'admin' || role === 'accounts' || role === 'sales') && <a href={`/crm?tab=transactions&lead=${encodeURIComponent(lead.id)}`} className="rounded-xl border border-[#3F1A44]/20 px-4 py-2.5 text-sm font-semibold text-[#3F1A44]">معاملات العميل والمالية</a>}
+              {showClientFinance && (
+                <a
+                  href={financeRole === 'sales' ? '#client-finance' : `/crm?tab=transactions&lead=${encodeURIComponent(lead.id)}`}
+                  className="rounded-xl border border-[#3F1A44]/20 px-4 py-2.5 text-sm font-semibold text-[#3F1A44]"
+                >
+                  معاملات العميل والمالية
+                </a>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -1124,13 +1146,17 @@ export default function LeadDetailsPage() {
           </div>
         </section>
 
-        {(role === 'admin' || role === 'accounts' || role === 'sales') && (
-          <TransactionsPanel
-            key={`${lead.id}-${currentStageKey}`}
-            initialLeadId={lead.id}
-            highlightDebt={currentStageKey === 'debt_payoff'}
-            role={role}
-          />
+        {showClientFinance && (
+          <div id="client-finance">
+            <TransactionsPanel
+              key={`${lead.id}-${currentStageKey}`}
+              initialLeadId={lead.id}
+              highlightDebt={currentStageKey === 'debt_payoff'}
+              leadLocked={financeRole === 'sales'}
+              lockedClientLabel={lead.name}
+              role={financeRole || role}
+            />
+          </div>
         )}
 
         <section className="grid gap-6 xl:grid-cols-[1.35fr_.65fr]">

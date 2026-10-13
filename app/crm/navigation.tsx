@@ -75,7 +75,7 @@ export const workspaceItems = [
     id: "transactions",
     label: "المعاملات والمالية",
     group: "إدارة الأعمال",
-    roles: ["admin", "accounts", "sales"],
+    roles: ["admin", "accounts"],
   },
   {
     id: "hr",

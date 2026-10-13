@@ -96,11 +96,15 @@ export default function TransactionsPanel({
   leads = [],
   initialLeadId = '',
   highlightDebt = false,
+  leadLocked = false,
+  lockedClientLabel = '',
   role = 'admin',
 }: {
   leads?: Lead[];
   initialLeadId?: string;
   highlightDebt?: boolean;
+  leadLocked?: boolean;
+  lockedClientLabel?: string;
   role?: string;
 }){
  const [options, setOptions] = useState<Lead[]>(leads);
@@ -120,6 +124,7 @@ export default function TransactionsPanel({
  const opened = useRef(false);
 
  useEffect(() => {
+  if (leadLocked) return;
   const controller = new AbortController();
   fetch('/api/leads?picklist=1', {cache: 'no-store', signal: controller.signal})
     .then(async response => {
@@ -130,7 +135,7 @@ export default function TransactionsPanel({
     })
     .catch(() => {});
   return () => controller.abort();
- }, []);
+ }, [leadLocked]);
 
  async function load(){
   setBusy(true);
@@ -158,7 +163,10 @@ export default function TransactionsPanel({
   }
  }
 
- useEffect(() => { void load(); }, [initialLeadId]);
+ useEffect(() => {
+  if (leadLocked && !initialLeadId) return;
+  void load();
+ }, [initialLeadId, leadLocked]);
 
  function openRow(row: RecordRow) {
   setId(row.id);
@@ -192,7 +200,7 @@ export default function TransactionsPanel({
     const response = await fetch('/api/transactions',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({id:id||crypto.randomUUID(), version, confirmed:true, decision, data:form}),
+      body:JSON.stringify({id:id||crypto.randomUUID(), version, confirmed:true, decision, data: leadLocked && initialLeadId ? {...form, leadId: initialLeadId} : form}),
     });
     const payload = await response.json();
     if(!response.ok) throw Error(payload.error);
@@ -230,6 +238,10 @@ export default function TransactionsPanel({
  const selectedProperty = propertyTitle(form.linkedPropertyId) || (form.linkedPropertyId.startsWith('other:') ? options.find(item => `other:${item.id}` === form.linkedPropertyId)?.property_other : '') || form.linkedPropertyId;
  const reviewKey: ReviewStatus = reviewStatus === 'approved' || reviewStatus === 'rejected' ? reviewStatus : 'pending';
  const visibleFields = transactionFields.filter(field => !hiddenTransactionKeys.has(field.key) && !specialTransactionKeys.has(field.key));
+
+ if (leadLocked && !initialLeadId) {
+  return <section dir="rtl" className="panel"><p>لا تملك الصلاحية</p></section>;
+ }
 
  return <section dir="rtl" className="panel space-y-5">
   <h2>{highlightDebt ? 'سداد مديونية' : 'المعاملات والمالية'}</h2>
@@ -270,7 +282,7 @@ export default function TransactionsPanel({
   </Table>
   <button type="button" onClick={startNew}>معاملة جديدة</button>
   <form onSubmit={event => void save(event)} className="fields">
-    <SearchPicker
+    {leadLocked ? <label>العميل<input readOnly value={lockedClientLabel || 'هذا العميل'} /></label> : <SearchPicker
       label="العميل"
       placeholder="ابحث بالاسم أو الجوال"
       selected={selectedClient}
@@ -287,7 +299,7 @@ export default function TransactionsPanel({
         }));
         setConfirmed(false);
       }}
-    />
+    />}
     <SearchPicker
       label="العقار المرتبط"
       placeholder="ابحث بالاسم أو الجوال أو الحي"

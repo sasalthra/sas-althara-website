@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {canonicalStage, displayStage} from './lead-stages';
 // Labels preserve the agreed workbook fields. Values are decimal strings, not floating-point money.
 // Hidden keys stay in the payload so older rows round-trip. They are not inputs.
 export const transactionFields = [
@@ -141,4 +142,64 @@ export function canEditTransactions(role: string) {
 
 export function canReviewTransactions(role: string) {
   return role === 'admin' || role === 'accounts';
+}
+
+/** Admin and accounts keep the full finance module. Everyone else is lead-scoped. */
+export function financeFullAccess(role: string) {
+  return role === 'admin' || role === 'accounts';
+}
+
+/**
+ * Current lead stage is سداد مديونية.
+ * The stored key and the Arabic label both count. Folding happens in JS so a
+ * SQL comparison of the stage string cannot raise MySQL error 1267.
+ */
+export function isDebtPayoffStage(stage: unknown): boolean {
+  const text = String(stage ?? '').trim();
+  if (!text) return false;
+  if (text === 'debt_payoff' || displayStage(text) === 'debt_payoff') return true;
+  return canonicalStage(text) === 'debt_payoff';
+}
+
+/** Sales assignee or field assignee. Compared in JS, not in SQL. */
+export function leadAssignedToUser(
+  lead: {assigned_to?: unknown; field_assigned_to?: unknown} | null | undefined,
+  userId: string,
+) {
+  const id = String(userId ?? '').trim();
+  if (!id || !lead) return false;
+  return String(lead.assigned_to ?? '').trim() === id || String(lead.field_assigned_to ?? '').trim() === id;
+}
+
+/**
+ * Non-admin, non-accounts users may use finance APIs only for a lead that is
+ * in سداد مديونية and assigned to them.
+ */
+export function canAccessLeadFinance(
+  role: string,
+  stage: unknown,
+  lead: {assigned_to?: unknown; field_assigned_to?: unknown} | null | undefined,
+  userId: string,
+) {
+  if (financeFullAccess(role)) return true;
+  return isDebtPayoffStage(stage) && leadAssignedToUser(lead, userId);
+}
+
+/**
+ * Client-finance control. Field staff never see it. Sales see it only on a
+ * lead currently in سداد مديونية that is assigned to them.
+ */
+export function canSeeLeadFinance(input: {
+  role: string;
+  stage: unknown;
+  userId?: string;
+  assignedTo?: unknown;
+  fieldAssignedTo?: unknown;
+}) {
+  if (financeFullAccess(input.role)) return true;
+  if (input.role !== 'sales') return false;
+  return canAccessLeadFinance(input.role, input.stage, {
+    assigned_to: input.assignedTo,
+    field_assigned_to: input.fieldAssignedTo,
+  }, input.userId || '');
 }
