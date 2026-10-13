@@ -107,7 +107,7 @@ async function notifySalesAssignment(
   });
 }
 
-export async function GET(req?: Request) {
+export async function GET(req: Request) {
   const user = await getCrmUser();
 
   if (!user) {

@@ -55,8 +55,9 @@ const apiBoundary={name:'test-boundaries',setup(b){
 await build({entryPoints:['app/api/leads/route.ts'],outfile:'test-output/api.cjs',bundle:true,platform:'node',format:'cjs',plugins:[googleInterop,apiBoundary]});
 await build({entryPoints:['app/api/leads/[id]/featured/route.ts'],outfile:'test-output/featured.cjs',bundle:true,platform:'node',format:'cjs',plugins:[googleInterop,apiBoundary]});
 const api=require('../test-output/api.cjs');
+const listReq=()=>new Request('https://internal-host/api/leads');
 async function leadRows(route=api){
-  const body=await (await route.GET()).json();
+  const body=await (await route.GET(listReq())).json();
   if(Array.isArray(body))return body;
   if(!body||!Array.isArray(body.leads))throw new Error('expected a lead page');
   return body.leads;
@@ -64,9 +65,9 @@ async function leadRows(route=api){
 const featuredApi=require('../test-output/featured.cjs');
 const property=JSON.parse(readFileSync('data/properties.json','utf8'))[0];
 const make=(v,origin='https://sas.test')=>new Request('https://internal-host/api/leads',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(v)});
-assert.equal((await api.GET()).status,401);
-globalThis.qaSession={user:{email:'other@gmail.com'},adminId:'google:other'};assert.equal((await api.GET()).status,401);
-globalThis.qaSession={user:{email:profile.email},adminId:'local_admin'};assert.equal((await api.GET()).status,401);
+assert.equal((await api.GET(listReq())).status,401);
+globalThis.qaSession={user:{email:'other@gmail.com'},adminId:'google:other'};assert.equal((await api.GET(listReq())).status,401);
+globalThis.qaSession={user:{email:profile.email},adminId:'local_admin'};assert.equal((await api.GET(listReq())).status,401);
 globalThis.qaSession={user:{email:profile.email},adminId:'google:test-admin',crmUserId:'google:test-admin',crmRole:'admin'};
 const v={id:crypto.randomUUID(),name:'عميل اختبار',phone:'+966500000000',propertyId:property.id,stage:'new',notes:"quote ' ; --",followUp:'2026-10-01'};
 assert.equal((await api.POST(make(v))).status,200);
@@ -184,7 +185,7 @@ await build({entryPoints:['app/api/leads/route.ts'],outfile:'test-output/api-nof
 await build({entryPoints:['app/api/leads/[id]/featured/route.ts'],outfile:'test-output/featured-nofeature.cjs',bundle:true,platform:'node',format:'cjs',plugins:[googleInterop,apiBoundary]});
 const apiBare=require('../test-output/api-nofeature.cjs');
 const featuredBare=require('../test-output/featured-nofeature.cjs');
-const bareResponse=await apiBare.GET();
+const bareResponse=await apiBare.GET(listReq());
 assert.equal(bareResponse.status,200,'clients list stays up when is_featured cannot be added');
 const bareBody=await bareResponse.json();
 const bareRows=Array.isArray(bareBody)?bareBody:bareBody.leads;
@@ -419,7 +420,7 @@ assert.equal(sqlite.prepare('SELECT field_assigned_to FROM leads WHERE id=?').ge
 assert.equal(JSON.parse(sqlite.prepare("SELECT details FROM lead_activity WHERE lead_id=? AND action='field_dispatched' AND details LIKE '%زيارة مساءً%'").get(v.id).details).fieldAssignedName,'خالد الميداني');
 console.log('PASS: admin can edit employee name, username, email and Saudi mobile; password, assignment and activity stay on the user id');
 console.log('PASS: field dispatch permissions, stage, activity, Arabic email, email failure, field notes and staff list');
-globalThis.qaFailDB=true;assert.equal((await api.GET()).status,503);
+globalThis.qaFailDB=true;assert.equal((await api.GET(listReq())).status,503);
 assert.equal((await api.POST(make({...v,id:crypto.randomUUID()}))).status,503);
 sqlite.close();
 console.log('PASS: featured flag permissions and sort; won cannot be saved; list survives a missing is_featured column');
