@@ -48,6 +48,11 @@
  * and an existing row for the same tab is left as the admin saved it. A failed create is
  * not cached, so the next read or write tries again. last_run_at, rows_read,
  * created, existing, skipped, and error_message are added the same way.
+ * Field dispatch stores leads.field_dispatched_at, field_report, field_report_at,
+ * and field_report_alert_at. The report body is TEXT and is never a key.
+ * crm_user_alerts keeps one in-app notice per user and dispatch; its primary
+ * key and dedupe_key are VARCHAR/CHAR, not TEXT. Existing open dispatches are
+ * backfilled once and the pass is recorded in crm_schema_meta.
  */
 
 import {createHash} from 'node:crypto';
@@ -1184,6 +1189,132 @@ async function ensureFinanceCommissions(executor: SqlExecutor) {
   await ensureColumn(executor, 'crm_transactions', 'client_commission', 'VARCHAR(40) NULL');
 }
 
+const FIELD_REPORT_MIGRATION = 'field_report_dispatch_v1';
+
+const USER_ALERTS_DDL = `CREATE TABLE IF NOT EXISTS crm_user_alerts (
+  id VARCHAR(36) NOT NULL PRIMARY KEY,
+  user_id VARCHAR(255) NOT NULL,
+  dedupe_key CHAR(64) NOT NULL UNIQUE,
+  kind VARCHAR(40) NOT NULL,
+  lead_id VARCHAR(64) NULL,
+  message VARCHAR(500) NOT NULL,
+  created_at VARCHAR(40) NOT NULL
+)`;
+
+function activityStamp(value: unknown) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().replace('T', ' ').replace('Z', '');
+  }
+  return String(value ?? '').trim();
+}
+
+function stampMillis(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return 0;
+  let normalized = trimmed;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) normalized = `${trimmed}T00:00:00.000Z`;
+  else if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(trimmed) && !/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed)) {
+    normalized = `${trimmed.replace(' ', 'T')}Z`;
+  }
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+}
+
+function activityNote(value: unknown) {
+  let parsed: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return '';
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return '';
+  const note = (parsed as {note?: unknown}).note;
+  return typeof note === 'string' ? note.trim().slice(0, 2000) : '';
+}
+
+/**
+ * One pass over existing تفويج rows. Matching is done in JS so mixed
+ * collations are not compared in SQL. A later process start sees the flag.
+ */
+async function backfillFieldDispatchReports(executor: SqlExecutor) {
+  if (await columnMissing(executor, 'leads', 'field_dispatched_at')) return;
+  if (await columnMissing(executor, 'leads', 'field_report')) return;
+  if (await migrationApplied(executor, FIELD_REPORT_MIGRATION)) return;
+  const leads = rowsOf(await run(
+    executor,
+    'SELECT id, stage, field_assigned_to, updated_at, field_dispatched_at FROM leads'
+  ));
+  const activities = rowsOf(await run(
+    executor,
+    `SELECT lead_id, action, details, created_at FROM lead_activity WHERE action = CAST(? AS BINARY) OR action = CAST(? AS BINARY)`,
+    ['field_dispatched', 'field_update']
+  ));
+  const byLead = new Map<string, Array<{at: string; action: string; note: string}>>();
+  for (const row of activities) {
+    const id = String(row.lead_id ?? '');
+    if (!id) continue;
+    const list = byLead.get(id) || [];
+    list.push({
+      at: activityStamp(row.created_at),
+      action: String(row.action ?? ''),
+      note: activityNote(row.details),
+    });
+    byLead.set(id, list);
+  }
+  let ok = true;
+  for (const lead of leads) {
+    const id = String(lead.id ?? '');
+    if (!id || String(lead.field_dispatched_at ?? '').trim()) continue;
+    if (!String(lead.field_assigned_to ?? '').trim()) continue;
+    const events = byLead.get(id) || [];
+    const dispatches = events
+      .filter(event => event.action === 'field_dispatched' && event.at)
+      .sort((a, b) => stampMillis(a.at) - stampMillis(b.at));
+    const stage = String(lead.stage ?? '');
+    const openDispatch = stage === 'field_dispatch' || stage === 'viewing' || stage === 'visit_qualified';
+    if (!dispatches.length && !openDispatch) continue;
+    const dispatchedAt = dispatches.length
+      ? dispatches[dispatches.length - 1].at
+      : activityStamp(lead.updated_at);
+    if (!dispatchedAt) continue;
+    const dispatchedMs = stampMillis(dispatchedAt);
+    const reports = events
+      .filter(event => event.action === 'field_update' && event.note && stampMillis(event.at) >= dispatchedMs)
+      .sort((a, b) => stampMillis(a.at) - stampMillis(b.at));
+    const report = reports.length ? reports[reports.length - 1] : null;
+    try {
+      await run(
+        executor,
+        `UPDATE leads SET field_dispatched_at = ?, field_report = ?, field_report_at = ? WHERE ${paramEq('id')}`,
+        [dispatchedAt, report?.note || null, report?.at || null, id]
+      );
+    } catch (error) {
+      ok = false;
+      console.error('field report backfill was not saved', error);
+    }
+  }
+  if (ok) await markMigration(executor, FIELD_REPORT_MIGRATION);
+}
+
+async function ensureFieldReportSchema(executor: SqlExecutor) {
+  await ensureColumn(executor, 'leads', 'field_dispatched_at', 'VARCHAR(40) NULL');
+  await ensureColumn(executor, 'leads', 'field_report', 'TEXT NULL');
+  await ensureColumn(executor, 'leads', 'field_report_at', 'VARCHAR(40) NULL');
+  await ensureColumn(executor, 'leads', 'field_report_alert_at', 'VARCHAR(40) NULL');
+  try {
+    await run(executor, USER_ALERTS_DDL);
+  } catch (error) {
+    recordSchemaIssue('alerts', USER_ALERTS_DDL, error);
+  }
+  try {
+    await backfillFieldDispatchReports(executor);
+  } catch (error) {
+    console.error('field report backfill failed', error);
+  }
+}
+
 async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
   await relaxSessionLocks(executor);
   try {
@@ -1227,6 +1358,11 @@ async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
     await ensureFinanceCommissions(executor);
   } catch (error) {
     console.error('crm_transactions commission columns were not added', error);
+  }
+  try {
+    await ensureFieldReportSchema(executor);
+  } catch (error) {
+    console.error('field report schema check failed', error);
   }
   let featured = false;
   const existing = await hasFeaturedColumn(executor);

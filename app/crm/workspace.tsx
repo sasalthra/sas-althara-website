@@ -43,6 +43,8 @@ import {
   type LeadListFilters,
 } from '@/lib/lead-list';
 import {displayLeadPhone} from '@/lib/phone';
+import {fieldReportRequired} from '@/lib/field-report';
+import UserAlerts from './user-alerts';
 
 import {
   Tabs,
@@ -177,6 +179,7 @@ export default function CRM({
     total: 0,
     followUps: 0,
     newUnassigned: 0,
+    reportRequired: 0,
     duplicatePhones: [],
   });
 
@@ -219,6 +222,8 @@ export default function CRM({
   const [duplicateOnly, setDuplicateOnly] = useState(false);
 
   const [newOnly, setNewOnly] = useState(false);
+
+  const [reportOnly, setReportOnly] = useState(false);
 
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
@@ -299,6 +304,7 @@ export default function CRM({
     scheduled: listScheduled,
     duplicateOnly: duplicateOnly && canReviewDuplicates,
     newOnly: role === 'admin' && newOnly,
+    reportRequired: role === 'field' && reportOnly,
     page,
     id: '',
     picklist: false,
@@ -361,8 +367,14 @@ export default function CRM({
         if (!listStage && stageFilter && displayStage(lead.stage) !== stageFilter) return false;
         return leadMatchesClientFilters(lead, filters, phones, todayKey, Date.now());
       })
-      .sort((a, b) => compareClients(a, b));
-  }, [serverMode, leads, localDuplicatePhones, listFilters, q, listStage, stageFilter, todayKey]);
+      .sort((a, b) => {
+        if (role === 'field') {
+          const rank = Number(fieldReportRequired(b)) - Number(fieldReportRequired(a));
+          if (rank) return rank;
+        }
+        return compareClients(a, b);
+      });
+  }, [serverMode, leads, localDuplicatePhones, listFilters, q, listStage, stageFilter, todayKey, role]);
 
   const followUps = serverMode ? counts.followUps : leads.filter(lead => followUpDue(lead, todayKey)).length;
   const newUnassignedCount = serverMode ? counts.newUnassigned : leads.filter(isNewUnassignedLead).length;
@@ -428,7 +440,8 @@ export default function CRM({
         {tab==='leads'&&<button className="primary" onClick={()=>{setEdit(undefined);setOpen(true);}}>+ إضافة عميل</button>}
       </header>
       <main className="crm-main" id="crm-main">
-        {tab==='leads'&&<div className="crm-summary"><button type="button" className="crm-summary-btn" data-active={leadView==='all'} onClick={()=>setLeadView('all')}>طلبات العملاء <strong>{loading?'—':scopeTotal}</strong></button><button type="button" className="crm-summary-btn" data-active={leadView==='followups'} onClick={()=>setLeadView('followups')}>تحتاج متابعة <strong>{loading?'—':followUps}</strong></button><span>العقارات <strong>{data.length}</strong></span></div>}
+        {(tab==='leads' || tab==='reports') && <UserAlerts />}
+        {tab==='leads'&&<div className="crm-summary"><button type="button" className="crm-summary-btn" data-active={leadView==='all'} onClick={()=>setLeadView('all')}>طلبات العملاء <strong>{loading?'—':scopeTotal}</strong></button><button type="button" className="crm-summary-btn" data-active={leadView==='followups'} onClick={()=>setLeadView('followups')}>تحتاج متابعة <strong>{loading?'—':followUps}</strong></button>{role==='field'&&<button type="button" className="crm-summary-btn" data-active={reportOnly} onClick={()=>setReportOnly(value=>!value)}>تقرير مطلوب <strong>{loading?'—':counts.reportRequired}</strong></button>}<span>العقارات <strong>{data.length}</strong></span></div>}
         <Tabs value={tab} dir="rtl">
           <TabsContent value="reports"><ReportsPanel role={role}/></TabsContent>
           {role === 'admin' && <TabsContent value="transactions"><TransactionsPanel key={query.get('lead')||'all'} initialLeadId={query.get('lead')||''}/></TabsContent>}
@@ -650,6 +663,9 @@ export default function CRM({
                             ) : null}
                             <a href={`/crm/leads/${lead.id}`} className="crm-lead-card-name">{lead.name}</a>
                             <NewLeadBadge lead={lead} />
+                            {role === 'field' && fieldReportRequired(lead) ? (
+                              <span className="inline-flex rounded-full bg-red-600 px-2 py-0.5 text-[11px] font-bold text-white">تقرير مطلوب</span>
+                            ) : null}
                           </div>
                           {featured ? <span className="mt-1 inline-flex rounded-full bg-[#3F1A44] px-1.5 py-0.5 text-[10px] font-semibold text-white">عميل مميز</span> : null}
                           <p dir="ltr">{displayLeadPhone(lead.phone)}</p>
@@ -741,7 +757,7 @@ export default function CRM({
                                 key={
                                   lead.id
                                 }
-                                className={`align-middle ${featured ? 'bg-[#f3eaf4]/60' : ''}`}
+                                className={`align-middle ${role === 'field' && fieldReportRequired(lead) ? 'bg-red-50' : featured ? 'bg-[#f3eaf4]/60' : ''}`}
                               >
                                 {bulkSelect ? (
                                   <TableCell className="px-2 text-center">
@@ -782,6 +798,9 @@ export default function CRM({
                                       {lead.name}
                                     </a>
                                     <NewLeadBadge lead={lead} />
+                                    {role === 'field' && fieldReportRequired(lead) ? (
+                                      <span className="inline-flex shrink-0 rounded-full bg-red-600 px-2 py-0.5 text-[11px] font-bold text-white">تقرير مطلوب</span>
+                                    ) : null}
                                   </div>
                                   {featured && (
                                     <span className="mt-1 inline-flex rounded-full bg-[#3F1A44] px-1.5 py-0.5 text-[10px] font-semibold text-white">

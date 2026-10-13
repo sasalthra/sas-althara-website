@@ -12,7 +12,9 @@ const DEFAULT_FROM = 'ساس الثراء <sasalthra.sa@gmail.com>';
 let transporter: nodemailer.Transporter | null | undefined;
 
 function fromAddress() {
-  return (process.env.SMTP_FROM || '').trim() || DEFAULT_FROM;
+  const configured = (process.env.SMTP_FROM || '').trim();
+  if (!configured || /info@/i.test(configured)) return DEFAULT_FROM;
+  return configured;
 }
 
 function smtpReady() {
