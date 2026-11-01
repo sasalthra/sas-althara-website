@@ -1,5 +1,5 @@
 'use client';
-import {useEffect,useState,type FormEvent,type MouseEvent,type ReactNode} from 'react';
+import {Fragment,useEffect,useRef,useState,type FormEvent,type MouseEvent,type ReactNode} from 'react';
 import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend,CartesianGrid,AreaChart,Area,LineChart,Line} from 'recharts';
 import {AlertCircle,BarChart3,Bell,Building2,Calendar,CheckCircle2,ClipboardList,Download,FileText,Filter,Home,Info,Layers,PieChart as PieIcon,TrendingUp,Users} from 'lucide-react';
 import {allowedReports,type ReportResult} from '@/lib/report-catalog';
@@ -8,6 +8,7 @@ import {isEverFieldDispatchFilter} from '@/lib/lead-cohorts';
 import {canonicalStage, displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import {riyadhDayKey} from '@/lib/lead-dates';
 import {activeReportPreset, reportPresetRange} from '@/lib/report-presets';
+import {employeeStageColumns, sumStageTable} from '@/lib/employee-stages';
 import type {DashboardEmployee} from '@/lib/reports';
 import {buildReportPath,leadReturnHref,rememberReportScroll,restoreReportScroll} from '@/lib/report-return';
 import {CrmLink,navigateCrm,useCrmQuery} from './navigation';
@@ -35,7 +36,7 @@ function numericOf(v:unknown):number{
 }
 function fmt(n:number|null|undefined):string{
  if(n===null||n===undefined||!Number.isFinite(n))return '—';
- return n.toLocaleString('ar-SA');
+ return Math.round(n).toLocaleString('en-US');
 }
 function fmtMaybe(n:number|null|undefined,known=true):string{
  if(!known)return 'غير متاح';
@@ -44,16 +45,18 @@ function fmtMaybe(n:number|null|undefined,known=true):string{
 function fmtHours(n:number|null|undefined,known:boolean):string{
  if(!known)return 'غير متاح';
  if(n==null||!Number.isFinite(n))return '—';
- return `${n.toLocaleString('ar-SA',{maximumFractionDigits:1})} س`;
+ return `${n.toLocaleString('en-US',{maximumFractionDigits:1})} س`;
 }
 function pctOf(part:number,whole:number):string{
  if(!whole)return '—';
  return `${Math.round((part/whole)*100)}%`;
 }
-type SortKey='name'|'assigned'|'contacted'|'interested'|'signed'|'notInterested'|'overdue'|'completion'|'dispatched'|'visitsDone'|'reportsSubmitted'|'reportsOverdue'|'deals'|'transactions'|'avgHoursToFirstContact';
+type SortKey='name'|'assigned'|'contacted'|'interested'|'signed'|'notInterested'|'overdue'|'completion'|'dispatched'|'visitsDone'|'reportsSubmitted'|'reportsOverdue'|'deals'|'transactions'|'avgHoursToFirstContact'|`stage:${string}`;
+const STAGE_COLUMNS=employeeStageColumns();
 function sortValue(row:DashboardEmployee,key:SortKey):number|string{
- const value=row[key];
  if(key==='name')return row.name;
+ if(key.startsWith('stage:'))return row.stages?.[key.slice(6)]||0;
+ const value=row[key as keyof DashboardEmployee];
  if(typeof value==='number')return value;
  return -1;
 }
@@ -144,7 +147,18 @@ function chunkRows<T>(items:T[],size:number){
 function PrintBars({title,items}:{title:string;items:{label:string;count:number}[]}){
  const rows=items.filter(item=>item.count>0);
  const max=Math.max(1,...rows.map(item=>item.count));
- return <div className="reports-print-card"><h2>{title}</h2>{rows.length?<ul className="reports-print-bars">{rows.map(item=><li key={item.label}><span className="reports-print-bar-label">{item.label}</span><span className="reports-print-bar-track"><span style={{width:`${Math.max(4,Math.round((item.count/max)*100))}%`}}/></span><b>{fmt(item.count)}</b></li>)}</ul>:<p>—</p>}</div>;
+ return <div className="pdf-card"><h2><span className="pdf-text">{title}</span></h2>{rows.length?<table className="pdf-bars"><tbody>{rows.map(item=><tr key={item.label}><td className="pdf-bar-name"><span className="pdf-text">{item.label}</span></td><td className="pdf-bar-track"><span className="pdf-bar-fill" style={{width:`${Math.max(item.count?4:0,Math.round((item.count/max)*100))}%`}}/></td><td className="pdf-bar-num"><span className="pdf-text">{fmt(item.count)}</span></td></tr>)}</tbody></table>:<p><span className="pdf-text">—</span></p>}</div>;
+}
+function PrintKpis({items}:{items:{label:string;value:string}[]}){
+ const cells=[...items];
+ while(cells.length%4)cells.push({label:'',value:''});
+ const rows=chunkRows(cells,4);
+ return <section className="pdf-block"><table className="pdf-kpis"><tbody>{rows.map((row,index)=><tr key={index}>{row.map((item,cell)=><td key={cell} className={item.label?'pdf-kpi':'pdf-kpi is-empty'}>{item.label?<><span className="pdf-kpi-label">{item.label}</span><b className="pdf-kpi-value">{item.value}</b></>:null}</td>)}</tr>)}</tbody></table></section>;
+}
+function PrintMatrix({title,rows,totalRows,columns,withTotal}:{title:string;rows:DashboardEmployee[];totalRows:DashboardEmployee[];columns:typeof STAGE_COLUMNS;withTotal:boolean}){
+ const footer=sumStageTable(totalRows.map(row=>({total:row.assigned,stages:row.stages||{}})));
+ const span=columns.length+(withTotal?3:1);
+ return <section className="pdf-block"><h2><span className="pdf-text">{title}</span></h2><table className="reports-print-table reports-print-matrix"><thead><tr><th><span className="pdf-text">الموظف</span></th>{columns.map(column=><th key={column.stage} title={column.label}><span className="pdf-text">{column.short}</span></th>)}{withTotal?<><th><span className="pdf-text">الإجمالي</span></th><th><span className="pdf-text">النسبة</span></th></>:null}</tr></thead><tbody>{rows.length?rows.map(row=><tr key={row.id}><th><span className="pdf-text">{row.name}</span></th>{columns.map(column=><td key={column.stage}><span className="pdf-text">{fmt(row.stages?.[column.stage]||0)}</span></td>)}{withTotal?<><td><span className="pdf-text">{fmt(row.assigned)}</span></td><td><span className="pdf-text">{pctOf(row.assigned,footer.total)}</span></td></>:null}</tr>):<tr><td colSpan={span}><span className="pdf-text">—</span></td></tr>}</tbody>{rows.length?<tfoot><tr><th><span className="pdf-text">الإجمالي</span></th>{columns.map(column=><td key={column.stage}><span className="pdf-text">{fmt(footer.stages[column.stage]||0)}</span></td>)}{withTotal?<><td><span className="pdf-text">{fmt(footer.total)}</span></td><td><span className="pdf-text">{footer.total?'100%':'—'}</span></td></>:null}</tr></tfoot>:null}</table></section>;
 }
 
 export default function ReportsPanel({role}:{role:string}){
@@ -153,6 +167,8 @@ export default function ReportsPanel({role}:{role:string}){
  const key=params.toString();
  const [state,setState]=useState<{key:string;data?:Payload;error?:string}>({key:''});
  const [retry,setRetry]=useState(0),[exportError,setExportError]=useState(''),[exporting,setExporting]=useState(false),[pdfBusy,setPdfBusy]=useState(false);
+ const [mailMenu,setMailMenu]=useState(false),[mailBusy,setMailBusy]=useState(false),[toast,setToast]=useState<{tone:'ok'|'error';text:string}|null>(null);
+ const mailMenuRef=useRef<HTMLDivElement>(null);
  const [draftFrom,setDraftFrom]=useState(''),[draftTo,setDraftTo]=useState('');
  const [sortKey,setSortKey]=useState<SortKey>('assigned'),[sortDir,setSortDir]=useState<'asc'|'desc'>('desc');
  useEffect(()=>{const controller=new AbortController();fetch('/api/reports?'+key,{signal:controller.signal,cache:'no-store'}).then(async r=>{const data=await r.json();if(!r.ok)throw Error(data.error||'تعذر تحميل التقرير');return data;}).then(data=>setState({key,data})).catch(e=>{if(!controller.signal.aborted)setState({key,error:e instanceof Error?e.message:'تعذر التحميل'});});return()=>controller.abort();},[key,retry]);
@@ -214,11 +230,49 @@ export default function ReportsPanel({role}:{role:string}){
   setPdfBusy(true);
   try{
    const {downloadReportPdf}=await import('@/lib/report-pdf');
-   await downloadReportPdf(root,from,to);
+   await downloadReportPdf(root,from,to,stateData?.generatedAt);
   }catch(error){
    console.error('pdf export failed',error);
    printFallback();
   }finally{setPdfBusy(false);}
+ }
+ useEffect(()=>{
+  if(!toast)return;
+  const timer=window.setTimeout(()=>setToast(null),7000);
+  return()=>window.clearTimeout(timer);
+ },[toast]);
+ useEffect(()=>{
+  if(!mailMenu)return;
+  const close=(event:globalThis.MouseEvent)=>{
+   const target=event.target;
+   if(target instanceof Node&&mailMenuRef.current?.contains(target))return;
+   setMailMenu(false);
+  };
+  document.addEventListener('mousedown',close);
+  return()=>document.removeEventListener('mousedown',close);
+ },[mailMenu]);
+ async function postWeekly(period:'week'|'month'|'filters',preview=false){
+  const from=draftFrom||appliedFrom||query.get('from')||'';
+  const to=draftTo||appliedTo||query.get('to')||'';
+  const popup=preview?window.open('','_blank'):null;
+  if(preview&&!popup){setToast({tone:'error',text:'اسمح بالنوافذ المنبثقة لعرض المعاينة'});return;}
+  setMailMenu(false);
+  setMailBusy(true);
+  try{
+   const response=await fetch('/api/reports/weekly',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({period,from,to,preview})});
+   const data=await response.json().catch(()=>({}));
+   if(!response.ok)throw Error(data.error||'تعذر إرسال التقرير');
+   if(preview&&popup){
+    popup.document.open();
+    popup.document.write(String(data.html||''));
+    popup.document.close();
+    return;
+   }
+   setToast({tone:'ok',text:String(data.message||'تم إرسال التقرير')});
+  }catch(error){
+   popup?.close();
+   setToast({tone:'error',text:error instanceof Error?error.message:'تعذر إرسال التقرير'});
+  }finally{setMailBusy(false);}
  }
  function toggleSort(key:SortKey){
   if(sortKey===key)setSortDir(dir=>dir==='asc'?'desc':'asc');
@@ -375,6 +429,8 @@ export default function ReportsPanel({role}:{role:string}){
  const stageLegend=(dash?.byStage||[]).filter(stage=>stage.count>0).map((stage,index)=>({...stage,color:CHART_COLORS[index%CHART_COLORS.length]}));
  const stageBars=(dash?.byStage||[]).map((stage,index)=>({...stage,color:CHART_COLORS[index%CHART_COLORS.length]}));
  const sortedEmployees=[...(dash?.employees||[])].sort((a,b)=>{
+  const az=a.assigned===0?1:0,bz=b.assigned===0?1:0;
+  if(az!==bz)return az-bz;
   const av=sortValue(a,sortKey),bv=sortValue(b,sortKey);
   const cmp=typeof av==='string'||typeof bv==='string'?String(av).localeCompare(String(bv),'ar'):Number(av)-Number(bv);
   return sortDir==='asc'?cmp:-cmp;
@@ -387,7 +443,7 @@ export default function ReportsPanel({role}:{role:string}){
  const alerts=(()=>{
   const rows:{tone:'info'|'warn'|'muted';tag:string;message:string;time:string;href:string}[]=[];
   const gen=stateData?.generatedAt?new Date(stateData.generatedAt):new Date();
-  const timeLabel=gen.toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Riyadh'});
+  const timeLabel=gen.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Asia/Riyadh'});
   if(dash)for(const alert of dash.alerts)rows.push({tone:alert.tone,tag:alert.tag,message:alert.message,time:timeLabel,href:alert.href?withReportReturn(alert.href):''});
   else if(stateData?.dashboardError)rows.push({tone:'warn',tag:'تنبيه',message:stateData.dashboardError,time:timeLabel,href:''});
   if(snap?.clients.status==='unavailable')rows.push({tone:'warn',tag:'تنبيه',message:`لقطة العملاء غير متاحة: ${snap.clients.error}`,time:timeLabel,href:''});
@@ -399,66 +455,79 @@ export default function ReportsPanel({role}:{role:string}){
  const printFrom=draftFrom||appliedFrom||urlFrom;
  const printTo=draftTo||appliedTo||urlTo;
  const filterLine=`الموظف: ${focus?.name||'الكل'} · المرحلة: ${appliedStage||'الكل'} · المصدر: ${appliedSource||'الكل'} · التمويل: ${appliedFunding||'الكل'}`;
- const employeeChunks=chunkRows(perfRows,12);
+ const activeEmployees=perfRows.filter(row=>row.assigned>0);
+ const employeeChunks=chunkRows(activeEmployees,8);
  const stagePrint=stageBars.filter(stage=>stage.count>0);
- const stageChunks=chunkRows(stagePrint,16);
+ const stageTotalCount=stagePrint.reduce((sum,row)=>sum+row.count,0);
+ const stageChunks=chunkRows(stagePrint,14);
  const printSheet=<div id="reports-print-sheet" className="reports-print-sheet" dir="rtl" aria-hidden="true">
   <header className="pdf-block reports-print-head">
    <img src="/brand/logo.png" alt="" width={64} height={64}/>
    <div>
-    <h1>تقرير الأداء - ساس الثراء</h1>
-    <p>الفترة: {printFrom||'…'} — {printTo||'…'}</p>
-    <p>{filterLine}</p>
+    <h1><span className="pdf-text">تقرير الأداء - ساس الثراء</span></h1>
+    <p><span className="pdf-text">الفترة: {printFrom||'…'} — {printTo||'…'}</span></p>
+    <p><span className="pdf-text">{filterLine}</span></p>
    </div>
   </header>
   {isOverview&&dash?(
    <>
-    <section className="pdf-block reports-print-kpis">
-     <div><b>{fmt(dash.total)}</b><span>العملاء</span></div>
-     <div><b>{fmt(dash.interested)}</b><span>مهتم</span></div>
-     <div><b>{fmt(dash.notInterested)}</b><span>غير مهتم</span></div>
-     <div><b>{fmt(dash.scheduled)}</b><span>متابعات</span></div>
-     <div><b>{fmt(dash.signed)}</b><span>صفقات</span></div>
-     <div><b>{fmt(employeesCount)}</b><span>الموظفون</span></div>
-     <div><b>{fmt(propsOk?.total)}</b><span>العقارات</span></div>
+    <PrintKpis items={[
+     {label:'العملاء',value:fmt(dash.total)},
+     {label:'مهتم',value:fmt(dash.interested)},
+     {label:'غير مهتم',value:fmt(dash.notInterested)},
+     {label:'متابعات',value:fmt(dash.scheduled)},
+     {label:'صفقات',value:fmt(dash.signed)},
+     {label:'الموظفون',value:fmt(employeesCount)},
+     {label:'العقارات',value:fmt(propsOk?.total)},
+    ]}/>
+    <section className="pdf-block">
+     <table className="pdf-split"><tbody><tr>
+      <td><PrintBars title="المراحل" items={stageBars.map(stage=>({label:stage.label,count:stage.count}))}/></td>
+      <td><PrintBars title="المصادر" items={(dash.sources||[]).map(source=>({label:source.label,count:source.total}))}/></td>
+     </tr></tbody></table>
     </section>
-    <section className="pdf-block reports-print-grid">
-     <PrintBars title="المراحل" items={stageBars.map(stage=>({label:stage.label,count:stage.count}))}/>
-     <PrintBars title="المصادر" items={(dash.sources||[]).map(source=>({label:source.label,count:source.total}))}/>
+    <section className="pdf-block">
+     <table className="pdf-split"><tbody><tr>
+      <td><PrintBars title="الموظفون" items={activeEmployees.slice(0,8).map(row=>({label:row.name,count:row.assigned}))}/></td>
+      <td><PrintBars title="العملاء" items={leadTrend.map(point=>({label:point.label,count:point.count}))}/></td>
+     </tr></tbody></table>
     </section>
-    <section className="pdf-block reports-print-grid">
-     <PrintBars title="الموظفون" items={perfRows.filter(row=>row.assigned>0).slice(0,8).map(row=>({label:row.name,count:row.assigned}))}/>
-     <PrintBars title="العملاء" items={leadTrend.map(point=>({label:point.label,count:point.count}))}/>
+    {employeeChunks.map((rows,index)=>{
+     const part=employeeChunks.length>1?` ${index+1}`:'';
+     const lead=STAGE_COLUMNS.slice(0,10);
+     const rest=STAGE_COLUMNS.slice(10);
+     return <Fragment key={`emp-${index}`}>
+      <PrintMatrix title={`الموظفون${part}`} rows={rows} totalRows={activeEmployees} columns={lead} withTotal={false}/>
+      <PrintMatrix title={`الموظفون${part} — تتمة المراحل`} rows={rows} totalRows={activeEmployees} columns={rest} withTotal/>
+     </Fragment>;
+    })}
+    <section className="pdf-block">
+     <h2><span className="pdf-text">نشاط الموظفين</span></h2>
+     <table className="reports-print-table">
+      <thead><tr><th><span className="pdf-text">الموظف</span></th><th><span className="pdf-text">زيارات</span></th><th><span className="pdf-text">تقارير</span></th><th><span className="pdf-text">متأخرة</span></th><th><span className="pdf-text">صفقات</span></th><th><span className="pdf-text">معاملات</span></th><th><span className="pdf-text">متابعات</span></th><th><span className="pdf-text">الإنجاز</span></th></tr></thead>
+      <tbody>{activeEmployees.length?activeEmployees.map(row=><tr key={row.id}><th><span className="pdf-text">{row.name}</span></th><td><span className="pdf-text">{fmt(row.visitsDone)}</span></td><td><span className="pdf-text">{fmtMaybe(row.reportsSubmitted,Boolean(dash.reportsKnown))}</span></td><td><span className="pdf-text">{fmtMaybe(row.reportsOverdue,Boolean(dash.reportsKnown))}</span></td><td><span className="pdf-text">{fmt(row.deals)}</span></td><td><span className="pdf-text">{fmtMaybe(row.transactions,Boolean(dash.transactionsKnown))}</span></td><td><span className="pdf-text">{fmt(row.overdue)}</span></td><td><span className="pdf-text">{row.completion==null?'—':`${row.completion}%`}</span></td></tr>):<tr><td colSpan={8}><span className="pdf-text">—</span></td></tr>}</tbody>
+     </table>
     </section>
-    {employeeChunks.map((rows,index)=>(
-     <section className="pdf-block" key={`emp-${index}`}>
-      <h2>الموظفون{employeeChunks.length>1?` ${index+1}`:''}</h2>
-      <table className="reports-print-table">
-       <thead><tr><th>الموظف</th><th>العملاء</th><th>تواصل</th><th>مهتم</th><th>غير مهتم</th><th>تفويج</th><th>زيارات</th><th>تقارير</th><th>صفقات</th></tr></thead>
-       <tbody>{rows.length?rows.map(row=><tr key={row.id}><th>{row.name}</th><td>{fmt(row.assigned)}</td><td>{fmt(row.contacted)}</td><td>{fmt(row.interested)}</td><td>{fmt(row.notInterested)}</td><td>{fmt(row.dispatched)}</td><td>{fmt(row.visitsDone)}</td><td>{fmtMaybe(row.reportsSubmitted,Boolean(dash.reportsKnown))}</td><td>{fmt(row.deals)}</td></tr>):<tr><td colSpan={9}>—</td></tr>}</tbody>
-      </table>
-     </section>
-    ))}
     {stageChunks.map((rows,index)=>(
      <section className="pdf-block" key={`stage-${index}`}>
-      <h2>المراحل{stageChunks.length>1?` ${index+1}`:''}</h2>
+      <h2><span className="pdf-text">المراحل{stageChunks.length>1?` ${index+1}`:''}</span></h2>
       <table className="reports-print-table">
-       <thead><tr><th>المرحلة</th><th>العدد</th><th>النسبة</th></tr></thead>
-       <tbody>{rows.length?rows.map(row=><tr key={row.stage}><th>{row.label}</th><td>{fmt(row.count)}</td><td>{row.pct}%</td></tr>):<tr><td colSpan={3}>—</td></tr>}</tbody>
+       <thead><tr><th><span className="pdf-text">المرحلة</span></th><th><span className="pdf-text">العدد</span></th><th><span className="pdf-text">النسبة</span></th></tr></thead>
+       <tbody>{rows.length?rows.map(row=><tr key={row.stage}><th><span className="pdf-text">{row.label}</span></th><td><span className="pdf-text">{fmt(row.count)}</span></td><td><span className="pdf-text">{row.pct}%</span></td></tr>):<tr><td colSpan={3}><span className="pdf-text">—</span></td></tr>}</tbody>
+       {index===stageChunks.length-1&&rows.length?<tfoot><tr><th><span className="pdf-text">الإجمالي</span></th><td><span className="pdf-text">{fmt(stageTotalCount)}</span></td><td><span className="pdf-text">{stageTotalCount?'100%':'—'}</span></td></tr></tfoot>:null}
       </table>
      </section>
     ))}
    </>
   ):report?(
    <>
-    <section className="pdf-block reports-print-kpis">
-     <div><b>{fmt(report.total)}</b><span>السجلات</span></div>
-     {report.metrics.slice(0,5).map((metric,index)=><div key={index}><b>{metric.value??'—'}</b><span>{metric.label}</span></div>)}
-    </section>
+    <PrintKpis items={[{label:'السجلات',value:fmt(report.total)},...report.metrics.slice(0,7).map(metric=>({label:metric.label,value:String(metric.value??'—')}))]}/>
     {(report.groups.stage?.length||report.groups.source?.length)?(
-     <section className="pdf-block reports-print-grid">
-      {report.groups.stage?.length?<PrintBars title="المراحل" items={report.groups.stage.map(group=>({label:group.label,count:group.count}))}/>:null}
-      {report.groups.source?.length?<PrintBars title="المصادر" items={report.groups.source.map(group=>({label:group.label,count:group.count}))}/>:null}
+     <section className="pdf-block">
+      <table className="pdf-split"><tbody><tr>
+       <td>{report.groups.stage?.length?<PrintBars title="المراحل" items={report.groups.stage.map(group=>({label:group.label,count:group.count}))}/>:null}</td>
+       <td>{report.groups.source?.length?<PrintBars title="المصادر" items={report.groups.source.map(group=>({label:group.label,count:group.count}))}/>:null}</td>
+      </tr></tbody></table>
      </section>
     ):null}
    </>
@@ -466,6 +535,7 @@ export default function ReportsPanel({role}:{role:string}){
  </div>;
 
  return <section className="reports-center reports-dash" aria-label="مركز التقارير">
+  {toast?<div className="reports-toast" data-tone={toast.tone} role={toast.tone==='error'?'alert':'status'}>{toast.text}</div>:null}
   {printSheet}
   <div className="reports-screen">
   <div className="report-heading reports-dash-head">
@@ -473,6 +543,23 @@ export default function ReportsPanel({role}:{role:string}){
     <h2><BarChart3 size={26} aria-hidden="true"/> التقارير</h2>
    </div>
    <div className="report-heading-actions">
+    {role==='admin'?(
+     <div className="reports-mail-menu" ref={mailMenuRef}>
+      <button type="button" className="report-secondary-btn" disabled={mailBusy} aria-expanded={mailMenu} onClick={()=>setMailMenu(open=>!open)}>
+       {mailBusy?'جارٍ الإرسال…':'إرسال التقرير بالإيميل'}
+      </button>
+      {mailMenu?(
+       <div className="reports-mail-pop" role="menu">
+        <button type="button" role="menuitem" onClick={()=>void postWeekly('week')}>آخر أسبوع</button>
+        <button type="button" role="menuitem" onClick={()=>void postWeekly('month')}>آخر شهر</button>
+        <button type="button" role="menuitem" onClick={()=>void postWeekly('filters')}>الفترة المحددة في الفلاتر</button>
+       </div>
+      ):null}
+     </div>
+    ):null}
+    {role==='admin'?(
+     <button type="button" className="report-secondary-btn" disabled={mailBusy} onClick={()=>void postWeekly(draftFrom&&draftTo?'filters':'week',true)}>معاينة البريد</button>
+    ):null}
     <button type="button" className="report-secondary-btn" disabled={!stateData||pdfBusy} onClick={()=>void exportPdf()}>
      <Download size={16}/> {pdfBusy?'جارٍ إنشاء PDF…':'تصدير PDF'}
     </button>
@@ -798,58 +885,83 @@ export default function ReportsPanel({role}:{role:string}){
       <CrmLink className="report-secondary-btn reports-perf-all" href="/crm?tab=users">عرض جميع الموظفين</CrmLink>
      </div>
      <div className="report-table-scroll" tabIndex={0} aria-label="جدول أداء الموظفين">
-      <table className="reports-perf-table">
+      <table className="reports-perf-table reports-stage-matrix">
        <thead>
         <tr>
-         <th>#</th>
          <SortHead label="الموظف" column="name" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="العملاء" column="assigned" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="تم التواصل" column="contacted" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="مهتم" column="interested" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="تفويج" column="dispatched" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="زيارات" column="visitsDone" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="تقارير" column="reportsSubmitted" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="متأخرة" column="reportsOverdue" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="صفقات" column="deals" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="وقع / إفراغ" column="signed" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="غير مهتم" column="notInterested" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="متابعات متأخرة" column="overdue" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="نسبة الإنجاز" column="completion" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <th></th>
+         {STAGE_COLUMNS.map(column=><SortHead key={column.stage} label={column.short} title={column.label} column={`stage:${column.stage}`} active={sortKey} dir={sortDir} onSort={toggleSort}/>)}
+         <SortHead label="الإجمالي" column="assigned" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <th>النسبة</th>
         </tr>
        </thead>
        <tbody>
         {perfRows.length===0?(
-         <tr><td colSpan={15}>{stateData?.dashboardError||'لا يوجد موظفون في النطاق.'}</td></tr>
-        ):perfRows.map(row=>(
+         <tr><td colSpan={STAGE_COLUMNS.length+3}>{stateData?.dashboardError||'لا يوجد موظفون في النطاق.'}</td></tr>
+        ):perfRows.map(row=>{
+         const footer=sumStageTable(perfRows.map(item=>({total:item.assigned,stages:item.stages||{}})));
+         return (
          <tr key={row.id}>
-          <td>{row.rank}</td>
           <th scope="row">
            <span className="reports-perf-name">
             <span className="reports-perf-avatar" aria-hidden="true"><Users size={14}/></span>
             {row.name}
            </span>
           </th>
-          <td><NumLink href={clientListHref({employee:row.id})}>{fmt(row.assigned)}</NumLink></td>
-          <td><NumLink href={clientListHref({employee:row.id,stageGroup:'contacted'})}>{fmt(row.contacted)}</NumLink></td>
-          <td><NumLink href={clientListHref({employee:row.id,stageGroup:'interested'})}>{fmt(row.interested)}</NumLink></td>
-          <td>{fmt(row.dispatched)}</td>
-          <td>{fmt(row.visitsDone)}</td>
-          <td>{fmtMaybe(row.reportsSubmitted,Boolean(dash?.reportsKnown))}</td>
-          <td>{fmtMaybe(row.reportsOverdue,Boolean(dash?.reportsKnown))}</td>
-          <td><NumLink href={clientListHref({employee:row.id,stageGroup:'signed'})}>{fmt(row.deals)}</NumLink></td>
-          <td><NumLink href={clientListHref({employee:row.id,stageGroup:'signed'})}>{fmt(row.signed)}</NumLink></td>
-          <td><NumLink href={clientListHref({employee:row.id,stageGroup:'not_interested'})}>{fmt(row.notInterested)}</NumLink></td>
-          <td><NumLink href={clientListHref({employee:row.id,overdue:'1'})}>{fmt(row.overdue)}</NumLink></td>
-          <td>
-           {row.completion!=null?(
-            <div className="reports-progress">
-             <span className="reports-progress-track"><span className="reports-progress-fill" style={{width:`${Math.min(row.completion,100)}%`}}/></span>
-             <span className="reports-progress-label">{row.completion}%</span>
-            </div>
-           ):<span>—</span>}
-          </td>
-          <td><CrmLink href={href({module:'leads',reportEmployee:row.id,page:'1'})}>عرض</CrmLink></td>
+          {STAGE_COLUMNS.map(column=>{
+           const count=row.stages?.[column.stage]||0;
+           const href=column.stage==='other'?'':clientListHref({employee:row.id,stage:stageLabel(column.stage)});
+           return <td key={column.stage} className="num">{href?<NumLink href={href}>{fmt(count)}</NumLink>:fmt(count)}</td>;
+          })}
+          <td className="num"><NumLink href={clientListHref({employee:row.id})}>{fmt(row.assigned)}</NumLink></td>
+          <td className="num">{pctOf(row.assigned,footer.total)}</td>
+         </tr>
+         );
+        })}
+       </tbody>
+       {perfRows.length?(
+        <tfoot>
+         <tr>
+          <th scope="row">الإجمالي</th>
+          {STAGE_COLUMNS.map(column=><td key={column.stage} className="num">{fmt(perfRows.reduce((sum,row)=>sum+(row.stages?.[column.stage]||0),0))}</td>)}
+          <td className="num">{fmt(perfRows.reduce((sum,row)=>sum+row.assigned,0))}</td>
+          <td className="num">{perfRows.some(row=>row.assigned)?'100%':'—'}</td>
+         </tr>
+        </tfoot>
+       ):null}
+      </table>
+     </div>
+     <div className="reports-perf-head">
+      <div>
+       <h3>نشاط الموظفين</h3>
+      </div>
+     </div>
+     <div className="report-table-scroll" tabIndex={0} aria-label="نشاط الموظفين">
+      <table className="reports-perf-table">
+       <thead>
+        <tr>
+         <SortHead label="الموظف" column="name" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="زيارات" column="visitsDone" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="تقارير" column="reportsSubmitted" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="تقارير متأخرة" column="reportsOverdue" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="صفقات" column="deals" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="معاملات" column="transactions" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="متابعات متأخرة" column="overdue" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="نسبة الإنجاز" column="completion" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+        </tr>
+       </thead>
+       <tbody>
+        {perfRows.length===0?(
+         <tr><td colSpan={8}>{stateData?.dashboardError||'لا يوجد موظفون في النطاق.'}</td></tr>
+        ):perfRows.map(row=>(
+         <tr key={row.id}>
+          <th scope="row">{row.name}</th>
+          <td className="num">{fmt(row.visitsDone)}</td>
+          <td className="num">{fmtMaybe(row.reportsSubmitted,Boolean(dash?.reportsKnown))}</td>
+          <td className="num">{fmtMaybe(row.reportsOverdue,Boolean(dash?.reportsKnown))}</td>
+          <td className="num"><NumLink href={clientListHref({employee:row.id,stageGroup:'signed'})}>{fmt(row.deals)}</NumLink></td>
+          <td className="num">{fmtMaybe(row.transactions,Boolean(dash?.transactionsKnown))}</td>
+          <td className="num"><NumLink href={clientListHref({employee:row.id,overdue:'1'})}>{fmt(row.overdue)}</NumLink></td>
+          <td className="num">{row.completion==null?'—':`${row.completion}%`}</td>
          </tr>
         ))}
        </tbody>
@@ -893,11 +1005,13 @@ export default function ReportsPanel({role}:{role:string}){
      </div>
      <div className="report-table-scroll" tabIndex={0}>
       <table className="report-team-table">
-       <thead><tr><th>الموظف</th><th>الإجمالي</th></tr></thead>
+       <thead><tr><th>الموظف</th><th>الإجمالي</th><th>النسبة</th></tr></thead>
        <tbody>
-        <tr className="report-team-total-row"><th scope="row">إجمالي الفريق</th><td><strong>{report.total}</strong></td></tr>
-        {salesGroups.map(g=><tr key={g.label}><th scope="row">{g.label}</th><td><strong>{g.count}</strong></td></tr>)}
+        {salesGroups.map(g=><tr key={g.label}><th scope="row">{g.label}</th><td className="num"><strong>{fmt(g.count)}</strong></td><td className="num">{pctOf(g.count,report.total)}</td></tr>)}
        </tbody>
+       <tfoot>
+        <tr className="report-team-total-row"><th scope="row">الإجمالي</th><td className="num"><strong>{fmt(report.total)}</strong></td><td className="num">{report.total?'100%':'—'}</td></tr>
+       </tfoot>
       </table>
      </div>
     </div>
@@ -914,7 +1028,7 @@ export default function ReportsPanel({role}:{role:string}){
     ))}
    </div>}
    {Object.entries(report.groups).map(([gkey,groups])=>groups.length>0&&<details className="report-group" key={gkey}><summary>{groupNames[gkey]||gkey} — توزيع السجلات ({groups.length})</summary><ul>{groups.map(g=><li key={g.label}>{['source','stage'].includes(gkey)&&g.label!=='غير محدد'?<CrmLink href={href({[gkey]:g.label,page:'1'})}>{g.label}</CrmLink>:g.label} <strong>{g.count}</strong></li>)}</ul></details>)}
-   {report.rows.length?<div className="report-table-scroll panel" tabIndex={0} aria-label="تفاصيل التقرير"><table className="report-detail-table"><thead><tr>{report.columns.map(c=><th key={c.key}>{c.label}</th>)}</tr></thead><tbody>{report.rows.map((r,i)=><tr key={String(r.id||r.user_id||i)+i}>{report.columns.map(c=>{const link=deepLink(c.key,r[c.key]);return <td key={c.key} data-label={c.label}>{link?<a href={link} onClick={openReportLead}>{String(r[c.key])}</a>:<bdi>{r[c.key]??'—'}</bdi>}</td>;})}</tr>)}</tbody></table></div>:<p className="panel">{report.total?'هذه الصفحة خارج النتائج؛ انتقل إلى الصفحة الأولى.':'لا توجد سجلات مطابقة في المصدر المقروء بنجاح.'}</p>}
+   {report.rows.length?<div className="report-table-scroll panel" tabIndex={0} aria-label="تفاصيل التقرير"><table className="report-detail-table"><thead><tr>{report.columns.map(c=><th key={c.key}>{c.label}</th>)}</tr></thead><tbody>{report.rows.map((r,i)=><tr key={String(r.id||r.user_id||i)+i}>{report.columns.map(c=>{const link=deepLink(c.key,r[c.key]);const numeric=isNumericValue(r[c.key]);return <td key={c.key} className={numeric?'num':undefined} data-label={c.label}>{link?<a href={link} onClick={openReportLead}>{String(r[c.key])}</a>:<bdi>{r[c.key]??'—'}</bdi>}</td>;})}</tr>)}</tbody></table></div>:<p className="panel">{report.total?'هذه الصفحة خارج النتائج؛ انتقل إلى الصفحة الأولى.':'لا توجد سجلات مطابقة في المصدر المقروء بنجاح.'}</p>}
    <nav className="report-pagination" aria-label="صفحات التقرير">{page>1&&<CrmLink className="crm-button" href={href({page:String(page-1)})}>السابق</CrmLink>}<CrmLink className="crm-button" href={href({page:'1'})}>الصفحة الأولى</CrmLink>{page<pages&&<CrmLink className="crm-button" href={href({page:String(page+1)})}>التالي</CrmLink>}</nav>
   </>}
   </div>

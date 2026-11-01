@@ -57,13 +57,26 @@ function mailer() {
   return transporter;
 }
 
-export async function sendMail(message: MailMessage) {
+export type MailSendResult = {ok: true} | {ok: false; error: string};
+
+function mailErrorText(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const text = raw
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/\b(password|pass|secret)\b\s*[:=]\s*\S+/gi, '$1=[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+  return text || 'خطأ غير معروف في البريد';
+}
+
+export async function sendMailResult(message: MailMessage): Promise<MailSendResult> {
   const to = (Array.isArray(message.to) ? message.to : [message.to])
     .map((value) => value.trim())
     .filter(Boolean);
-  if (!to.length) return false;
+  if (!to.length) return {ok: false, error: 'لا يوجد مستلم'};
   const transport = mailer();
-  if (!transport) return false;
+  if (!transport) return {ok: false, error: 'إعدادات البريد غير مكتملة'};
   try {
     await transport.sendMail({
       from: resolveFrom(message.from),
@@ -72,9 +85,13 @@ export async function sendMail(message: MailMessage) {
       text: message.text,
       html: message.html,
     });
-    return true;
+    return {ok: true};
   } catch (error) {
     console.error('Failed to send assignment email:', error);
-    return false;
+    return {ok: false, error: mailErrorText(error)};
   }
+}
+
+export async function sendMail(message: MailMessage) {
+  return (await sendMailResult(message)).ok;
 }

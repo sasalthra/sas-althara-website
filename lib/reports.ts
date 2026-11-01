@@ -1,5 +1,6 @@
 import {reportCatalog,type ReportColumn,type ReportResult,type ReportRow,type ReportId} from './report-catalog';
 import {retiredStageMap, stageLabel, stageMatchKeys, stagePipelineIndex} from './lead-stages';
+import {emptyStageCounts, noteEmployeeLead} from './employee-stages';
 import {COHORT_DEFINITIONS,countAssignmentEvents,completionRate,conversionRate,fieldDispatchMoment,hasScheduledFollowUp,instantInRiyadhRange,isClosedStage,isContactedStage,isEverFieldDispatchFilter,isInactiveLead,isInterestedStage,isNotInterestedStage,isOverdueFollowUp,isPastFreshStage,isSignedStage,isUnassignedNew,isUnassignedNewWaiting,leadMatchesReportFilters,leadMatchesStage,matchUser,normalizeSource,orderedStages,stageKeyOf,type AssignmentEvent,type DirectoryUser} from './lead-cohorts';
 import {crmInstant, formatRiyadhDateTime, riyadhDayKey} from './lead-dates';
 import {fieldReportOverdue, fieldReportRequired, fieldReportText} from './field-report';
@@ -344,7 +345,7 @@ export async function listReportEmployees(db:Database):Promise<DirectoryUser[]>{
  return users;
 }
 export type DashboardStage={stage:string;label:string;count:number;pct:number};
-export type DashboardEmployee={id:string;name:string;username:string;role:string;assigned:number;contacted:number;interested:number;signed:number;notInterested:number;overdue:number;completion:number|null;dispatched:number;visitsDone:number;reportsSubmitted:number|null;reportsOverdue:number|null;deals:number;transactions:number|null;avgHoursToFirstContact:number|null};
+export type DashboardEmployee={id:string;name:string;username:string;role:string;assigned:number;stages:Record<string,number>;contacted:number;interested:number;signed:number;notInterested:number;overdue:number;completion:number|null;dispatched:number;visitsDone:number;reportsSubmitted:number|null;reportsOverdue:number|null;deals:number;transactions:number|null;avgHoursToFirstContact:number|null};
 export type DashboardSource={key:string;label:string;total:number;interested:number;notInterested:number;signed:number;closed:number;unassignedNew:number;conversion:number|null};
 export type DashboardAlert={id:string;tone:'warn'|'info'|'muted';tag:string;message:string;href:string};
 export type DashboardField={inStage:number;assigned:number;unassigned:number;byEmployee:{name:string;count:number}[]};
@@ -460,7 +461,7 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
   :user.role==='admin'?directory:directory.filter(person=>person.id===user.userId);
  const staff=visible.length?visible:f.employee?[{id:f.employee,name:f.employee,username:'',role:''}]:[{id:user.userId,name:user.userId,username:'',role:''}];
  const stats=new Map<string,DashboardEmployee & {pastFresh:number;contactSamples:number;contactHours:number}>();
- for(const person of staff)stats.set(person.id,{id:person.id,name:person.name,username:person.username,role:person.role||'',assigned:0,contacted:0,interested:0,signed:0,notInterested:0,overdue:0,pastFresh:0,completion:null,dispatched:0,visitsDone:0,reportsSubmitted:0,reportsOverdue:0,deals:0,transactions:0,avgHoursToFirstContact:null,contactSamples:0,contactHours:0});
+ for(const person of staff)stats.set(person.id,{id:person.id,name:person.name,username:person.username,role:person.role||'',assigned:0,stages:emptyStageCounts(),contacted:0,interested:0,signed:0,notInterested:0,overdue:0,pastFresh:0,completion:null,dispatched:0,visitsDone:0,reportsSubmitted:0,reportsOverdue:0,deals:0,transactions:0,avgHoursToFirstContact:null,contactSamples:0,contactHours:0});
  const stageCounts=new Map<string,number>();
  const sourceCounts=new Map<string,DashboardSource>();
  const today=riyadhDay(now);const nowMs=now.getTime();
@@ -502,7 +503,7 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
    if(seen.has(person.id)||!stats.has(person.id))continue;
    seen.add(person.id);
    const stat=stats.get(person.id)!;
-   stat.assigned++;
+   noteEmployeeLead(stat, row.stage);
    if(isContactedStage(row.stage))stat.contacted++;
    if(isInterestedStage(row.stage))stat.interested++;
    if(isSignedStage(row.stage))stat.signed++;
