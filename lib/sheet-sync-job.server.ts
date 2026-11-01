@@ -6,6 +6,7 @@ import {cronAuthorized} from './cron-auth';
 import {readSheetGrid} from './sheet-fetch.server';
 import {importSheetGrid, type SheetCreatedLead, type SheetImportResult, type SheetReregistration, type StoredSheetSource} from './sheet-sync';
 import {checkOverdueFieldReports} from './field-report-job.server';
+import {sendWeeklyReportIfDue} from './weekly-report-job.server';
 import {DEFAULT_SHEETS_SYNC_INTERVAL_MS, publicSyncError, sheetsSyncIntervalMs, type SheetMapping} from './sheet-sync-config';
 import {ApiError} from './secure-api';
 import {
@@ -382,11 +383,18 @@ function runFieldReportCheck() {
   });
 }
 
+function runWeeklyReportCheck() {
+  void sendWeeklyReportIfDue().catch(error => {
+    console.error('weekly report check failed', publicSyncError(error));
+  });
+}
+
 export function startSheetSyncInterval() {
   const globalState = globalThis as typeof globalThis & {__sasSheetSync?: boolean; __sasSheetSyncAt?: number};
   const interval = sheetsSyncIntervalMs();
   const tick = () => {
     runFieldReportCheck();
+    runWeeklyReportCheck();
     if (!interval || inflight) return;
     globalState.__sasSheetSyncAt = Date.now();
     void syncAllSheets().catch(error => {
@@ -399,8 +407,8 @@ export function startSheetSyncInterval() {
   }
   globalState.__sasSheetSync = true;
   if (!interval) {
-    const starter = setTimeout(runFieldReportCheck, 20_000);
-    const timer = setInterval(runFieldReportCheck, DEFAULT_SHEETS_SYNC_INTERVAL_MS);
+    const starter = setTimeout(() => { runFieldReportCheck(); runWeeklyReportCheck(); }, 20_000);
+    const timer = setInterval(() => { runFieldReportCheck(); runWeeklyReportCheck(); }, DEFAULT_SHEETS_SYNC_INTERVAL_MS);
     starter.unref?.();
     timer.unref?.();
     return;
