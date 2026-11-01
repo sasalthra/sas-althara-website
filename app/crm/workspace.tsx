@@ -288,6 +288,8 @@ export default function CRM({
   const listFrom = query.get('from') || '';
   const listTo = query.get('to') || '';
   const listScheduled = query.get('scheduled') === '1';
+  const listLegacy = query.get('legacyUpdates') === '1';
+  const listLegacyActor = query.get('legacyActor') || '';
   const selectedStage = (() => {
     const raw = listStage || stageFilter;
     if (!raw) return '';
@@ -393,6 +395,8 @@ export default function CRM({
     duplicateOnly: duplicateOnly && canReviewDuplicates,
     newOnly: role === 'admin' && newOnly,
     reportRequired: role === 'field' && reportOnly,
+    legacyUpdates: listLegacy,
+    legacyActor: listLegacyActor,
     page,
     id: '',
     picklist: false,
@@ -683,7 +687,7 @@ export default function CRM({
                 </p>
               )}
 
-              {(listStage || listSource || listEmployee || listEmployeeName || listOverdue || listInactive || listWaiting || listGroup || listFrom || listTo || listAssignRole || listDispatched || listFieldEmployee || listFieldUnassigned || listReturn) ? (
+              {(listStage || listSource || listEmployee || listEmployeeName || listOverdue || listInactive || listWaiting || listGroup || listFrom || listTo || listAssignRole || listDispatched || listFieldEmployee || listFieldUnassigned || listLegacy || listReturn) ? (
                 <div className="reports-filter-banner" role="status">
                   <p>
                     {listReturn ? <CrmLink href={listReturn}>← العودة إلى التقرير</CrmLink> : null}
@@ -691,6 +695,7 @@ export default function CRM({
                     {listAssignRole === 'sales' ? 'عملاء أُسندوا لموظف المبيعات خلال الفترة حسب تاريخ الإسناد. المرحلة في الجدول هي الحالية. ' : ''}
                     {listAssignRole === 'field' ? 'عملاء فُوِّجوا للموظف الميداني خلال الفترة حسب تاريخ التفويج. المرحلة في الجدول هي الحالية. ' : ''}
                     {listDispatched ? 'عملاء فُوِّجوا للميدان خلال الفترة حسب تاريخ التفويج بتوقيت الرياض (آخر تفويج، أو أول تفويج إن لم يُحفظ لاحق). المرحلة في الجدول هي الحالية. ' : ''}
+                    {listLegacy ? 'عملاء سُجّلوا قبل بداية الفترة وتحدّثت بياناتهم خلالها. ' : ''}
                     {!listDispatched && !listStageNow && !listAssignRole && isEverFieldDispatchFilter(selectedStage) ? 'تفويج للميداني: كل عميل دخل هذه المرحلة أو فُوِّج لميداني، حتى لو تغيّرت مرحلته لاحقاً. العمود يعرض المرحلة الحالية. ' : ''}
                     {!listDispatched && !listAssignRole && isEverFieldDispatchFilter(selectedStage) && (listFrom || listTo) ? 'الفترة هنا تاريخ التفويج بتوقيت الرياض (آخر تفويج، أو أول تفويج إن لم يُحفظ لاحق)، وليس تاريخ التسجيل. ' : ''}
                     {listFieldUnassigned ? 'بدون موظف ميدان. ' : ''}

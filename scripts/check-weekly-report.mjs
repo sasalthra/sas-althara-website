@@ -113,7 +113,8 @@ try {
   assert.match(html, /dir="rtl"/);
   assert.match(html, /background:#3F1A44/);
   assert.match(html, /الإجمالي/);
-  assert.match(html, /نشاط الموظفين/);
+  assert.match(html, /تحديثات العملاء القدامى/);
+  assert.doesNotMatch(html, /نشاط الموظفين/);
   assert.ok(html.includes(report.from));
   assert.doesNotMatch(html, /info@/);
   const adminRoute = readFileSync('app/api/reports/weekly/route.ts', 'utf8');

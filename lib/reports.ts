@@ -6,6 +6,7 @@ import {crmInstant, formatRiyadhDateTime, riyadhDayKey} from './lead-dates';
 import {fieldReportOverdue, fieldReportRequired, fieldReportText} from './field-report';
 import {commissionTotal, debtAmount, debtPayerLabels, reviewStatusLabels} from './transactions';
 import {asBinary,binEq,binJoin,inParams} from './sql-collation';
+import {aggregateLegacyUpdates,legacyUpdateGroupSql,type LegacyUpdateRow} from './legacy-updates';
 export {leadMatchesReportFilters};
 export {fieldDispatchMoment, instantInRiyadhRange, isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort} from './lead-cohorts';
 export class ReportError extends Error {constructor(public status:number,message:string){super(message);}}
@@ -90,7 +91,7 @@ function matchAny(exprs:string[],values:string[]){
  for(const expr of exprs)for(const value of unique){parts.push(binEq(expr));args.push(value);}
  return {sql:parts.length?`(${parts.join(' OR ')})`:'',args};
 }
-function where(spec:Spec,user:Actor,f:ReportFilters,employeeTokens:string[]=[]){
+function where(spec:Spec,user:Actor,f:ReportFilters,employeeTokens:string[]=[],dateAs:'default'|'dispatch'='default'){
  const clauses:string[]=[],args:(string|number|null)[]=[];const add=(sql:string,...values:(string|number|null)[])=>{if(sql){clauses.push(sql);args.push(...values);}};
  if(spec.fixed)add(spec.fixed);
  if(spec.lead){
@@ -115,9 +116,9 @@ function where(spec:Spec,user:Actor,f:ReportFilters,employeeTokens:string[]=[]){
     const request=binEq("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.requestStage'))");
     add(`(${lead.sql} OR ${request})`,...lead.args,f.stage);
    }
-   // تفويج للميداني on a registration-dated report means "dispatched in the period",
-   // including leads whose current stage has since moved on. Other stages stay current.
-   else if(!(spec.date==='l.created_at'&&isEverFieldDispatchFilter(f.stage))){const keys=stageMatchKeys(f.stage);const match=matchAny(['l.stage'],keys);add(match.sql,...match.args);}
+   // تفويج للميداني dates the dispatch, including leads whose current stage has moved on.
+   // A dispatch-period read uses the same rule. Other stages stay on the current stage.
+   else if(!((dateAs==='dispatch'||spec.date==='l.created_at')&&isEverFieldDispatchFilter(f.stage))){const keys=stageMatchKeys(f.stage);const match=matchAny(['l.stage'],keys);add(match.sql,...match.args);}
   }
   if(f.funding&&spec===specs.transactions)add(binEq("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.fundingEntity'))"),f.funding);
  } else if(spec.employee){
@@ -126,8 +127,8 @@ function where(spec:Spec,user:Actor,f:ReportFilters,employeeTokens:string[]=[]){
  }
  // Date-only fields are already local work/calendar days. UTC stamps are compared as bytes to a Riyadh window shifted in JS, so CONVERT_TZ never mixes coercible collations.
  // تفويج للميداني dates the dispatch, not lead registration.
- if(spec.date){
-  const window=spec.date==='l.created_at'&&isEverFieldDispatchFilter(f.stage)?dispatchDateWindow(f.from,f.to):dateWindow(spec.date,f.from,f.to);
+ if(spec.date||dateAs==='dispatch'){
+  const window=dateAs==='dispatch'||(spec.date==='l.created_at'&&isEverFieldDispatchFilter(f.stage))?dispatchDateWindow(f.from,f.to):dateWindow(spec.date||'l.created_at',f.from,f.to);
   add(window.sql,...window.args);
  }
  return {sql:clauses.length?' WHERE '+clauses.join(' AND '):'',args};
@@ -354,6 +355,7 @@ export type ReportDashboard={
  total:number;interested:number;notInterested:number;signed:number;closed:number;unassignedNew:number;overdue:number;inactive:number;unassignedWaiting:number;scheduled:number;
  byStage:DashboardStage[];employees:DashboardEmployee[];sources:DashboardSource[];alerts:DashboardAlert[];field:DashboardField;definitions:typeof COHORT_DEFINITIONS;
  trend:DashboardTrend;reportsKnown:boolean;transactionsKnown:boolean;firstContactKnown:boolean;
+ legacyUpdates:LegacyUpdateRow[];
 };
 function listHref(filters:ReportFilters,extra:Record<string,string>,users:DirectoryUser[]){
  const q=new URLSearchParams();q.set('tab','leads');
@@ -382,12 +384,6 @@ const DASHBOARD_RICH=DASHBOARD_BASE+',l.field_dispatched_at,l.first_field_dispat
 function optionalReportColumn(error:unknown){
  const message=error instanceof Error?error.message:String(error??'');
  return /field_report|field_dispatched_at|first_field_dispatch_at/i.test(message);
-}
-function wasDispatched(row:Record<string,unknown>){
- if(String(row.field_dispatched_at??'').trim()||String(row.first_field_dispatch_at??'').trim())return true;
- const stage=stageKeyOf(row.stage);
- if(stage==='field_dispatch')return true;
- return VISIT_DONE_STAGES.has(stage)&&Boolean(String(row.field_assigned_to??'').trim());
 }
 function reportIsOverdue(row:Record<string,unknown>,nowMs:number){
  if(fieldReportText(row.field_report))return false;
@@ -465,11 +461,23 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
  const stageCounts=new Map<string,number>();
  const sourceCounts=new Map<string,DashboardSource>();
  const today=riyadhDay(now);const nowMs=now.getTime();
+ const dispatchCohort=isEverFieldDispatchFilter(f.stage);
+ const dispatchedInPeriod=(row:Record<string,unknown>)=>instantInRiyadhRange(fieldDispatchMoment(row),f.from,f.to);
  let interested=0,notInterested=0,signed=0,closed=0,unassignedNew=0,overdue=0,inactive=0,unassignedWaiting=0,scheduled=0,fieldIn=0,fieldAssigned=0;
  const fieldCounts=new Map<string,number>();
+ const noteFieldStage=(row:Record<string,unknown>)=>{
+  fieldIn++;
+  const fieldPerson=matchUser(directory,row.field_assigned_to);
+  if(fieldPerson||String(row.field_assigned_to??'').trim()){
+   fieldAssigned++;
+   const name=fieldPerson?.name||String(row.field_assigned_to);
+   fieldCounts.set(name,(fieldCounts.get(name)||0)+1);
+  }
+ };
  for(const row of result.results){
   const key=stageKeyOf(row.stage)||'new';
-  stageCounts.set(key,(stageCounts.get(key)||0)+1);
+  // The تفويج column is dated by the dispatch, so a registration cohort does not fill it.
+  if(!(!dispatchCohort&&key==='field_dispatch'))stageCounts.set(key,(stageCounts.get(key)||0)+1);
   if(isInterestedStage(row.stage))interested++;
   if(isNotInterestedStage(row.stage))notInterested++;
   if(isSignedStage(row.stage))signed++;
@@ -479,15 +487,7 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
   if(isOverdueFollowUp(row.follow_up,row.stage,today))overdue++;
   if(hasScheduledFollowUp(row.follow_up))scheduled++;
   if(isInactiveLead(row.updated_at,row.created_at,row.stage,nowMs))inactive++;
-  if(stageKeyOf(row.stage)==='field_dispatch'){
-   fieldIn++;
-   const fieldPerson=matchUser(directory,row.field_assigned_to);
-   if(fieldPerson||String(row.field_assigned_to??'').trim()){
-    fieldAssigned++;
-    const name=fieldPerson?.name||String(row.field_assigned_to);
-    fieldCounts.set(name,(fieldCounts.get(name)||0)+1);
-   }
-  }
+  if(key==='field_dispatch'&&(dispatchCohort?dispatchedInPeriod(row):false))noteFieldStage(row);
   const source=normalizeSource(row.source);
   const bucket=sourceCounts.get(source.key)||{key:source.key,label:source.label,total:0,interested:0,notInterested:0,signed:0,closed:0,unassignedNew:0,conversion:null};
   bucket.total++;
@@ -503,14 +503,15 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
    if(seen.has(person.id)||!stats.has(person.id))continue;
    seen.add(person.id);
    const stat=stats.get(person.id)!;
-   noteEmployeeLead(stat, row.stage);
+   if(!dispatchCohort&&key==='field_dispatch')stat.assigned+=1;
+   else noteEmployeeLead(stat, row.stage);
    if(isContactedStage(row.stage))stat.contacted++;
    if(isInterestedStage(row.stage))stat.interested++;
    if(isSignedStage(row.stage))stat.signed++;
    if(isNotInterestedStage(row.stage))stat.notInterested++;
    if(isOverdueFollowUp(row.follow_up,row.stage,today))stat.overdue++;
    if(isPastFreshStage(row.stage))stat.pastFresh++;
-   if(wasDispatched(row))stat.dispatched++;
+   if(dispatchCohort&&dispatchedInPeriod(row))stat.dispatched++;
    if(VISIT_DONE_STAGES.has(stageKeyOf(row.stage)))stat.visitsDone++;
    if(loaded.reportsKnown){
     if(fieldReportText(row.field_report))stat.reportsSubmitted=(stat.reportsSubmitted||0)+1;
@@ -523,6 +524,33 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
     const hours=hoursUntil(row.created_at,firstAt);
     if(hours!=null){stat.contactSamples++;stat.contactHours+=hours;}
    }
+  }
+ }
+ const dispatchRows=dispatchCohort?[]:await (async()=>{
+  try{
+   const dw=where(specs.leads,user,f,tokens,'dispatch');
+   const extra=await loadDashboardRows(db,dw.sql,dw.args,f.funding);
+   if(extra.rows.length>10000)throw new ReportError(422,'أكثر من 10000 عميل مفوج في لوحة التقارير؛ ضيق الفترة أو المرشحات. لم يعرض مجموع جزئي');
+   return extra.rows.filter(dispatchedInPeriod);
+  }catch(error){
+   if(isMissingColumn(error,'field_dispatched_at')||isMissingColumn(error,'first_field_dispatch_at'))return [];
+   throw error;
+  }
+ })();
+ for(const row of dispatchRows){
+  const key=stageKeyOf(row.stage)||'new';
+  if(key==='field_dispatch'){
+   stageCounts.set(key,(stageCounts.get(key)||0)+1);
+   noteFieldStage(row);
+  }
+  const people=[matchUser(directory,row.assigned_to),matchUser(directory,row.field_assigned_to)].filter((person):person is DirectoryUser=>Boolean(person));
+  const seen=new Set<string>();
+  for(const person of people){
+   if(seen.has(person.id)||!stats.has(person.id))continue;
+   seen.add(person.id);
+   const stat=stats.get(person.id)!;
+   stat.dispatched++;
+   if(key==='field_dispatch')stat.stages.field_dispatch=(stat.stages.field_dispatch||0)+1;
   }
  }
  const total=result.results.length;
@@ -544,7 +572,22 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
  const field={inStage:fieldIn,assigned:fieldAssigned,unassigned:Math.max(0,fieldIn-fieldAssigned),byEmployee:[...fieldCounts.entries()].map(([name,count])=>({name,count})).sort((a,b)=>b.count-a.count||a.name.localeCompare(b.name,'ar'))};
  const builtTrend=buildTrend(specs.leads,'leads',result.results,f);
  const trend=builtTrend&&builtTrend.points.length?builtTrend:windowTrend(f,isEverFieldDispatchFilter(f.stage)?'يوم التفويج (الرياض)':'يوم إنشاء العميل (الرياض)');
- return {total,interested,notInterested,signed,closed,unassignedNew,overdue,inactive,unassignedWaiting,scheduled,byStage,employees,sources,alerts,field,definitions:COHORT_DEFINITIONS,trend,reportsKnown:loaded.reportsKnown,transactionsKnown,firstContactKnown};
+ const legacyUpdates=await readLegacyUpdateRows(db,user,f,directory);
+ return {total,interested,notInterested,signed,closed,unassignedNew,overdue,inactive,unassignedWaiting,scheduled,byStage,employees,sources,alerts,field,definitions:COHORT_DEFINITIONS,trend,reportsKnown:loaded.reportsKnown,transactionsKnown,firstContactKnown,legacyUpdates};
+}
+async function readLegacyUpdateRows(db:Database,user:Actor,f:ReportFilters,users:DirectoryUser[]):Promise<LegacyUpdateRow[]>{
+ const query=legacyUpdateGroupSql(f.from,f.to,user.role==='admin'?'':user.userId);
+ try{
+  const rows=await db.prepare(query.sql).bind(...query.args).all();
+  const tokens=f.employee?await cachedTokens(db,f.employee):[];
+  return aggregateLegacyUpdates({
+   events:rows.results.map(row=>({userId:String(row.user_id??''),leadId:String(row.lead_id??''),action:String(row.action??''),count:Number(row.n)||0,stage:String(row.stage??''),source:String(row.source??'')})),
+   users,stage:f.stage,source:f.source,employeeTokens:tokens,
+  }).rows;
+ }catch(error){
+  if(isMissingColumn(error,'lead_activity')||isMissingColumn(error,'created_at')||isMissingColumn(error,'user_id'))return [];
+  throw error;
+ }
 }
 function windowTrend(f:ReportFilters,basis:string):DashboardTrend{
  const points:{day:string;count:number}[]=[];const cursor=new Date(f.from+'T00:00:00.000Z'),end=Date.parse(f.to+'T00:00:00.000Z');

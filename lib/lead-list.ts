@@ -1,5 +1,6 @@
 import properties from '@/data/properties.json';
-import {fieldDispatchMoment, instantInRiyadhRange, isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort, leadMatchesFieldAssignee, leadMatchesReportFilters} from './lead-cohorts';
+import {fieldDispatchMoment, instantInRiyadhRange, isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort, leadMatchesFieldAssignee, leadMatchesReportFilters, leadMatchesSource, leadMatchesStage} from './lead-cohorts';
+import {legacyUpdateLeadSql} from './legacy-updates';
 import {riyadhDayKey} from './lead-dates';
 import {compareClients, isNewUnassignedLead} from './lead-featured';
 import {displayLeadPhone, leadPhoneMatchesQuery} from './phone';
@@ -38,6 +39,8 @@ export type LeadListFilters = {
   duplicateOnly: boolean;
   newOnly: boolean;
   reportRequired: boolean;
+  legacyUpdates: boolean;
+  legacyActor: string;
   page: number;
   id: string;
   picklist: boolean;
@@ -125,6 +128,8 @@ export function emptyLeadFilters(page = 1): LeadListFilters {
     duplicateOnly: false,
     newOnly: false,
     reportRequired: false,
+    legacyUpdates: false,
+    legacyActor: '',
     page,
     id: '',
     picklist: false,
@@ -164,6 +169,8 @@ export function parseLeadListFilters(url: URL | null, role: string): LeadListFil
     duplicateOnly: canReviewDuplicates && params?.get('duplicate') === '1',
     newOnly: role === 'admin' && params?.get('newOnly') === '1',
     reportRequired: params?.get('report') === '1',
+    legacyUpdates: params?.get('legacyUpdates') === '1',
+    legacyActor: text('legacyActor').trim(),
     page: Number.isFinite(pageRaw) && pageRaw >= 1 ? Math.floor(pageRaw) : 1,
     id: text('id').trim(),
     picklist: params?.get('picklist') === '1',
@@ -206,6 +213,8 @@ export function leadListSearchParams(filters: LeadListFilters): string {
   if (filters.duplicateOnly) params.set('duplicate', '1');
   if (filters.newOnly) params.set('newOnly', '1');
   if (filters.reportRequired) params.set('report', '1');
+  if (filters.legacyUpdates) params.set('legacyUpdates', '1');
+  if (filters.legacyActor) params.set('legacyActor', filters.legacyActor);
   return params.toString();
 }
 
@@ -256,8 +265,19 @@ export function leadMatchesClientFilters(
   filters: LeadListFilters,
   duplicatePhones: Set<string>,
   today: string,
-  nowMs: number
+  nowMs: number,
+  legacyIds?: Set<string> | null
 ) {
+  if (filters.legacyUpdates) {
+    const id = String(lead.id ?? '');
+    if (!legacyIds || !legacyIds.has(id)) return false;
+    const created = riyadhDayKey(lead.created_at);
+    if (!filters.from || !created || created >= filters.from) return false;
+    if (filters.stage && !leadMatchesStage(lead.stage, filters.stage)) return false;
+    if (filters.source && !leadMatchesSource(lead.source, filters.source, filters.sourceExact)) return false;
+    if (filters.view === 'followups' && !followUpDue(lead, today)) return false;
+    return leadMatchesSearch(lead, filters.q);
+  }
   if (filters.view === 'followups' && !followUpDue(lead, today)) return false;
   // «تفويج للميداني» on the clients filter means the lead ever entered that stage.
   // Report drill-downs pass stageNow or an assignment cohort and keep the current stage.
@@ -410,6 +430,19 @@ function pagePayload(
   return {leads, page, pageSize, total: filteredTotal, pages, counts};
 }
 
+async function loadLegacyLeadIds(db: LeadQuery, filters: LeadListFilters) {
+  if (!filters.from || !filters.to) return new Set<string>();
+  const query = legacyUpdateLeadSql(filters.from, filters.to, filters.legacyActor);
+  try {
+    const rows = await queryRows(db, query.sql, query.args);
+    return new Set(rows.map(row => String(row.lead_id ?? '')).filter(Boolean));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    if (/lead_activity|no such table|unknown column|doesn't exist|ER_NO_SUCH_TABLE|ER_BAD_FIELD_ERROR/i.test(message)) return new Set<string>();
+    throw error;
+  }
+}
+
 export async function loadLeadPage(
   db: LeadQuery,
   user: {userId: string; role: string},
@@ -452,8 +485,9 @@ export async function loadLeadPage(
   const leads = presentLeadRows(await queryRows(db, `${select} ${scope.sql}`, scope.args), featured);
   const counts = leadListCounts(leads, today);
   const duplicatePhones = new Set(counts.duplicatePhones);
+  const legacyIds = filters.legacyUpdates ? await loadLegacyLeadIds(db, filters) : null;
   const filtered = leads
-    .filter(lead => leadMatchesClientFilters(lead, filters, duplicatePhones, today, Date.now()))
+    .filter(lead => leadMatchesClientFilters(lead, filters, duplicatePhones, today, Date.now(), legacyIds))
     .sort((a, b) => {
       if (user.role === 'field') {
         const rank = Number(fieldReportRequired(b)) - Number(fieldReportRequired(a));

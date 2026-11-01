@@ -4,6 +4,7 @@ import {CRM_MAIL_FROM, sendMailResult} from './mail';
 import {asBinary, paramEq} from './sql-collation';
 import {publicSyncError} from './sheet-sync-config';
 import type {DirectoryUser} from './lead-cohorts';
+import {aggregateLegacyUpdates, legacyUpdateGroupSql, type LegacyUpdateRow} from './legacy-updates';
 import {
   buildWeeklyReport,
   renderWeeklyReportHtml,
@@ -89,6 +90,27 @@ async function loadLeads(from: string, to: string): Promise<WeeklyLead[]> {
   throw new Error('weekly report lead query failed');
 }
 
+async function loadLegacyUpdates(from: string, to: string, users: DirectoryUser[]): Promise<LegacyUpdateRow[]> {
+  const query = legacyUpdateGroupSql(from, to);
+  try {
+    const rows = await crmDb().prepare(query.sql).bind(...query.args).all();
+    return aggregateLegacyUpdates({
+      events: rows.results.map(row => ({
+        userId: String(row.user_id ?? ''),
+        leadId: String(row.lead_id ?? ''),
+        action: String(row.action ?? ''),
+        count: Number(row.n) || 0,
+        stage: String(row.stage ?? ''),
+        source: String(row.source ?? ''),
+      })),
+      users,
+    }).rows;
+  } catch (error) {
+    if (/lead_activity|no such table|unknown column|doesn't exist|ER_NO_SUCH_TABLE|ER_BAD_FIELD_ERROR/i.test(messageOf(error))) return [];
+    throw error;
+  }
+}
+
 async function loadStaff(): Promise<DirectoryUser[]> {
   const queries = [
     'SELECT id, name, username, role FROM crm_users WHERE active = 1',
@@ -119,7 +141,8 @@ export async function loadWeeklyReport(now = new Date(), range?: {from?: string;
   const from = range?.from || window.from;
   const to = range?.to || window.to;
   const [leads, staff] = await Promise.all([loadLeads(from, to), loadStaff()]);
-  return buildWeeklyReport(leads, staff, from, to, window.weekKey);
+  const legacyUpdates = await loadLegacyUpdates(from, to, staff);
+  return buildWeeklyReport(leads, staff, from, to, window.weekKey, legacyUpdates);
 }
 
 async function deliver(options: {force?: boolean; preview?: boolean; now?: Date; from?: string; to?: string}): Promise<WeeklyReportJobResult> {

@@ -15,6 +15,7 @@ import {stageLabel} from './lead-stages';
 import {fieldReportText} from './field-report';
 import {emptyStageCounts, employeeStageColumns, noteEmployeeLead, sumStageTable} from './employee-stages';
 import {nextCalendarDay, shiftCalendarDay} from './report-presets';
+import {sumLegacyUpdates, type LegacyUpdateRow} from './legacy-updates';
 
 export {employeeStageColumns, stageRowSum, sumStageTable, stageTableIsExact} from './employee-stages';
 
@@ -60,6 +61,7 @@ export type WeeklyReportData = {
   bySource: {label: string; count: number}[];
   byStage: {label: string; count: number}[];
   employees: WeeklyEmployeeRow[];
+  legacyUpdates: LegacyUpdateRow[];
 };
 
 export type WeeklyClock = {weekday: string; dayKey: string; hour: number};
@@ -160,7 +162,7 @@ function newlyAssigned(lead: WeeklyLead, person: DirectoryUser, from: string, to
   return inRange(stamp || lead.created_at, from, to);
 }
 
-export function buildWeeklyReport(leads: WeeklyLead[], users: DirectoryUser[], from: string, to: string, weekKey = to): WeeklyReportData {
+export function buildWeeklyReport(leads: WeeklyLead[], users: DirectoryUser[], from: string, to: string, weekKey = to, legacyUpdates: LegacyUpdateRow[] = []): WeeklyReportData {
   const fresh = leads.filter(lead => inRange(lead.created_at, from, to));
   const sourceCounts = new Map<string, {label: string; count: number}>();
   const stageCounts = new Map<string, number>();
@@ -185,7 +187,21 @@ export function buildWeeklyReport(leads: WeeklyLead[], users: DirectoryUser[], f
     const visits = leads.filter(lead => linked(lead, person) && VISIT_DONE.has(stageKeyOf(lead.stage)) && (inRange(fieldDispatchMoment(lead), from, to) || inRange(lead.created_at, from, to)));
     const reports = leads.filter(lead => linked(lead, person) && fieldReportText(lead.field_report) && (inRange(lead.field_report_at, from, to) || inRange(fieldDispatchMoment(lead), from, to)));
     const bucket = {assigned: 0, stages: emptyStageCounts()};
-    for (const lead of assignedLeads) noteEmployeeLead(bucket, lead.stage);
+    const counted = new Set<string>();
+    for (const lead of assignedLeads) {
+      const id = String(lead.id ?? '');
+      if (id) counted.add(id);
+      if (stageKeyOf(lead.stage) === 'field_dispatch') {
+        bucket.assigned += 1;
+        if (inRange(fieldDispatchMoment(lead), from, to)) bucket.stages.field_dispatch += 1;
+      } else noteEmployeeLead(bucket, lead.stage);
+    }
+    for (const lead of dispatchedLeads) {
+      const id = String(lead.id ?? '');
+      if (stageKeyOf(lead.stage) !== 'field_dispatch' || !linked(lead, person) || (id && counted.has(id))) continue;
+      bucket.assigned += 1;
+      bucket.stages.field_dispatch += 1;
+    }
     return {
       name: person.name || person.id,
       assigned: bucket.assigned,
@@ -211,6 +227,7 @@ export function buildWeeklyReport(leads: WeeklyLead[], users: DirectoryUser[], f
     bySource: [...sourceCounts.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ar')),
     byStage,
     employees,
+    legacyUpdates,
   };
 }
 
@@ -272,7 +289,19 @@ export function renderWeeklyReportText(report: WeeklyReportData) {
     '',
     'الموظفون:',
     people,
+    '',
+    'تحديثات العملاء القدامى:',
+    legacyUpdateLines(report),
   ].join('\n');
+}
+
+function legacyUpdateLines(report: WeeklyReportData) {
+  const rows = report.legacyUpdates || [];
+  if (!rows.length) return '—';
+  const totals = sumLegacyUpdates(rows);
+  const lines = rows.map(row => `${row.name}: عملاء ${row.leads}، تغيير مرحلة ${row.stageChanges}، تحديث حالة ${row.statusUpdates}، ملاحظات ${row.notes}، الإجمالي ${row.total}`);
+  lines.push(`الإجمالي: عملاء ${totals.leads}، تغيير مرحلة ${totals.stageChanges}، تحديث حالة ${totals.statusUpdates}، ملاحظات ${totals.notes}، الإجمالي ${totals.total}`);
+  return lines.join('\n');
 }
 
 export function renderWeeklyReportHtml(report: WeeklyReportData) {
@@ -303,9 +332,12 @@ export function renderWeeklyReportHtml(report: WeeklyReportData) {
       footer.total ? '100%' : '—',
     ]] : []),
   );
-  const activity = table(
-    ['الموظف', 'زيارات', 'تقارير', 'صفقات'],
-    report.employees.map(row => [row.name, String(row.visits), String(row.reports), String(row.deals)]),
+  const legacyRows = report.legacyUpdates || [];
+  const legacyTotals = sumLegacyUpdates(legacyRows);
+  const legacy = table(
+    ['الموظف', 'عدد العملاء المحدّثين', 'تغيير مرحلة', 'تحديث حالة', 'ملاحظات', 'الإجمالي'],
+    legacyRows.map(row => [row.name, String(row.leads), String(row.stageChanges), String(row.statusUpdates), String(row.notes), String(row.total)])
+      .concat(legacyRows.length ? [['الإجمالي', String(legacyTotals.leads), String(legacyTotals.stageChanges), String(legacyTotals.statusUpdates), String(legacyTotals.notes), String(legacyTotals.total)]] : []),
   );
   const body = `
     <p style="margin:0 0 8px;line-height:1.7">الفترة: ${escapeHtml(report.from)} — ${escapeHtml(report.to)}</p>
@@ -317,8 +349,9 @@ export function renderWeeklyReportHtml(report: WeeklyReportData) {
     <h2 style="margin:18px 0 8px;padding:0;font-size:18px;font-weight:700;color:#3F1A44;line-height:1.6">تفويج للميدان: ${report.dispatched}</h2>
     <h2 style="margin:18px 0 8px;padding:0;font-size:18px;font-weight:700;color:#3F1A44;line-height:1.6">الموظفون حسب المرحلة الحالية</h2>
     ${people}
-    <h2 style="margin:18px 0 8px;padding:0;font-size:18px;font-weight:700;color:#3F1A44;line-height:1.6">نشاط الموظفين</h2>
-    ${activity}
+    <h2 style="margin:18px 0 8px;padding:0;font-size:18px;font-weight:700;color:#3F1A44;line-height:1.6">تحديثات العملاء القدامى</h2>
+    <p style="margin:0 0 8px;line-height:1.7">عملاء سُجّلوا قبل ${escapeHtml(report.from)} وتحدّثت بياناتهم خلال الفترة.</p>
+    ${legacy}
   `;
   return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"/><title>${escapeHtml(weeklyReportSubject(report))}</title></head><body style="margin:0;padding:24px;background:#fff;color:#111827;font-family:Tahoma,Arial,sans-serif;line-height:1.7;direction:rtl;text-align:right"><div style="max-width:960px;margin:0 auto"><p style="margin:0 0 8px;color:#3F1A44;font-size:20px;line-height:1.6">ساس الثراء</p><h1 style="margin:0 0 12px;color:#3F1A44;font-size:22px;font-weight:700;line-height:1.6">${escapeHtml(weeklyReportSubject(report))}</h1>${body}</div></body></html>`;
 }
