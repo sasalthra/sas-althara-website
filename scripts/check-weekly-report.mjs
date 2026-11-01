@@ -88,6 +88,20 @@ try {
   assert.equal(fahad.dispatched, 1);
   assert.equal(fahad.visits, 1);
   assert.equal(fahad.reports, 1);
+  const columns = weekly.employeeStageColumns();
+  for (const row of report.employees) {
+    const sum = columns.reduce((total, column) => total + (row.stages[column.stage] || 0), 0);
+    assert.equal(sum, row.assigned, `${row.name} stage columns must equal assigned leads`);
+  }
+  const footer = weekly.sumStageTable(report.employees.map(row => ({total: row.assigned, stages: row.stages})));
+  assert.equal(weekly.stageRowSum(footer), footer.total);
+  assert.equal(footer.total, report.employees.reduce((total, row) => total + row.assigned, 0));
+  assert.equal(weekly.stageTableIsExact(report.employees.map(row => ({total: row.assigned, stages: row.stages})), footer.total), true);
+  assert.deepEqual(weekly.manualReportRange('week', '2026-11-01'), {from: '2026-10-26', to: '2026-11-01'});
+  assert.deepEqual(weekly.manualReportRange('month', '2026-11-01'), {from: '2026-10-03', to: '2026-11-01'});
+  assert.equal(weekly.validReportRange('2026-11-02', '2026-11-01'), false);
+  assert.equal(weekly.weeklyReportSubject(report).includes(report.from), true);
+  assert.equal(weekly.weeklyReportSubject(report).includes(report.to), true);
   const html = weekly.renderWeeklyReportHtml(report);
   assert.match(html, /عملاء جدد: 3/);
   assert.match(html, /تيك توك/);
@@ -97,7 +111,25 @@ try {
   assert.match(html, /تفويج للميدان: 1/);
   assert.match(html, /سارة/);
   assert.match(html, /dir="rtl"/);
+  assert.match(html, /background:#3F1A44/);
+  assert.match(html, /الإجمالي/);
+  assert.match(html, /نشاط الموظفين/);
+  assert.ok(html.includes(report.from));
   assert.doesNotMatch(html, /info@/);
+  const adminRoute = readFileSync('app/api/reports/weekly/route.ts', 'utf8');
+  const panel = readFileSync('app/crm/reports-panel.tsx', 'utf8');
+  assert.match(adminRoute, /actor\(req,\s*\['admin'\]\)/);
+  assert.match(adminRoute, /from:\s*range\.from/);
+  assert.match(adminRoute, /force:\s*true/);
+  assert.match(job, /options\.from/);
+  assert.match(job, /recordSend = !preview && !force/);
+  assert.doesNotMatch(job, /rememberWeek/);
+  assert.match(panel, /إرسال التقرير بالإيميل/);
+  assert.match(panel, /آخر أسبوع/);
+  assert.match(panel, /آخر شهر/);
+  assert.match(panel, /الفترة المحددة في الفلاتر/);
+  assert.match(panel, /معاينة البريد/);
+  assert.match(readFileSync('lib/reports.ts', 'utf8'), /noteEmployeeLead\(stat, row\.stage\)/);
   assert.equal(pdf.reportPdfFilename('2026-10-31', '2026-11-06'), 'report-2026-10-31-2026-11-06.pdf');
   console.log('PASS weekly report window, tables, sender guard, and PDF filename');
 } finally {

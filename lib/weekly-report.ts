@@ -4,6 +4,7 @@ import {
   isContactedStage,
   isInterestedStage,
   isNotInterestedStage,
+  isSignedStage,
   matchUser,
   normalizeSource,
   orderedStages,
@@ -12,7 +13,10 @@ import {
 } from './lead-cohorts';
 import {stageLabel} from './lead-stages';
 import {fieldReportText} from './field-report';
+import {emptyStageCounts, employeeStageColumns, noteEmployeeLead, sumStageTable} from './employee-stages';
 import {nextCalendarDay, shiftCalendarDay} from './report-presets';
+
+export {employeeStageColumns, stageRowSum, sumStageTable, stageTableIsExact} from './employee-stages';
 
 export const DEFAULT_WEEKLY_REPORT_TO = 'sasalthra.sa@gmail.com';
 
@@ -35,12 +39,14 @@ export type WeeklyLead = {
 export type WeeklyEmployeeRow = {
   name: string;
   assigned: number;
+  stages: Record<string, number>;
   contacted: number;
   interested: number;
   notInterested: number;
   dispatched: number;
   visits: number;
   reports: number;
+  deals: number;
 };
 
 export type WeeklyReportData = {
@@ -91,6 +97,25 @@ export function weeklyReportWindow(now: Date) {
     weekday: clock.weekday,
     hour: clock.hour,
   };
+}
+
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Inclusive Riyadh ranges for the manual email menu. Week is 7 days and month is 30 days, both ending today. */
+export function manualReportRange(period: 'week' | 'month', today: string): {from: string; to: string} | null {
+  if (!DAY_KEY.test(today)) return null;
+  if (period === 'week') return {from: shiftCalendarDay(today, -6), to: today};
+  if (period === 'month') return {from: shiftCalendarDay(today, -29), to: today};
+  return null;
+}
+
+export function validReportRange(from: string, to: string): boolean {
+  if (!DAY_KEY.test(from) || !DAY_KEY.test(to) || from > to) return false;
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  const days = Math.round((end - start) / 86400000) + 1;
+  return days >= 1 && days <= 400;
 }
 
 export function weeklyReportRecipients(value?: string | null): string[] {
@@ -159,17 +184,21 @@ export function buildWeeklyReport(leads: WeeklyLead[], users: DirectoryUser[], f
     const ownedDispatch = dispatchedLeads.filter(lead => linked(lead, person));
     const visits = leads.filter(lead => linked(lead, person) && VISIT_DONE.has(stageKeyOf(lead.stage)) && (inRange(fieldDispatchMoment(lead), from, to) || inRange(lead.created_at, from, to)));
     const reports = leads.filter(lead => linked(lead, person) && fieldReportText(lead.field_report) && (inRange(lead.field_report_at, from, to) || inRange(fieldDispatchMoment(lead), from, to)));
+    const bucket = {assigned: 0, stages: emptyStageCounts()};
+    for (const lead of assignedLeads) noteEmployeeLead(bucket, lead.stage);
     return {
       name: person.name || person.id,
-      assigned: assignedLeads.length,
+      assigned: bucket.assigned,
+      stages: bucket.stages,
       contacted: assignedLeads.filter(lead => isContactedStage(lead.stage)).length,
       interested: assignedLeads.filter(lead => isInterestedStage(lead.stage)).length,
       notInterested: assignedLeads.filter(lead => isNotInterestedStage(lead.stage)).length,
       dispatched: ownedDispatch.length,
       visits: visits.length,
       reports: reports.length,
+      deals: assignedLeads.filter(lead => isSignedStage(lead.stage)).length,
     };
-  }).filter(row => row.assigned || row.contacted || row.interested || row.notInterested || row.dispatched || row.visits || row.reports)
+  }).filter(row => row.assigned || row.contacted || row.interested || row.notInterested || row.dispatched || row.visits || row.reports || row.deals)
     .sort((a, b) => b.assigned - a.assigned || a.name.localeCompare(b.name, 'ar'));
   return {
     from,
@@ -189,22 +218,42 @@ function escapeHtml(value: unknown) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char] || char));
 }
 
+function cellStyle(index: number, totalRow: boolean, zebra: boolean) {
+  const align = index === 0 ? 'right' : 'center';
+  const background = totalRow ? '#f3eaf4' : zebra ? '#f7f4f8' : '#ffffff';
+  const weight = index === 0 || totalRow ? '700' : '500';
+  const color = totalRow ? '#3F1A44' : '#111827';
+  return `text-align:${align};padding:10px 8px 12px;border:1px solid #e5e7eb;background:${background};line-height:1.7;font-weight:${weight};color:${color};font-variant-numeric:tabular-nums`;
+}
+
 function table(headers: string[], rows: string[][]) {
-  const head = headers.map(header => `<th style="text-align:right;padding:8px 10px;background:#f7f4f8;color:#3F1A44;border:1px solid #e5e7eb;font-weight:700">${escapeHtml(header)}</th>`).join('');
+  const head = headers.map((header, index) => `<th style="text-align:${index === 0 ? 'right' : 'center'};padding:10px 8px 12px;background:#3F1A44;color:#ffffff;border:1px solid #3F1A44;font-weight:700;line-height:1.6">${escapeHtml(header)}</th>`).join('');
   const body = rows.length
-    ? rows.map(row => `<tr>${row.map(cell => `<td style="text-align:right;padding:8px 10px;border:1px solid #e5e7eb">${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')
-    : `<tr><td colspan="${headers.length}" style="text-align:right;padding:8px 10px;border:1px solid #e5e7eb">—</td></tr>`;
-  return `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:8px 0 18px">${`<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`}</table>`;
+    ? rows.map((row, rowIndex) => {
+      const totalRow = row[0] === 'الإجمالي';
+      return `<tr>${row.map((cell, index) => `<td style="${cellStyle(index, totalRow, rowIndex % 2 === 1)}">${escapeHtml(cell)}</td>`).join('')}</tr>`;
+    }).join('')
+    : `<tr><td colspan="${headers.length}" style="${cellStyle(0, false, false)}">—</td></tr>`;
+  return `<div style="overflow-x:auto;margin:8px 0 18px"><table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:13px">${`<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`}</table></div>`;
+}
+
+function share(part: number, whole: number) {
+  if (!whole) return '—';
+  return `${Math.round((part / whole) * 100)}%`;
 }
 
 export function weeklyReportSubject(report: WeeklyReportData) {
-  return `تقرير الأداء الأسبوعي ${report.from} — ${report.to}`;
+  return `تقرير الأداء ${report.from} — ${report.to}`;
 }
 
 export function renderWeeklyReportText(report: WeeklyReportData) {
   const sources = report.bySource.map(row => `${row.label}: ${row.count}`).join('\n') || '—';
   const stages = report.byStage.filter(row => row.count > 0).map(row => `${row.label}: ${row.count}`).join('\n') || '—';
-  const people = report.employees.map(row => `${row.name}: مسند ${row.assigned}، تواصل ${row.contacted}، مهتم ${row.interested}، غير مهتم ${row.notInterested}، تفويج ${row.dispatched}، زيارات ${row.visits}، تقارير ${row.reports}`).join('\n') || '—';
+  const columns = employeeStageColumns();
+  const people = report.employees.map(row => {
+    const stages = columns.filter(column => row.stages[column.stage]).map(column => `${column.short} ${row.stages[column.stage]}`).join('، ') || '—';
+    return `${row.name}: الإجمالي ${row.assigned} (${stages})؛ زيارات ${row.visits}، تقارير ${row.reports}، صفقات ${row.deals}`;
+  }).join('\n') || '—';
   return [
     'ساس الثراء',
     weeklyReportSubject(report),
@@ -227,22 +276,49 @@ export function renderWeeklyReportText(report: WeeklyReportData) {
 }
 
 export function renderWeeklyReportHtml(report: WeeklyReportData) {
-  const sources = table(['المصدر', 'عملاء جدد'], report.bySource.map(row => [row.label, String(row.count)]));
-  const stages = table(['المرحلة', 'العدد'], report.byStage.filter(row => row.count > 0).map(row => [row.label, String(row.count)]));
+  const sourceTotal = report.bySource.reduce((sum, row) => sum + row.count, 0);
+  const sources = table(
+    ['المصدر', 'عملاء جدد', 'النسبة'],
+    report.bySource.map(row => [row.label, String(row.count), share(row.count, sourceTotal)]).concat(report.bySource.length ? [['الإجمالي', String(sourceTotal), sourceTotal ? '100%' : '—']] : []),
+  );
+  const stageRows = report.byStage.filter(row => row.count > 0);
+  const stageTotal = stageRows.reduce((sum, row) => sum + row.count, 0);
+  const stages = table(
+    ['المرحلة', 'العدد', 'النسبة'],
+    stageRows.map(row => [row.label, String(row.count), share(row.count, stageTotal)]).concat(stageRows.length ? [['الإجمالي', String(stageTotal), stageTotal ? '100%' : '—']] : []),
+  );
+  const columns = employeeStageColumns();
+  const footer = sumStageTable(report.employees.map(row => ({total: row.assigned, stages: row.stages})));
   const people = table(
-    ['الموظف', 'مسند جديد', 'تواصل', 'مهتم', 'غير مهتم', 'تفويج', 'زيارات', 'تقارير'],
-    report.employees.map(row => [row.name, String(row.assigned), String(row.contacted), String(row.interested), String(row.notInterested), String(row.dispatched), String(row.visits), String(row.reports)])
+    ['الموظف', ...columns.map(column => column.short), 'الإجمالي', 'النسبة'],
+    report.employees.map(row => [
+      row.name,
+      ...columns.map(column => String(row.stages[column.stage] || 0)),
+      String(row.assigned),
+      share(row.assigned, footer.total),
+    ]).concat(report.employees.length ? [[
+      'الإجمالي',
+      ...columns.map(column => String(footer.stages[column.stage] || 0)),
+      String(footer.total),
+      footer.total ? '100%' : '—',
+    ]] : []),
+  );
+  const activity = table(
+    ['الموظف', 'زيارات', 'تقارير', 'صفقات'],
+    report.employees.map(row => [row.name, String(row.visits), String(row.reports), String(row.deals)]),
   );
   const body = `
-    <p style="margin:0 0 8px">الفترة: ${escapeHtml(report.from)} — ${escapeHtml(report.to)}</p>
-    <h2 style="margin:18px 0 8px;font-size:18px;font-weight:700;color:#111827">عملاء جدد: ${report.newLeads}</h2>
+    <p style="margin:0 0 8px;line-height:1.7">الفترة: ${escapeHtml(report.from)} — ${escapeHtml(report.to)}</p>
+    <h2 style="margin:18px 0 8px;padding:0;font-size:18px;font-weight:700;color:#3F1A44;line-height:1.6">عملاء جدد: ${report.newLeads}</h2>
     ${sources}
-    <h2 style="margin:18px 0 8px;font-size:18px;font-weight:700;color:#111827">المراحل</h2>
-    <p style="margin:0 0 8px">مهتم: ${report.interested} · غير مهتم: ${report.notInterested}</p>
+    <h2 style="margin:18px 0 8px;padding:0;font-size:18px;font-weight:700;color:#3F1A44;line-height:1.6">المراحل</h2>
+    <p style="margin:0 0 8px;line-height:1.7">مهتم: ${report.interested} · غير مهتم: ${report.notInterested}</p>
     ${stages}
-    <h2 style="margin:18px 0 8px;font-size:18px;font-weight:700;color:#111827">تفويج للميدان: ${report.dispatched}</h2>
-    <h2 style="margin:18px 0 8px;font-size:18px;font-weight:700;color:#111827">الموظفون</h2>
+    <h2 style="margin:18px 0 8px;padding:0;font-size:18px;font-weight:700;color:#3F1A44;line-height:1.6">تفويج للميدان: ${report.dispatched}</h2>
+    <h2 style="margin:18px 0 8px;padding:0;font-size:18px;font-weight:700;color:#3F1A44;line-height:1.6">الموظفون حسب المرحلة الحالية</h2>
     ${people}
+    <h2 style="margin:18px 0 8px;padding:0;font-size:18px;font-weight:700;color:#3F1A44;line-height:1.6">نشاط الموظفين</h2>
+    ${activity}
   `;
-  return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"/><title>${escapeHtml(weeklyReportSubject(report))}</title></head><body style="margin:0;padding:24px;background:#fff;color:#111827;font-family:Tahoma,Arial,sans-serif;line-height:1.6;direction:rtl;text-align:right"><div style="max-width:720px;margin:0 auto"><p style="margin:0 0 8px;color:#3F1A44;font-size:20px">ساس الثراء</p><h1 style="margin:0 0 12px;color:#3F1A44;font-size:22px;font-weight:700">${escapeHtml(weeklyReportSubject(report))}</h1>${body}</div></body></html>`;
+  return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"/><title>${escapeHtml(weeklyReportSubject(report))}</title></head><body style="margin:0;padding:24px;background:#fff;color:#111827;font-family:Tahoma,Arial,sans-serif;line-height:1.7;direction:rtl;text-align:right"><div style="max-width:960px;margin:0 auto"><p style="margin:0 0 8px;color:#3F1A44;font-size:20px;line-height:1.6">ساس الثراء</p><h1 style="margin:0 0 12px;color:#3F1A44;font-size:22px;font-weight:700;line-height:1.6">${escapeHtml(weeklyReportSubject(report))}</h1>${body}</div></body></html>`;
 }

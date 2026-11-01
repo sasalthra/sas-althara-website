@@ -1,6 +1,6 @@
 import 'server-only';
 import {crmDb} from './crm-db';
-import {CRM_MAIL_FROM, sendMail} from './mail';
+import {CRM_MAIL_FROM, sendMailResult} from './mail';
 import {asBinary, paramEq} from './sql-collation';
 import {publicSyncError} from './sheet-sync-config';
 import type {DirectoryUser} from './lead-cohorts';
@@ -9,6 +9,7 @@ import {
   renderWeeklyReportHtml,
   renderWeeklyReportText,
   riyadhWindowBounds,
+  validReportRange,
   weeklyReportRecipients,
   weeklyReportSubject,
   weeklyReportWindow,
@@ -22,6 +23,7 @@ export type WeeklyReportJobResult = {
   sent: boolean;
   preview: boolean;
   reason: string;
+  error?: string;
   weekKey: string;
   from: string;
   to: string;
@@ -63,12 +65,6 @@ async function claimWeek(weekKey: string, sentAt: string) {
 
 async function releaseWeek(weekKey: string) {
   await crmDb().prepare(`DELETE FROM crm_weekly_report_sends WHERE ${paramEq('week_key')}`).bind(weekKey).run();
-}
-
-async function rememberWeek(weekKey: string, sentAt: string) {
-  const claimed = await claimWeek(weekKey, sentAt);
-  if (claimed) return;
-  await crmDb().prepare(`UPDATE crm_weekly_report_sends SET sent_at = ? WHERE ${paramEq('week_key')}`).bind(sentAt, weekKey).run();
 }
 
 async function loadLeads(from: string, to: string): Promise<WeeklyLead[]> {
@@ -118,54 +114,65 @@ async function loadStaff(): Promise<DirectoryUser[]> {
   throw last instanceof Error ? last : new Error('weekly report staff query failed');
 }
 
-export async function loadWeeklyReport(now = new Date()): Promise<WeeklyReportData> {
+export async function loadWeeklyReport(now = new Date(), range?: {from?: string; to?: string}): Promise<WeeklyReportData> {
   const window = weeklyReportWindow(now);
-  const [leads, staff] = await Promise.all([loadLeads(window.from, window.to), loadStaff()]);
-  return buildWeeklyReport(leads, staff, window.from, window.to, window.weekKey);
+  const from = range?.from || window.from;
+  const to = range?.to || window.to;
+  const [leads, staff] = await Promise.all([loadLeads(from, to), loadStaff()]);
+  return buildWeeklyReport(leads, staff, from, to, window.weekKey);
 }
 
-async function deliver(options: {force?: boolean; preview?: boolean; now?: Date}): Promise<WeeklyReportJobResult> {
+async function deliver(options: {force?: boolean; preview?: boolean; now?: Date; from?: string; to?: string}): Promise<WeeklyReportJobResult> {
   const now = options.now || new Date();
   const window = weeklyReportWindow(now);
-  const preview = Boolean(options.preview);
-  const force = Boolean(options.force);
-  const decision = weeklySendDecision({due: window.due, alreadySent: false, force, preview});
-  if (decision === 'skip' && !force && !preview && !window.due) {
-    return emptyResult({reason: 'not-due', weekKey: window.weekKey, from: window.from, to: window.to});
+  const requestedFrom = (options.from || '').trim();
+  const requestedTo = (options.to || '').trim();
+  const custom = Boolean(requestedFrom || requestedTo);
+  if (custom && !validReportRange(requestedFrom, requestedTo)) {
+    return emptyResult({ok: false, reason: 'invalid-range', weekKey: window.weekKey, from: requestedFrom, to: requestedTo});
   }
-  const report = await loadWeeklyReport(now);
+  const from = custom ? requestedFrom : window.from;
+  const to = custom ? requestedTo : window.to;
+  const preview = Boolean(options.preview);
+  const force = Boolean(options.force) || custom;
+  // A manual or ranged send must not claim the Saturday week, so the 11:00 job still runs.
+  const recordSend = !preview && !force;
+  const decision = weeklySendDecision({due: window.due, alreadySent: false, force, preview});
+  if (decision === 'skip') {
+    return emptyResult({reason: 'not-due', weekKey: window.weekKey, from, to});
+  }
+  const report = await loadWeeklyReport(now, {from, to});
   const html = renderWeeklyReportHtml(report);
   const text = renderWeeklyReportText(report);
   if (preview) {
-    return emptyResult({ok: true, preview: true, reason: 'preview', weekKey: window.weekKey, from: window.from, to: window.to, html});
+    return emptyResult({ok: true, preview: true, reason: 'preview', weekKey: window.weekKey, from: report.from, to: report.to, html});
   }
   const recipients = weeklyReportRecipients(process.env.WEEKLY_REPORT_TO);
-  if (!force) {
+  if (recordSend) {
     const claimed = await claimWeek(window.weekKey, now.toISOString());
-    if (!claimed) return emptyResult({reason: 'already-sent', weekKey: window.weekKey, from: window.from, to: window.to, toAddress: recipients});
+    if (!claimed) return emptyResult({reason: 'already-sent', weekKey: window.weekKey, from: report.from, to: report.to, toAddress: recipients});
   }
   try {
-    const sent = await sendMail({
+    const mailed = await sendMailResult({
       to: recipients,
       from: CRM_MAIL_FROM,
       subject: weeklyReportSubject(report),
       text,
       html,
     });
-    if (!sent) {
-      if (!force) await releaseWeek(window.weekKey);
-      return emptyResult({ok: false, reason: 'mail-failed', weekKey: window.weekKey, from: window.from, to: window.to, toAddress: recipients});
+    if (!mailed.ok) {
+      if (recordSend) await releaseWeek(window.weekKey);
+      return emptyResult({ok: false, reason: 'mail-failed', error: mailed.error, weekKey: window.weekKey, from: report.from, to: report.to, toAddress: recipients});
     }
-    if (force) await rememberWeek(window.weekKey, now.toISOString());
-    return emptyResult({ok: true, sent: true, reason: force ? 'forced' : 'sent', weekKey: window.weekKey, from: window.from, to: window.to, toAddress: recipients});
+    return emptyResult({ok: true, sent: true, reason: recordSend ? 'sent' : 'manual', weekKey: window.weekKey, from: report.from, to: report.to, toAddress: recipients});
   } catch (error) {
-    if (!force) await releaseWeek(window.weekKey).catch(releaseError => console.error('weekly report claim release failed', publicSyncError(releaseError)));
+    if (recordSend) await releaseWeek(window.weekKey).catch(releaseError => console.error('weekly report claim release failed', publicSyncError(releaseError)));
     throw error;
   }
 }
 
-export function sendWeeklyReport(options: {force?: boolean; preview?: boolean; now?: Date} = {}): Promise<WeeklyReportJobResult> {
-  if (options.preview || options.force || options.now) return deliver(options);
+export function sendWeeklyReport(options: {force?: boolean; preview?: boolean; now?: Date; from?: string; to?: string} = {}): Promise<WeeklyReportJobResult> {
+  if (options.preview || options.force || options.now || options.from || options.to) return deliver(options);
   if (!inflight) {
     inflight = deliver(options).finally(() => {
       inflight = null;
