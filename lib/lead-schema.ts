@@ -1459,6 +1459,7 @@ const ASSIGNED_AT_MIGRATION = 'assigned_at_backfill_v1';
 const ASSIGNED_AT_REFILL = 'assigned_at_null_v2';
 const FIRST_DISPATCH_MIGRATION = 'first_field_dispatch_at_v1';
 const FIRST_DISPATCH_REFILL = 'first_field_dispatch_at_null_v2';
+const DISPATCH_STAMP_REFILL = 'dispatch_stamps_null_v3';
 const ASSIGN_ACTIONS = ['assigned', 'assignment', 'reassigned', 'imported', 'created', 'updated'];
 const DISPATCH_ACTIONS = ['field_dispatched', 'stage_changed'];
 
@@ -1643,6 +1644,87 @@ async function backfillFirstFieldDispatch(executor: SqlExecutor) {
   }
 }
 
+/**
+ * Fills blank dispatch stamps from stage history and activity.
+ * A later boot still runs until the marker is recorded. Existing stamps stay.
+ * created_at is never copied: a lead with no history keeps a blank stamp.
+ */
+async function backfillNullDispatchStamps(executor: SqlExecutor) {
+  if (await columnMissing(executor, 'leads', 'first_field_dispatch_at')) return;
+  if (await columnMissing(executor, 'leads', 'field_dispatched_at')) return;
+  if (await migrationApplied(executor, DISPATCH_STAMP_REFILL)) return;
+  const leads = rowsOf(await run(
+    executor,
+    'SELECT id, stage, field_dispatched_at, first_field_dispatch_at FROM leads'
+  ));
+  const actions = ['field_dispatched', 'stage_changed', 'updated', 'imported'];
+  const where = actionWhere(actions);
+  const activities = rowsOf(await run(
+    executor,
+    `SELECT lead_id, action, details, created_at FROM lead_activity WHERE ${where.sql}`,
+    where.args
+  ));
+  let notes: Record<string, unknown>[] = [];
+  try {
+    notes = rowsOf(await run(executor, 'SELECT lead_id, stage, created_at FROM lead_stage_notes'));
+  } catch (error) {
+    if (!/lead_stage_notes|no such table|unknown table|doesn't exist|ER_NO_SUCH_TABLE/i.test(messageOf(error))) throw error;
+  }
+  const earliest = new Map<string, string>();
+  const latest = new Map<string, string>();
+  const remember = (id: string, at: string) => {
+    if (!id || !at) return;
+    earliest.set(id, earlierStamp(earliest.get(id) || '', at));
+    latest.set(id, laterStamp(latest.get(id) || '', at));
+  };
+  for (const row of activities) {
+    const id = String(row.lead_id ?? '');
+    const at = activityStamp(row.created_at);
+    const action = String(row.action ?? '');
+    if (!id || !at) continue;
+    if (action === 'field_dispatched') {
+      remember(id, at);
+      continue;
+    }
+    const data = detailsObject(row.details);
+    if (isDispatchStageName(data.stage)) remember(id, at);
+  }
+  for (const row of notes) {
+    if (!isDispatchStageName(row.stage)) continue;
+    remember(String(row.lead_id ?? ''), activityStamp(row.created_at));
+  }
+  let ok = true;
+  for (const lead of leads) {
+    const id = String(lead.id ?? '');
+    if (!id) continue;
+    const firstBlank = !String(lead.first_field_dispatch_at ?? '').trim();
+    const latestBlank = !String(lead.field_dispatched_at ?? '').trim();
+    if (!firstBlank && !latestBlank) continue;
+    const firstAt = earliest.get(id) || '';
+    const latestAt = latest.get(id) || '';
+    if (!firstAt && !latestAt) continue;
+    const sets: string[] = [];
+    const args: string[] = [];
+    if (firstBlank && firstAt) {
+      sets.push('first_field_dispatch_at = ?');
+      args.push(firstAt);
+    }
+    if (latestBlank && latestAt) {
+      sets.push('field_dispatched_at = ?');
+      args.push(latestAt);
+    }
+    if (!sets.length) continue;
+    args.push(id);
+    try {
+      await run(executor, `UPDATE leads SET ${sets.join(', ')} WHERE ${paramEq('id')}`, args);
+    } catch (error) {
+      ok = false;
+      console.error('dispatch stamp refill was not saved', error);
+    }
+  }
+  if (ok) await markMigration(executor, DISPATCH_STAMP_REFILL);
+}
+
 async function ensureAssignmentStamps(executor: SqlExecutor) {
   await ensureColumn(executor, 'leads', 'assigned_at', 'VARCHAR(40) NULL');
   await ensureColumn(executor, 'leads', 'first_field_dispatch_at', 'VARCHAR(40) NULL');
@@ -1655,6 +1737,11 @@ async function ensureAssignmentStamps(executor: SqlExecutor) {
     await backfillFirstFieldDispatch(executor);
   } catch (error) {
     console.error('first field dispatch backfill failed', error);
+  }
+  try {
+    await backfillNullDispatchStamps(executor);
+  } catch (error) {
+    console.error('dispatch stamp refill failed', error);
   }
 }
 

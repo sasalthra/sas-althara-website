@@ -9,6 +9,7 @@ import {canonicalStage, displayStage, stageChoices, stageLabel} from '@/lib/lead
 import {riyadhDayKey} from '@/lib/lead-dates';
 import {activeReportPreset, reportPresetRange} from '@/lib/report-presets';
 import {employeeStageColumns, sumStageTable} from '@/lib/employee-stages';
+import {sumLegacyUpdates} from '@/lib/legacy-updates';
 import type {DashboardEmployee} from '@/lib/reports';
 import {buildReportPath,leadReturnHref,rememberReportScroll,restoreReportScroll} from '@/lib/report-return';
 import {CrmLink,navigateCrm,useCrmQuery} from './navigation';
@@ -341,6 +342,22 @@ export default function ReportsPanel({role}:{role:string}){
   q.set('returnTo',reportPath);
   return '/crm?'+q.toString();
  }
+ function legacyListHref(actorId:string){
+  const q=new URLSearchParams();
+  q.set('tab','leads');
+  q.set('legacyUpdates','1');
+  const from=query.get('from')||stateData?.filters.from||'';
+  const to=query.get('to')||stateData?.filters.to||'';
+  if(from)q.set('from',from);
+  if(to)q.set('to',to);
+  if(actorId)q.set('legacyActor',actorId);
+  const source=query.get('source')||stateData?.filters.source||'';
+  if(source){q.set('source',source);q.set('sourceExact','1');}
+  const stage=query.get('stage')||stateData?.filters.stage||'';
+  if(stage)q.set('stage',stage);
+  q.set('returnTo',reportPath);
+  return '/crm?'+q.toString();
+ }
  function assignmentListHref(stage?:string){
   const assignment=stateData?.assignment;
   if(!assignment||assignment.status!=='ok')return '/crm?tab=leads';
@@ -502,10 +519,11 @@ export default function ReportsPanel({role}:{role:string}){
      </Fragment>;
     })}
     <section className="pdf-block">
-     <h2><span className="pdf-text">نشاط الموظفين</span></h2>
+     <h2><span className="pdf-text">تحديثات العملاء القدامى</span></h2>
      <table className="reports-print-table">
-      <thead><tr><th><span className="pdf-text">الموظف</span></th><th><span className="pdf-text">زيارات</span></th><th><span className="pdf-text">تقارير</span></th><th><span className="pdf-text">متأخرة</span></th><th><span className="pdf-text">صفقات</span></th><th><span className="pdf-text">معاملات</span></th><th><span className="pdf-text">متابعات</span></th><th><span className="pdf-text">الإنجاز</span></th></tr></thead>
-      <tbody>{activeEmployees.length?activeEmployees.map(row=><tr key={row.id}><th><span className="pdf-text">{row.name}</span></th><td><span className="pdf-text">{fmt(row.visitsDone)}</span></td><td><span className="pdf-text">{fmtMaybe(row.reportsSubmitted,Boolean(dash.reportsKnown))}</span></td><td><span className="pdf-text">{fmtMaybe(row.reportsOverdue,Boolean(dash.reportsKnown))}</span></td><td><span className="pdf-text">{fmt(row.deals)}</span></td><td><span className="pdf-text">{fmtMaybe(row.transactions,Boolean(dash.transactionsKnown))}</span></td><td><span className="pdf-text">{fmt(row.overdue)}</span></td><td><span className="pdf-text">{row.completion==null?'—':`${row.completion}%`}</span></td></tr>):<tr><td colSpan={8}><span className="pdf-text">—</span></td></tr>}</tbody>
+      <thead><tr><th><span className="pdf-text">الموظف</span></th><th><span className="pdf-text">عدد العملاء المحدّثين</span></th><th><span className="pdf-text">تغيير مرحلة</span></th><th><span className="pdf-text">تحديث حالة</span></th><th><span className="pdf-text">ملاحظات</span></th><th><span className="pdf-text">الإجمالي</span></th></tr></thead>
+      <tbody>{(dash.legacyUpdates||[]).length?(dash.legacyUpdates||[]).map(row=><tr key={row.id}><th><span className="pdf-text">{row.name}</span></th><td><span className="pdf-text">{fmt(row.leads)}</span></td><td><span className="pdf-text">{fmt(row.stageChanges)}</span></td><td><span className="pdf-text">{fmt(row.statusUpdates)}</span></td><td><span className="pdf-text">{fmt(row.notes)}</span></td><td><span className="pdf-text">{fmt(row.total)}</span></td></tr>):<tr><td colSpan={6}><span className="pdf-text">—</span></td></tr>}</tbody>
+      {(dash.legacyUpdates||[]).length?<tfoot><tr>{(()=>{const totals=sumLegacyUpdates(dash.legacyUpdates||[]);return <><th><span className="pdf-text">الإجمالي</span></th><td><span className="pdf-text">{fmt(totals.leads)}</span></td><td><span className="pdf-text">{fmt(totals.stageChanges)}</span></td><td><span className="pdf-text">{fmt(totals.statusUpdates)}</span></td><td><span className="pdf-text">{fmt(totals.notes)}</span></td><td><span className="pdf-text">{fmt(totals.total)}</span></td></>;})()}</tr></tfoot>:null}
      </table>
     </section>
     {stageChunks.map((rows,index)=>(
@@ -690,7 +708,7 @@ export default function ReportsPanel({role}:{role:string}){
        <KpiCard value={fmt(focus.assigned)} label="مسندون" icon={<ClipboardList size={18}/>} href={clientListHref({employee:focus.id})}/>
        <KpiCard value={fmt(focus.contacted)} label="تم التواصل" icon={<Users size={18}/>} href={clientListHref({employee:focus.id,stageGroup:'contacted'})} chip={pctOf(focus.contacted,focus.assigned)}/>
        <KpiCard value={fmt(focus.interested)} label="مهتم" icon={<TrendingUp size={18}/>} href={clientListHref({employee:focus.id,stageGroup:'interested'})} chip={pctOf(focus.interested,focus.assigned)}/>
-       <KpiCard value={fmt(focus.dispatched)} label="تفويج للميدان" icon={<Layers size={18}/>} chip={pctOf(focus.dispatched,focus.assigned)}/>
+       <KpiCard value={fmt(focus.dispatched)} label="تفويج للميدان" icon={<Layers size={18}/>} href={clientListHref({employee:focus.id,dispatched:'1'})} chip={pctOf(focus.dispatched,focus.assigned)}/>
        <KpiCard value={fmt(focus.visitsDone)} label="زيارات مكتملة" icon={<CheckCircle2 size={18}/>}/>
        <KpiCard value={fmtMaybe(focus.reportsSubmitted,Boolean(dash?.reportsKnown))} label="تقارير مقدمة" icon={<FileText size={18}/>}/>
        <KpiCard value={fmtMaybe(focus.reportsOverdue,Boolean(dash?.reportsKnown))} label="تقارير متأخرة" icon={<AlertCircle size={18}/>}/>
@@ -884,7 +902,7 @@ export default function ReportsPanel({role}:{role:string}){
       </div>
       <CrmLink className="report-secondary-btn reports-perf-all" href="/crm?tab=users">عرض جميع الموظفين</CrmLink>
      </div>
-     <div className="report-table-scroll" tabIndex={0} aria-label="جدول أداء الموظفين">
+     <div className="report-table-scroll reports-employees-scroll" tabIndex={0} aria-label="جدول أداء الموظفين">
       <table className="reports-perf-table reports-stage-matrix">
        <thead>
         <tr>
@@ -932,39 +950,50 @@ export default function ReportsPanel({role}:{role:string}){
      </div>
      <div className="reports-perf-head">
       <div>
-       <h3>نشاط الموظفين</h3>
+       <h3>تحديثات العملاء القدامى</h3>
+       <p className="subtle">عملاء سُجّلوا قبل بداية الفترة، وتحدّثت بياناتهم خلالها.</p>
       </div>
      </div>
-     <div className="report-table-scroll" tabIndex={0} aria-label="نشاط الموظفين">
+     <div className="report-table-scroll" tabIndex={0} aria-label="تحديثات العملاء القدامى">
       <table className="reports-perf-table">
        <thead>
         <tr>
-         <SortHead label="الموظف" column="name" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="زيارات" column="visitsDone" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="تقارير" column="reportsSubmitted" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="تقارير متأخرة" column="reportsOverdue" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="صفقات" column="deals" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="معاملات" column="transactions" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="متابعات متأخرة" column="overdue" active={sortKey} dir={sortDir} onSort={toggleSort}/>
-         <SortHead label="نسبة الإنجاز" column="completion" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <th>الموظف</th>
+         <th>عدد العملاء المحدّثين</th>
+         <th>تغيير مرحلة</th>
+         <th>تحديث حالة</th>
+         <th>ملاحظات</th>
+         <th>الإجمالي</th>
         </tr>
        </thead>
        <tbody>
-        {perfRows.length===0?(
-         <tr><td colSpan={8}>{stateData?.dashboardError||'لا يوجد موظفون في النطاق.'}</td></tr>
-        ):perfRows.map(row=>(
+        {(dash?.legacyUpdates||[]).length===0?(
+         <tr><td colSpan={6}>{stateData?.dashboardError||'لا تحديثات على عملاء قدامى ضمن الفلاتر.'}</td></tr>
+        ):(dash?.legacyUpdates||[]).map(row=>(
          <tr key={row.id}>
           <th scope="row">{row.name}</th>
-          <td className="num">{fmt(row.visitsDone)}</td>
-          <td className="num">{fmtMaybe(row.reportsSubmitted,Boolean(dash?.reportsKnown))}</td>
-          <td className="num">{fmtMaybe(row.reportsOverdue,Boolean(dash?.reportsKnown))}</td>
-          <td className="num"><NumLink href={clientListHref({employee:row.id,stageGroup:'signed'})}>{fmt(row.deals)}</NumLink></td>
-          <td className="num">{fmtMaybe(row.transactions,Boolean(dash?.transactionsKnown))}</td>
-          <td className="num"><NumLink href={clientListHref({employee:row.id,overdue:'1'})}>{fmt(row.overdue)}</NumLink></td>
-          <td className="num">{row.completion==null?'—':`${row.completion}%`}</td>
+          <td className="num"><NumLink href={legacyListHref(row.id)}>{fmt(row.leads)}</NumLink></td>
+          <td className="num">{fmt(row.stageChanges)}</td>
+          <td className="num">{fmt(row.statusUpdates)}</td>
+          <td className="num">{fmt(row.notes)}</td>
+          <td className="num"><NumLink href={legacyListHref(row.id)}>{fmt(row.total)}</NumLink></td>
          </tr>
         ))}
        </tbody>
+       {(dash?.legacyUpdates||[]).length?(
+        <tfoot>
+         <tr>
+          {(()=>{const totals=sumLegacyUpdates(dash?.legacyUpdates||[]);return <>
+           <th scope="row">الإجمالي</th>
+           <td className="num"><NumLink href={legacyListHref('')}>{fmt(totals.leads)}</NumLink></td>
+           <td className="num">{fmt(totals.stageChanges)}</td>
+           <td className="num">{fmt(totals.statusUpdates)}</td>
+           <td className="num">{fmt(totals.notes)}</td>
+           <td className="num"><NumLink href={legacyListHref('')}>{fmt(totals.total)}</NumLink></td>
+          </>;})()}
+         </tr>
+        </tfoot>
+       ):null}
       </table>
      </div>
     </div>
