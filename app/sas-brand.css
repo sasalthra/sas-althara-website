@@ -85,6 +85,20 @@ button,input,textarea,select{font-family:inherit}
 }
 .sas-header a{color:inherit}
 .sas-header a:hover{opacity:.88}
+.sas-header-actions{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-inline-start:8px;
+}
+.sas-header-phone{
+  direction:ltr;
+  unicode-bidi:isolate;
+  font-weight:700;
+  letter-spacing:.01em;
+  white-space:nowrap;
+  font-size:.95rem;
+}
 .sas-header-search{
   display:inline-flex;
   align-items:center;
@@ -481,6 +495,14 @@ button,input,textarea,select{font-family:inherit}
   font-size:.95rem;
   color:#e8dce9;
 }
+.sas-footer a.sas-phone-link{
+  direction:ltr;
+  unicode-bidi:isolate;
+  text-align:right;
+  font-weight:700;
+  font-size:1.05rem;
+  color:#fff;
+}
 .sas-footer a:hover{color:#fff}
 .sas-footer h3{
   color:#fff;
@@ -495,6 +517,55 @@ button,input,textarea,select{font-family:inherit}
   padding-top:1rem;
   margin:1rem 0 0;
   color:#d8b7d9;
+}
+
+/* ===== Contact page ===== */
+.contact-page{min-height:100vh;background:linear-gradient(180deg,#f7f4ef 0%,#fff 28%);color:#1f2937}
+.contact-hero{max-width:980px;margin:0 auto;padding:2.5rem 1.25rem 1rem;text-align:center}
+.contact-kicker{display:inline-block;margin:0 0 .75rem;padding:.35rem .8rem;border-radius:999px;background:#f3eaf4;color:#3F1A44;font-size:.85rem;font-weight:700}
+.contact-hero h1{margin:0 0 .75rem;font-size:clamp(1.8rem,4vw,2.6rem);color:#3F1A44}
+.contact-hero p{margin:0 auto;max-width:40rem;line-height:1.8;color:#4b5563}
+.contact-grid{max-width:980px;margin:0 auto;padding:1.25rem 1.25rem 0;display:grid;gap:1rem;grid-template-columns:repeat(2,minmax(0,1fr))}
+.contact-card{background:#fff;border:1px solid #e7e0d6;border-radius:1.25rem;padding:1.35rem 1.4rem;box-shadow:0 10px 30px rgba(63,26,68,.08)}
+.contact-card h2{margin:.85rem 0 .4rem;font-size:1.15rem;color:#3F1A44}
+.contact-card p{margin:0;color:#4b5563;line-height:1.7}
+.contact-card-icon{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;background:#f3eaf4;color:#3F1A44}
+.contact-phone{display:inline-block;margin:.35rem 0 .45rem;direction:ltr;unicode-bidi:isolate;font-size:clamp(1.7rem,4vw,2.4rem);font-weight:700;line-height:1.3;color:#3F1A44;letter-spacing:.02em}
+.contact-phone:hover{color:#5B245F}
+.contact-map-btn{display:inline-flex;align-items:center;justify-content:center;width:fit-content;margin-top:.9rem;padding:.85rem 1.35rem;border-radius:10px;background:#3F1A44;color:#fff;font-weight:700}
+.contact-map-btn:hover{background:#5B245F}
+.contact-mail{display:block;width:fit-content;margin-top:.75rem;color:#3F1A44;font-weight:700}
+.contact-map{max-width:980px;margin:1.25rem auto 0;padding:0 1.25rem}
+.contact-map h2{margin:0 0 .75rem;font-size:1.2rem}
+.contact-map iframe{width:100%;height:360px;border:0;border-radius:16px;background:#f3eaf4}
+.contact-page .public-lead-band{max-width:980px;margin:1.5rem auto 0;padding:0 1.25rem 2.5rem}
+.contact-page .public-lead-band .public-lead{max-width:none}
+
+/* WhatsApp sits on the physical left so it stays in the bottom corner in RTL. */
+.whatsapp-float{
+  position:fixed;
+  z-index:60;
+  left:1.15rem;
+  bottom:1.15rem;
+  width:58px;
+  height:58px;
+  border-radius:50%;
+  display:grid;
+  place-items:center;
+  background:#25D366;
+  color:#fff;
+  box-shadow:0 10px 24px rgba(18,140,70,.35);
+}
+.whatsapp-float:hover{background:#1ebe5d;color:#fff}
+.whatsapp-float svg{display:block}
+
+@media (max-width:700px){
+  .contact-grid{grid-template-columns:1fr}
+  .contact-map iframe{height:280px}
+  .whatsapp-float{left:.85rem;bottom:.85rem}
+}
+@media print{
+  .whatsapp-float{display:none}
 }
 
 /* CRM / login leftovers */
@@ -514,7 +585,7 @@ button,input,textarea,select{font-family:inherit}
 @media (max-width:1000px){
   .sas-header{height:auto;flex-wrap:wrap;gap:14px}
   .sas-header nav{gap:14px;font-size:14px;margin-inline-start:0;width:100%;justify-content:center}
-  .sas-header-search{margin-inline-start:auto}
+  .sas-header-actions{margin-inline-start:auto}
   .sas-hero-copy{padding:6.5rem 0 6rem}
   .sas-search-form{grid-template-columns:1fr 1fr}
   .sas-stats-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -526,7 +597,7 @@ button,input,textarea,select{font-family:inherit}
 
 @media (max-width:650px){
   .sas-header{flex-direction:column;padding:12px 4% 14px}
-  .sas-header-search{margin:0}
+  .sas-header-actions{margin:0}
   .sas-hero-bleed{min-height:68vh}
   .sas-hero-copy{padding:5.5rem 0 5.5rem}
   .sas-hero-copy h1{max-width:none}

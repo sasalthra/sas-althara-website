@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import WhatsAppFloat from "@/components/whatsapp-float";
 import "./globals.css";
 import "./site.css";
 import "./sas-brand.css";
@@ -22,7 +23,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ar" dir="rtl">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        {children}
+        <WhatsAppFloat />
+      </body>
     </html>
   );
 }

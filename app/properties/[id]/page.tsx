@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import {getAdmin} from '@/lib/admin';
 import {redirectPermanent} from '@/lib/http-redirect';
+import {OFFICE_PHONE_TEL} from '@/lib/public-contact';
 import {loadPropertyRedirect, loadPublishedProperty} from '@/lib/property-catalog';
 import {formatListedPrice} from '@/lib/property-price';
 import type {CatalogProperty} from '@/lib/property-types';
@@ -149,7 +150,7 @@ export default async function PropertyDetailPage({
               <a href={`mailto:info@sasalthra.sa?subject=${encodeURIComponent(property.title)}`}>
                 <MessageCircle size={16} /> محادثة
               </a>
-              <a href="tel:+966">
+              <a href={OFFICE_PHONE_TEL}>
                 <Phone size={16} /> اتصال
               </a>
             </div>
@@ -187,7 +188,7 @@ export default async function PropertyDetailPage({
             <a href={`mailto:info@sasalthra.sa?subject=${encodeURIComponent(property.title)}`}>
               <MessageCircle size={15} /> محادثة
             </a>
-            <a href="tel:+966">
+            <a href={OFFICE_PHONE_TEL}>
               <Phone size={15} /> اتصال
             </a>
             <button type="button">

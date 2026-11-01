@@ -4,6 +4,7 @@ import {useMemo, useState} from 'react';
 import {useRouter} from 'next/navigation';
 import type {CatalogProperty} from '@/lib/property-types';
 import PublicLeadForm from '@/components/public-lead-form';
+import SiteFooter from './site-footer';
 import SiteHeader from './site-header';
 import SearchAgent from './search-agent';
 import {
@@ -373,40 +374,7 @@ export default function Catalog({properties}: {properties: CatalogProperty[]}) {
           />
         </section>
 
-        <footer className="sas-footer">
-          <div>
-            <img src="/brand/logo.png" alt="ساس الثراء" width={180} />
-            <p>
-              ساس الثراء للتسويق العقاري هي شركة رائدة في مدينة جدة، متخصصة في
-              تقديم حلول متكاملة في مجال التسويق العقاري.
-            </p>
-          </div>
-          <div>
-            <h3>الأقسام</h3>
-            <a href="/">الرئيسية</a>
-            <a href="/#about">من نحن</a>
-            <a href="/#services">خدماتنا</a>
-            <a href="/#properties">عروضنا العقارية</a>
-            <a href="/calculate-loan">احسب تمويلك</a>
-          </div>
-          <div>
-            <h3>روابط تهمك</h3>
-            <a href="https://sasalthra.sa/سياسة-الخصوصية/">سياسة الخصوصية</a>
-            <a href="https://sasalthra.sa/wp-content/uploads/2025/09/brofile_sas.pdf">
-              تحميل البروفايل
-            </a>
-            <a href="/crm">دخول النظام الداخلي</a>
-            <a href="https://sasalthra.sa/blog/">المدونة</a>
-          </div>
-          <div>
-            <h3>تواصل معنا</h3>
-            <a href="mailto:info@sasalthra.sa">info@sasalthra.sa</a>
-            <a href="https://sasalthra.sa/contact-us/">بيانات التواصل</a>
-          </div>
-          <p className="copyright">
-            جميع الحقوق محفوظة | ساس الثراء © {new Date().getFullYear()}
-          </p>
-        </footer>
+        <SiteFooter />
       </div>
     </>
   );
