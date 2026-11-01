@@ -1,3 +1,5 @@
+import {OFFICE_PHONE_DISPLAY, OFFICE_PHONE_TEL} from '@/lib/public-contact';
+
 type SiteHeaderProps = {
   variant?: 'overlay' | 'solid';
 };
@@ -15,11 +17,16 @@ export default function SiteHeader({variant = 'solid'}: SiteHeaderProps) {
         <a href="/#services">خدماتنا</a>
         <a href="/#properties">عروضنا</a>
         <a href="/calculate-loan">احسب تمويلك</a>
-        <a href="/#contact">تواصل</a>
+        <a href="/contact-us">تواصل</a>
       </nav>
-      <a className="sas-header-search" href="/#properties" aria-label="البحث في العروض">
-        بحث
-      </a>
+      <div className="sas-header-actions">
+        <a className="sas-header-phone" href={OFFICE_PHONE_TEL}>
+          {OFFICE_PHONE_DISPLAY}
+        </a>
+        <a className="sas-header-search" href="/#properties" aria-label="البحث في العروض">
+          بحث
+        </a>
+      </div>
     </header>
   );
 }
