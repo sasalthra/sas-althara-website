@@ -1,9 +1,10 @@
 import {reportCatalog,type ReportColumn,type ReportResult,type ReportRow,type ReportId} from './report-catalog';
 import {retiredStageMap, stageLabel, stageMatchKeys, stagePipelineIndex} from './lead-stages';
 import {COHORT_DEFINITIONS,countAssignmentEvents,completionRate,conversionRate,fieldDispatchMoment,hasScheduledFollowUp,instantInRiyadhRange,isClosedStage,isContactedStage,isEverFieldDispatchFilter,isInactiveLead,isInterestedStage,isNotInterestedStage,isOverdueFollowUp,isPastFreshStage,isSignedStage,isUnassignedNew,isUnassignedNewWaiting,leadMatchesReportFilters,leadMatchesStage,matchUser,normalizeSource,orderedStages,stageKeyOf,type AssignmentEvent,type DirectoryUser} from './lead-cohorts';
-import {formatRiyadhDateTime, riyadhDayKey} from './lead-dates';
+import {crmInstant, formatRiyadhDateTime, riyadhDayKey} from './lead-dates';
+import {fieldReportOverdue, fieldReportRequired, fieldReportText} from './field-report';
 import {commissionTotal, debtAmount, debtPayerLabels, reviewStatusLabels} from './transactions';
-import {asBinary,binEq,binJoin} from './sql-collation';
+import {asBinary,binEq,binJoin,inParams} from './sql-collation';
 export {leadMatchesReportFilters};
 export {fieldDispatchMoment, instantInRiyadhRange, isEverFieldDispatchFilter, leadEverFieldDispatched, leadMatchesAssignmentCohort} from './lead-cohorts';
 export class ReportError extends Error {constructor(public status:number,message:string){super(message);}}
@@ -343,13 +344,15 @@ export async function listReportEmployees(db:Database):Promise<DirectoryUser[]>{
  return users;
 }
 export type DashboardStage={stage:string;label:string;count:number;pct:number};
-export type DashboardEmployee={id:string;name:string;username:string;assigned:number;contacted:number;interested:number;signed:number;notInterested:number;overdue:number;completion:number|null};
+export type DashboardEmployee={id:string;name:string;username:string;role:string;assigned:number;contacted:number;interested:number;signed:number;notInterested:number;overdue:number;completion:number|null;dispatched:number;visitsDone:number;reportsSubmitted:number|null;reportsOverdue:number|null;deals:number;transactions:number|null;avgHoursToFirstContact:number|null};
 export type DashboardSource={key:string;label:string;total:number;interested:number;notInterested:number;signed:number;closed:number;unassignedNew:number;conversion:number|null};
 export type DashboardAlert={id:string;tone:'warn'|'info'|'muted';tag:string;message:string;href:string};
 export type DashboardField={inStage:number;assigned:number;unassigned:number;byEmployee:{name:string;count:number}[]};
+export type DashboardTrend={basis:string;points:{day:string;count:number}[]};
 export type ReportDashboard={
  total:number;interested:number;notInterested:number;signed:number;closed:number;unassignedNew:number;overdue:number;inactive:number;unassignedWaiting:number;scheduled:number;
  byStage:DashboardStage[];employees:DashboardEmployee[];sources:DashboardSource[];alerts:DashboardAlert[];field:DashboardField;definitions:typeof COHORT_DEFINITIONS;
+ trend:DashboardTrend;reportsKnown:boolean;transactionsKnown:boolean;firstContactKnown:boolean;
 };
 function listHref(filters:ReportFilters,extra:Record<string,string>,users:DirectoryUser[]){
  const q=new URLSearchParams();q.set('tab','leads');
@@ -372,21 +375,92 @@ function listHref(filters:ReportFilters,extra:Record<string,string>,users:Direct
  else if(!fieldPeriod&&q.get('stage'))q.set('stageNow','1');
  return '/crm?'+q.toString();
 }
+const VISIT_DONE_STAGES=new Set(['property_visited','negotiation','bank_referred','deposit_paid','contract_signed','transferred']);
+const DASHBOARD_BASE='l.id,l.stage,l.source,l.assigned_to,l.field_assigned_to,l.follow_up,l.created_at,l.updated_at';
+const DASHBOARD_RICH=DASHBOARD_BASE+',l.field_dispatched_at,l.first_field_dispatch_at,l.field_report,l.field_report_at,l.field_report_alert_at';
+function optionalReportColumn(error:unknown){
+ const message=error instanceof Error?error.message:String(error??'');
+ return /field_report|field_dispatched_at|first_field_dispatch_at/i.test(message);
+}
+function wasDispatched(row:Record<string,unknown>){
+ if(String(row.field_dispatched_at??'').trim()||String(row.first_field_dispatch_at??'').trim())return true;
+ const stage=stageKeyOf(row.stage);
+ if(stage==='field_dispatch')return true;
+ return VISIT_DONE_STAGES.has(stage)&&Boolean(String(row.field_assigned_to??'').trim());
+}
+function reportIsOverdue(row:Record<string,unknown>,nowMs:number){
+ if(fieldReportText(row.field_report))return false;
+ if(!fieldReportRequired(row))return false;
+ if(String(row.field_report_alert_at??'').trim())return true;
+ return fieldReportOverdue(String(row.field_dispatched_at||row.first_field_dispatch_at||''),nowMs);
+}
+function hoursUntil(start:unknown,endMs:number){
+ const instant=crmInstant(start instanceof Date||typeof start==='string'||start==null?start as string|Date|null:String(start??''));
+ if(!instant)return null;
+ const hours=(endMs-instant.getTime())/3600000;
+ if(!Number.isFinite(hours)||hours<0||hours>24*365)return null;
+ return hours;
+}
+function dedupeLeads(rows:Record<string,unknown>[]){
+ const seen=new Set<string>(),unique:Record<string,unknown>[]=[];
+ for(const row of rows){const id=String(row.id??'');if(seen.has(id))continue;seen.add(id);unique.push(row);}
+ return unique;
+}
+async function loadDashboardRows(db:Database,whereSql:string,args:(string|number|null)[],funding:string){
+ const from=funding?`leads l INNER JOIN crm_transactions t ON ${binJoin('l.id','t.lead_id')}`:'leads l';
+ const fund=funding?` AND ${binEq("JSON_UNQUOTE(JSON_EXTRACT(t.data,'$.fundingEntity'))")}`:'';
+ const tail=` FROM ${from}${whereSql}${fund} ORDER BY l.id LIMIT 10001`;
+ const bound=[...args,...(funding?[funding]:[])];
+ try{
+  const result=await db.prepare(`SELECT ${DASHBOARD_RICH}${tail}`).bind(...bound).all();
+  return {rows:dedupeLeads(result.results),reportsKnown:true};
+ }catch(error){
+  if(!optionalReportColumn(error))throw error;
+  const result=await db.prepare(`SELECT ${DASHBOARD_BASE}${tail}`).bind(...bound).all();
+  return {rows:dedupeLeads(result.results),reportsKnown:false};
+ }
+}
+async function loadLeadIdMap(db:Database,sql:string,ids:string[],extra:string[]=[]){
+ if(!ids.length)return new Map<string,number>();
+ const rows=await db.prepare(sql).bind(...ids,...extra).all();
+ const map=new Map<string,number>();
+ for(const row of rows.results){
+  const id=String(row.lead_id??'');
+  if(!id)continue;
+  if('first_at' in row){
+   const instant=crmInstant(row.first_at instanceof Date||typeof row.first_at==='string'||row.first_at==null?row.first_at as string|Date|null:String(row.first_at));
+   if(instant)map.set(id,instant.getTime());
+  }else map.set(id,(map.get(id)||0)+1);
+ }
+ return map;
+}
 export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters,now=new Date()):Promise<ReportDashboard>{
  authorizeReport(user,'leads',f,false);
  const tokens=f.employee?await cachedTokens(db,f.employee):[];
  const w=where(specs.leads,user,f,tokens);
- const result=await db.prepare(`SELECT l.id,l.stage,l.source,l.assigned_to,l.field_assigned_to,l.follow_up,l.created_at,l.updated_at FROM leads l${w.sql} ORDER BY l.id LIMIT 10001`).bind(...w.args).all();
+ const loaded=await loadDashboardRows(db,w.sql,w.args,f.funding);
+ const result={results:loaded.rows};
  if(result.results.length>10000)throw new ReportError(422,'أكثر من 10000 عميل في لوحة التقارير؛ ضيق الفترة أو المرشحات. لم يعرض مجموع جزئي');
+ const ids=result.results.map(row=>String(row.id??'')).filter(Boolean);
+ let txByLead:Map<string,number>|null=null;
+ let firstByLead:Map<string,number>|null=null;
+ if(ids.length){
+  try{txByLead=await loadLeadIdMap(db,`SELECT t.lead_id FROM crm_transactions t WHERE ${inParams('t.lead_id',ids.length)}`,ids);}
+  catch(error){if(!isMissingColumn(error,'crm_transactions')&&!isMissingColumn(error,'lead_id'))throw error;}
+  try{firstByLead=await loadLeadIdMap(db,`SELECT a.lead_id, MIN(a.created_at) AS first_at FROM lead_activity a WHERE ${inParams('a.lead_id',ids.length)} AND NOT (a.action = CAST(? AS BINARY)) GROUP BY a.lead_id`,ids,['created']);}
+  catch(error){if(!isMissingColumn(error,'lead_activity')&&!isMissingColumn(error,'created_at'))throw error;}
+ }
+ const transactionsKnown=txByLead!==null;
+ const firstContactKnown=firstByLead!==null;
  const directory=await loadUsers(db);
  const wanted=tokens.length?tokens:[f.employee].filter(Boolean);
  const matchesEmployee=(person:DirectoryUser)=>wanted.some(token=>matchUser([person],token)?.id===person.id);
  const visible=f.employee
   ?directory.filter(matchesEmployee)
   :user.role==='admin'?directory:directory.filter(person=>person.id===user.userId);
- const staff=visible.length?visible:f.employee?[{id:f.employee,name:f.employee,username:''}]:[{id:user.userId,name:user.userId,username:''}];
- const stats=new Map<string,DashboardEmployee & {pastFresh:number}>();
- for(const person of staff)stats.set(person.id,{id:person.id,name:person.name,username:person.username,assigned:0,contacted:0,interested:0,signed:0,notInterested:0,overdue:0,pastFresh:0,completion:null});
+ const staff=visible.length?visible:f.employee?[{id:f.employee,name:f.employee,username:'',role:''}]:[{id:user.userId,name:user.userId,username:'',role:''}];
+ const stats=new Map<string,DashboardEmployee & {pastFresh:number;contactSamples:number;contactHours:number}>();
+ for(const person of staff)stats.set(person.id,{id:person.id,name:person.name,username:person.username,role:person.role||'',assigned:0,contacted:0,interested:0,signed:0,notInterested:0,overdue:0,pastFresh:0,completion:null,dispatched:0,visitsDone:0,reportsSubmitted:0,reportsOverdue:0,deals:0,transactions:0,avgHoursToFirstContact:null,contactSamples:0,contactHours:0});
  const stageCounts=new Map<string,number>();
  const sourceCounts=new Map<string,DashboardSource>();
  const today=riyadhDay(now);const nowMs=now.getTime();
@@ -435,13 +509,29 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
    if(isNotInterestedStage(row.stage))stat.notInterested++;
    if(isOverdueFollowUp(row.follow_up,row.stage,today))stat.overdue++;
    if(isPastFreshStage(row.stage))stat.pastFresh++;
+   if(wasDispatched(row))stat.dispatched++;
+   if(VISIT_DONE_STAGES.has(stageKeyOf(row.stage)))stat.visitsDone++;
+   if(loaded.reportsKnown){
+    if(fieldReportText(row.field_report))stat.reportsSubmitted=(stat.reportsSubmitted||0)+1;
+    else if(reportIsOverdue(row,nowMs))stat.reportsOverdue=(stat.reportsOverdue||0)+1;
+   }
+   if(isSignedStage(row.stage))stat.deals++;
+   if(transactionsKnown)stat.transactions=(stat.transactions||0)+(txByLead?.get(String(row.id??''))||0);
+   const firstAt=firstByLead?.get(String(row.id??''));
+   if(firstContactKnown&&firstAt){
+    const hours=hoursUntil(row.created_at,firstAt);
+    if(hours!=null){stat.contactSamples++;stat.contactHours+=hours;}
+   }
   }
  }
  const total=result.results.length;
  const known=new Set(orderedStages().map(stage=>stage.stage));
  const byStage:DashboardStage[]=orderedStages().map(stage=>({stage:stage.stage,label:stage.label,count:stageCounts.get(stage.stage)||0,pct:total?Math.round(((stageCounts.get(stage.stage)||0)/total)*100):0}));
  for(const [stage,count] of stageCounts)if(!known.has(stage))byStage.push({stage,label:stageLabel(stage),count,pct:total?Math.round((count/total)*100):0});
- const employees=[...stats.values()].map(stat=>({id:stat.id,name:stat.name,username:stat.username,assigned:stat.assigned,contacted:stat.contacted,interested:stat.interested,signed:stat.signed,notInterested:stat.notInterested,overdue:stat.overdue,completion:completionRate(stat.assigned,stat.pastFresh)})).sort((a,b)=>b.assigned-a.assigned||a.name.localeCompare(b.name,'ar'));
+ const employees=[...stats.values()].map(stat=>{
+  const {pastFresh,contactSamples,contactHours,...rest}=stat;
+  return {...rest,completion:completionRate(rest.assigned,pastFresh),reportsSubmitted:loaded.reportsKnown?rest.reportsSubmitted:null,reportsOverdue:loaded.reportsKnown?rest.reportsOverdue:null,transactions:transactionsKnown?rest.transactions:null,avgHoursToFirstContact:contactSamples?Math.round((contactHours/contactSamples)*10)/10:null};
+ }).sort((a,b)=>b.assigned-a.assigned||a.name.localeCompare(b.name,'ar'));
  const sources=[...sourceCounts.values()].map(source=>({...source,conversion:conversionRate(source.total,source.signed)})).sort((a,b)=>b.total-a.total||a.label.localeCompare(b.label,'ar'));
  const alerts:DashboardAlert[]=[];
  if(unassignedWaiting>0)alerts.push({id:'unassigned-wait',tone:'warn',tag:'تنبيه',message:`${unassignedWaiting} عميل جديد غير مسند بانتظار أكثر من 24 ساعة.`,href:listHref(f,{waiting:'1'},directory)});
@@ -451,7 +541,15 @@ export async function readReportDashboard(db:Database,user:Actor,f:ReportFilters
  if(inactive>0)alerts.push({id:'inactive',tone:'info',tag:'متابعة',message:`${inactive} عميل بلا تحديث منذ 7 أيام أو أكثر.`,href:listHref(f,{inactive:'1'},directory)});
  if(notInterested>0)alerts.push({id:'not-interested',tone:'muted',tag:'ملاحظة',message:`${notInterested} عميل مصنّف غير مهتم أو غير مؤهل ضمن الفلاتر.`,href:listHref(f,{stageGroup:'not_interested'},directory)});
  const field={inStage:fieldIn,assigned:fieldAssigned,unassigned:Math.max(0,fieldIn-fieldAssigned),byEmployee:[...fieldCounts.entries()].map(([name,count])=>({name,count})).sort((a,b)=>b.count-a.count||a.name.localeCompare(b.name,'ar'))};
- return {total,interested,notInterested,signed,closed,unassignedNew,overdue,inactive,unassignedWaiting,scheduled,byStage,employees,sources,alerts,field,definitions:COHORT_DEFINITIONS};
+ const builtTrend=buildTrend(specs.leads,'leads',result.results,f);
+ const trend=builtTrend&&builtTrend.points.length?builtTrend:windowTrend(f,isEverFieldDispatchFilter(f.stage)?'يوم التفويج (الرياض)':'يوم إنشاء العميل (الرياض)');
+ return {total,interested,notInterested,signed,closed,unassignedNew,overdue,inactive,unassignedWaiting,scheduled,byStage,employees,sources,alerts,field,definitions:COHORT_DEFINITIONS,trend,reportsKnown:loaded.reportsKnown,transactionsKnown,firstContactKnown};
+}
+function windowTrend(f:ReportFilters,basis:string):DashboardTrend{
+ const points:{day:string;count:number}[]=[];const cursor=new Date(f.from+'T00:00:00.000Z'),end=Date.parse(f.to+'T00:00:00.000Z');
+ if(!Number.isFinite(end))return {basis,points};
+ for(let guard=0;cursor.getTime()<=end&&guard<400;guard++){points.push({day:cursor.toISOString().slice(0,10),count:0});cursor.setUTCDate(cursor.getUTCDate()+1);}
+ return {basis,points};
 }
 
 const ASSIGNMENT_ACTIONS=['assigned','assignment','reassigned'];

@@ -1,11 +1,13 @@
 'use client';
 import {useEffect,useState,type FormEvent,type MouseEvent,type ReactNode} from 'react';
-import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend,CartesianGrid,AreaChart,Area} from 'recharts';
+import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend,CartesianGrid,AreaChart,Area,LineChart,Line} from 'recharts';
 import {AlertCircle,BarChart3,Bell,Building2,Calendar,CheckCircle2,ClipboardList,Download,FileText,Filter,Home,Info,Layers,PieChart as PieIcon,TrendingUp,Users} from 'lucide-react';
 import {allowedReports,type ReportResult} from '@/lib/report-catalog';
 import type {EmployeeAssignmentReport,ReportDashboard} from '@/lib/reports';
 import {COHORT_DEFINITIONS, isEverFieldDispatchFilter} from '@/lib/lead-cohorts';
 import {canonicalStage, displayStage, stageChoices, stageLabel} from '@/lib/lead-stages';
+import {riyadhDayKey} from '@/lib/lead-dates';
+import type {DashboardEmployee} from '@/lib/reports';
 import {buildReportPath,leadReturnHref,rememberReportScroll,restoreReportScroll} from '@/lib/report-return';
 import {CrmLink,navigateCrm,useCrmQuery} from './navigation';
 
@@ -33,6 +35,52 @@ function numericOf(v:unknown):number{
 function fmt(n:number|null|undefined):string{
  if(n===null||n===undefined||!Number.isFinite(n))return '—';
  return n.toLocaleString('ar-SA');
+}
+function fmtMaybe(n:number|null|undefined,known=true):string{
+ if(!known)return 'غير متاح';
+ return fmt(n);
+}
+function fmtHours(n:number|null|undefined,known:boolean):string{
+ if(!known)return 'غير متاح';
+ if(n==null||!Number.isFinite(n))return '—';
+ return `${n.toLocaleString('ar-SA',{maximumFractionDigits:1})} س`;
+}
+function pctOf(part:number,whole:number):string{
+ if(!whole)return '—';
+ return `${Math.round((part/whole)*100)}%`;
+}
+function shiftDay(day:string,days:number){
+ const [y,m,d]=day.split('-').map(Number);
+ const dt=new Date(Date.UTC(y,m-1,d));
+ dt.setUTCDate(dt.getUTCDate()+days);
+ return dt.toISOString().slice(0,10);
+}
+function startOfWeek(day:string){
+ const [y,m,d]=day.split('-').map(Number);
+ return shiftDay(day,-new Date(Date.UTC(y,m-1,d)).getUTCDay());
+}
+function presetRange(id:string,today=riyadhDayKey(new Date())){
+ if(id==='today')return {from:today,to:today};
+ if(id==='week')return {from:startOfWeek(today),to:today};
+ if(id==='month')return {from:today.slice(0,8)+'01',to:today};
+ if(id==='30')return {from:shiftDay(today,-29),to:today};
+ return null;
+}
+function activePreset(from:string,to:string){
+ const today=riyadhDayKey(new Date());
+ if(!from||!to)return '';
+ if(from===today&&to===today)return 'today';
+ if(from===startOfWeek(today)&&to===today)return 'week';
+ if(from===today.slice(0,8)+'01'&&to===today)return 'month';
+ if(from===shiftDay(today,-29)&&to===today)return '30';
+ return 'custom';
+}
+type SortKey='name'|'assigned'|'contacted'|'interested'|'signed'|'notInterested'|'overdue'|'completion'|'dispatched'|'visitsDone'|'reportsSubmitted'|'reportsOverdue'|'deals'|'transactions'|'avgHoursToFirstContact';
+function sortValue(row:DashboardEmployee,key:SortKey):number|string{
+ const value=row[key];
+ if(key==='name')return row.name;
+ if(typeof value==='number')return value;
+ return -1;
 }
 
 function HorizontalBars({items,title}:{items:{label:string;count:number}[];title:string}){
@@ -93,6 +141,10 @@ function employeeOptionLabel(employee:{name:string;username?:string;role?:string
  const base=employee.username?`${employee.name} (${employee.username})`:employee.name;
  return role?`${base} — ${role}`:base;
 }
+function SortHead({label,column,title,active,dir,onSort}:{label:string;column:SortKey;title?:string;active:SortKey;dir:'asc'|'desc';onSort:(key:SortKey)=>void}){
+ const mark=active===column?(dir==='asc'?' ↑':' ↓'):'';
+ return <th title={title} aria-sort={active===column?(dir==='asc'?'ascending':'descending'):'none'}><button type="button" className="reports-sort" onClick={()=>onSort(column)}>{label}{mark}</button></th>;
+}
 function StageLegend({items,hrefFor}:{items:{stage:string;label:string;count:number;pct:number;color:string}[];hrefFor:(stage:string)=>string}){
  return <ul className="reports-stage-legend">
   {items.map(item=><li key={item.stage}><CrmLink className="reports-stage-link" href={hrefFor(item.stage)}><span className="reports-stage-swatch" style={{background:item.color}} aria-hidden="true"/><span className="reports-stage-name">{item.label} — {fmt(item.count)} ({item.pct}%)</span></CrmLink></li>)}
@@ -116,6 +168,7 @@ export default function ReportsPanel({role}:{role:string}){
  const key=params.toString();
  const [state,setState]=useState<{key:string;data?:Payload;error?:string}>({key:''});
  const [retry,setRetry]=useState(0),[exportError,setExportError]=useState(''),[exporting,setExporting]=useState(false);
+ const [sortKey,setSortKey]=useState<SortKey>('assigned'),[sortDir,setSortDir]=useState<'asc'|'desc'>('desc');
  useEffect(()=>{const controller=new AbortController();fetch('/api/reports?'+key,{signal:controller.signal,cache:'no-store'}).then(async r=>{const data=await r.json();if(!r.ok)throw Error(data.error||'تعذر تحميل التقرير');return data;}).then(data=>setState({key,data})).catch(e=>{if(!controller.signal.aborted)setState({key,error:e instanceof Error?e.message:'تعذر التحميل'});});return()=>controller.abort();},[key,retry]);
  const current=state.key===key,stateData=current?state.data:undefined,report=stateData?.report,error=current?state.error:undefined,loading=!error&&!stateData;
  const appliedFrom=stateData?.filters.from||'',appliedTo=stateData?.filters.to||'',appliedEmployee=stateData?.filters.employee||'',appliedSource=stateData?.filters.source||'',appliedStage=stateData?.filters.stage||'',appliedFunding=stateData?.filters.funding||'',appliedPage=stateData?.filters.page||1;
@@ -151,6 +204,39 @@ export default function ReportsPanel({role}:{role:string}){
   return()=>{save();window.removeEventListener('scroll',save);window.removeEventListener('pagehide',save);};
  },[reportPath]);
  function href(changes:Record<string,string>){const q=new URLSearchParams(query);q.set('tab','reports');for(const [k,v] of Object.entries(changes)){if(v)q.set(k,v);else q.delete(k);}return '/crm?'+q.toString();}
+ function applyPreset(id:string){const range=presetRange(id);if(!range)return;navigateCrm(href({from:range.from,to:range.to,page:'1'}));}
+ function exportPdf(){
+  document.documentElement.classList.add('reports-printing');
+  const cleanup=()=>document.documentElement.classList.remove('reports-printing');
+  window.addEventListener('afterprint',cleanup,{once:true});
+  window.setTimeout(()=>window.print(),30);
+ }
+ function toggleSort(key:SortKey){
+  if(sortKey===key)setSortDir(dir=>dir==='asc'?'desc':'asc');
+  else{setSortKey(key);setSortDir(key==='name'?'asc':'desc');}
+ }
+ function chartPayload(state:unknown){
+  const point=state as {activePayload?:{payload?:Record<string,unknown>}[];activeLabel?:unknown}|null;
+  return point?.activePayload?.[0]?.payload||{};
+ }
+ function openTrendDay(state:unknown){
+  const payload=chartPayload(state) as {day?:unknown};
+  const label=(state as {activeLabel?:unknown}|null)?.activeLabel;
+  const day=String(payload.day||label||'');
+  if(/^\d{4}-\d{2}-\d{2}$/.test(day))navigateCrm(clientListHref({from:day,to:day}));
+ }
+ function openStageBar(state:unknown){
+  const stage=String(chartPayload(state).stage||'');
+  if(stage)navigateCrm(clientListHref({stage}));
+ }
+ function openSourceSlice(item:unknown){
+  const key=String(((item as {payload?:{key?:unknown}}|null)?.payload?.key)||'');
+  if(key)navigateCrm(clientListHref({source:key}));
+ }
+ function openEmployeeBar(state:unknown){
+  const id=String(chartPayload(state).id||'');
+  if(id)navigateCrm(clientListHref({employee:id}));
+ }
  function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const data=new FormData(e.currentTarget);const changes:Record<string,string>={page:'1'};for(const k of ['module','from','to','reportEmployee','source','stage','funding','pageSize'])changes[k]=String(data.get(k)||'');navigateCrm(href(changes));}
  async function download(moduleOverride?:string){
   setExportError('');setExporting(true);
@@ -278,7 +364,17 @@ export default function ReportsPanel({role}:{role:string}){
   .map(s=>({name:s.label,value:s.total as number}));
 
  const stageLegend=(dash?.byStage||[]).filter(stage=>stage.count>0).map((stage,index)=>({...stage,color:CHART_COLORS[index%CHART_COLORS.length]}));
- const perfRows=(dash?.employees||[]).map((employee,index)=>({...employee,rank:index+1}));
+ const stageBars=(dash?.byStage||[]).map((stage,index)=>({...stage,color:CHART_COLORS[index%CHART_COLORS.length]}));
+ const sortedEmployees=[...(dash?.employees||[])].sort((a,b)=>{
+  const av=sortValue(a,sortKey),bv=sortValue(b,sortKey);
+  const cmp=typeof av==='string'||typeof bv==='string'?String(av).localeCompare(String(bv),'ar'):Number(av)-Number(bv);
+  return sortDir==='asc'?cmp:-cmp;
+ });
+ const perfRows=sortedEmployees.map((employee,index)=>({...employee,rank:index+1}));
+ const preset=activePreset(query.get('from')||appliedFrom,query.get('to')||appliedTo);
+ const staffChoices=(stateData?.employees||[]).filter(employee=>!employee.role||employee.role==='sales'||employee.role==='field'||employee.id===(query.get('reportEmployee')||appliedEmployee));
+ const focus=appliedEmployee?perfRows.find(row=>row.id===appliedEmployee)||(perfRows.length===1?perfRows[0]:undefined):undefined;
+ const leadTrend=(dash?.trend.points||[]).map(point=>({...point,label:point.day.slice(5)}));
  const alerts=(()=>{
   const rows:{tone:'info'|'warn'|'muted';tag:string;message:string;time:string;href:string}[]=[];
   const gen=stateData?.generatedAt?new Date(stateData.generatedAt):new Date();
@@ -293,12 +389,22 @@ export default function ReportsPanel({role}:{role:string}){
  const isOverview=selectedModule==='overview';
 
  return <section className="reports-center reports-dash" aria-label="مركز التقارير">
+  <header className="reports-print-only reports-print-head">
+   <p className="reports-print-brand">ساس العذراء</p>
+   <h1>تقرير الأداء</h1>
+   <p>الفترة: {stateData?.filters.from||query.get('from')||'…'} — {stateData?.filters.to||query.get('to')||'…'}</p>
+   <p>الفلاتر: الموظف {focus?.name||(appliedEmployee?appliedEmployee:'الكل')} · المرحلة {appliedStage||'كل المراحل'} · المصدر {appliedSource||'كل المصادر'} · التمويل {appliedFunding||'كل الجهات'}</p>
+   <p>يُطبع هذا التقرير من المتصفح كملف PDF مع خط RB العربي واتجاه من اليمين لليسار.</p>
+  </header>
   <div className="report-heading reports-dash-head">
    <div className="reports-dash-title">
     <h2><BarChart3 size={26} aria-hidden="true"/> التقارير</h2>
     <p className="subtle">تحليل شامل لأداء المشرفين والموظفين والعملاء والعقارات · {role==='admin'?'نطاق الإدارة':'سجلاتك المملوكة أو المسندة لك'}</p>
    </div>
    <div className="report-heading-actions">
+    <button type="button" className="report-secondary-btn" onClick={exportPdf}>
+     <Download size={16}/> تصدير PDF
+    </button>
     {stateData?.canExport?(
      <button type="button" className="report-primary-btn" disabled={exporting} onClick={()=>void download(isOverview?'leads':undefined)}>
       <Download size={16}/> {exporting?'جارٍ التصدير…':'تصدير التقرير'}
@@ -315,6 +421,11 @@ export default function ReportsPanel({role}:{role:string}){
     <h3><Filter size={16} aria-hidden="true"/> تصفية التقارير</h3>
     <CrmLink className="report-clear-link" href="/crm?tab=reports">مسح الفلاتر</CrmLink>
    </div>
+   <div className="reports-presets" role="group" aria-label="فترات سريعة">
+    {([['today','اليوم'],['week','هذا الأسبوع'],['month','هذا الشهر'],['30','آخر 30 يوماً'],['custom','مخصص']] as const).map(([id,label])=>(
+     <button key={id} type="button" className="reports-preset" data-active={preset===id||undefined} onClick={()=>id==='custom'?undefined:applyPreset(id)}>{label}</button>
+    ))}
+   </div>
    <div className="report-filter-grid reports-filters-row">
     <label className="reports-filter-period">الفترة
      <div className="reports-date-range">
@@ -324,24 +435,19 @@ export default function ReportsPanel({role}:{role:string}){
      </div>
     </label>
     <label>مرحلة العميل<select name="stage" defaultValue={stageFilterValue(query.get('stage')||'')}><option value="">كل المراحل</option>{stageChoices().map(([key,label])=><option key={key} value={label}>{label}</option>)}{stageFilterExtra(query.get('stage')||'')}</select></label>
-    <label>مصدر العميل<input name="source" placeholder="كل المصادر" defaultValue={query.get('source')||''}/></label>
-    <label>الموظف<select name="reportEmployee" defaultValue={query.get('reportEmployee')||''}><option value="">{role==='admin'?'جميع الموظفين':'نطاقي فقط'}</option>{stateData?.employees.map(e=><option key={e.id} value={e.id}>{employeeOptionLabel(e)}</option>)}</select></label>
+    <label>مصدر العميل<input name="source" list="report-sources" placeholder="كل المصادر" defaultValue={query.get('source')||''}/></label>
+    <label>الموظف<select name="reportEmployee" defaultValue={query.get('reportEmployee')||''}><option value="">{role==='admin'?'كل المبيعات والميدان':'نطاقي فقط'}</option>{staffChoices.map(e=><option key={e.id} value={e.id}>{employeeOptionLabel(e)}</option>)}</select></label>
     <label>الوحدة التقريرية<select name="module" defaultValue={selectedModule}><option value="overview">نظرة عامة — كل المسموح</option>{modules.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
+    <label>جهة التمويل<input name="funding" placeholder="كل الجهات" defaultValue={query.get('funding')||''}/></label>
     {!isOverview?(
-     <>
-      <label>جهة التمويل<input name="funding" placeholder="للمعاملات فقط" defaultValue={query.get('funding')||''}/></label>
-      <label>حجم الصفحة<select name="pageSize" defaultValue={query.get('pageSize')||'25'}>{[25,50,100].map(n=><option key={n}>{n}</option>)}</select></label>
-     </>
-    ):(
-     <>
-      <input type="hidden" name="funding" value={query.get('funding')||''}/>
-      <input type="hidden" name="pageSize" value={query.get('pageSize')||'25'}/>
-     </>
-    )}
+     <label>حجم الصفحة<select name="pageSize" defaultValue={query.get('pageSize')||'25'}>{[25,50,100].map(n=><option key={n}>{n}</option>)}</select></label>
+    ):<input type="hidden" name="pageSize" value={query.get('pageSize')||'25'}/>}
     <div className="report-filter-actions reports-filter-submit">
-     <button className="primary report-primary-btn" type="submit">تطبيق التصفية</button>
+     <button className="primary report-primary-btn" type="submit">تطبيق</button>
+     <CrmLink className="report-secondary-btn" href="/crm?tab=reports">إعادة ضبط</CrmLink>
     </div>
    </div>
+   <datalist id="report-sources">{(dash?.sources||[]).map(source=><option key={source.key} value={source.label}/>)}</datalist>
    <p className="report-filter-help">التصدير إلى CSV يتبع نفس الفلاتر المطبقة أعلاه. الفترة لبطاقات العملاء هي تاريخ التسجيل created_at بتوقيت الرياض، والافتراضي آخر 30 يوماً. عند اختيار مرحلة تفويج للميداني تُحسب الفترة من تاريخ التفويج بتوقيت الرياض (آخر تفويج، أو أول تفويج إن لم يُحفظ لاحق) وليس من تاريخ التسجيل، ويُحسب كل عميل فُوِّج خلال الفترة حتى لو تغيّرت مرحلته الحالية. بطاقة الإسناد تحترم المرحلة: لغير التفويج العدد هو المرحلة الحالية مع تاريخ الإسناد للمبيعات أو تاريخ التفويج للميدان. عند تفويج للميداني يظهر عدد المفوجين للموظف المحدد أو للجميع، مع التوزيع حسب المرحلة الحالية وموظف الميدان. المصدر والموظف والفترة تُطبَّق على البطاقات والجداول نفسها. حدود اليوم تُحسب في التطبيق لمنطقة الرياض (UTC+3).</p>
   </form>
 
@@ -425,6 +531,28 @@ export default function ReportsPanel({role}:{role:string}){
       ):null}
      </section>
     ):null}
+    {focus?(
+     <section className="panel reports-focus" aria-label="ملخص أداء الموظف">
+      <div className="reports-perf-head">
+       <div>
+        <h3>ملخص أداء {focus.name}</h3>
+        <p className="subtle">{focus.role==='field'?'ميدان':focus.role==='sales'?'مبيعات':'موظف'} · الفترة {stateData.filters.from} — {stateData.filters.to} · حسب تاريخ التسجيل created_at بتوقيت الرياض ضمن الفلاتر المطبقة.</p>
+       </div>
+      </div>
+      <div className="reports-focus-grid">
+       <KpiCard value={fmt(focus.assigned)} label="عملاء مسندون" icon={<ClipboardList size={18}/>} href={clientListHref({employee:focus.id})} chip="ضمن الفلاتر"/>
+       <KpiCard value={fmt(focus.contacted)} label="تم التواصل" icon={<Users size={18}/>} href={clientListHref({employee:focus.id,stageGroup:'contacted'})} chip={pctOf(focus.contacted,focus.assigned)}/>
+       <KpiCard value={fmt(focus.interested)} label="مهتم" icon={<TrendingUp size={18}/>} href={clientListHref({employee:focus.id,stageGroup:'interested'})} chip={pctOf(focus.interested,focus.assigned)}/>
+       <KpiCard value={fmt(focus.dispatched)} label="تفويج للميدان" icon={<Layers size={18}/>} chip={pctOf(focus.dispatched,focus.assigned)}/>
+       <KpiCard value={fmt(focus.visitsDone)} label="زيارات مكتملة" icon={<CheckCircle2 size={18}/>}/>
+       <KpiCard value={fmtMaybe(focus.reportsSubmitted,Boolean(dash?.reportsKnown))} label="تقارير مقدمة" icon={<FileText size={18}/>}/>
+       <KpiCard value={fmtMaybe(focus.reportsOverdue,Boolean(dash?.reportsKnown))} label="تقارير متأخرة" icon={<AlertCircle size={18}/>}/>
+       <KpiCard value={fmt(focus.deals)} label="صفقات" icon={<Building2 size={18}/>} href={clientListHref({employee:focus.id,stageGroup:'signed'})} chip={`تحويل ${pctOf(focus.deals,focus.assigned)}`}/>
+       <KpiCard value={fmtMaybe(focus.transactions,Boolean(dash?.transactionsKnown))} label="معاملات مالية" icon={<BarChart3 size={18}/>}/>
+       <KpiCard value={fmtHours(focus.avgHoursToFirstContact,Boolean(dash?.firstContactKnown))} label="متوسط أول تواصل" icon={<Calendar size={18}/>} chip={dash?.firstContactKnown?'من التسجيل حتى أول نشاط':'غير مشتق من البيانات'}/>
+      </div>
+     </section>
+    ):null}
     <div className="reports-kpis" aria-label="مؤشرات رئيسية">
      <KpiCard value={fmt(employeesCount)} label="عدد الموظفين" icon={<Users size={18}/>} chip={stateData?.filters.employee?'الموظف المحدد':employeesCount!=null?`ضمن الفلاتر`:'—'}/>
      <KpiCard value={fmt(scheduledFollowups)} label="معاينات / متابعات مجدولة" icon={<Calendar size={18}/>} href={dash?clientListHref({scheduled:'1'}):undefined} chip={dash&&dash.total>0&&scheduledFollowups!=null?`${Math.round((scheduledFollowups/dash.total)*100)}% من العملاء المفلترين`:undefined}/>
@@ -434,6 +562,70 @@ export default function ReportsPanel({role}:{role:string}){
     </div>
 
     <div className="reports-charts" aria-label="رسوم بيانية">
+     <div className="reports-chart-card panel report-chart reports-chart-wide">
+      <h4><TrendingUp size={16} aria-hidden="true"/> العملاء عبر الزمن</h4>
+      {leadTrend.length?(
+       <ResponsiveContainer width="100%" height={260}>
+        <LineChart data={leadTrend} onClick={openTrendDay}>
+         <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb"/>
+         <XAxis dataKey="day" tick={{fontSize:10}} minTickGap={18}/>
+         <YAxis allowDecimals={false}/>
+         <Tooltip formatter={(value)=>[fmt(Number(value)||0),'العملاء']}/>
+         <Line type="monotone" dataKey="count" name="العملاء" stroke="#3F1A44" strokeWidth={2} dot={{r:3,fill:'#3F1A44'}} activeDot={{r:5}}/>
+        </LineChart>
+       </ResponsiveContainer>
+      ):<div className="reports-chart-empty" role="status"><p>{stateData?.dashboardError||'لا تتوفر سلسلة زمنية ضمن الفلاتر.'}</p></div>}
+      <p className="subtle reports-chart-caption">{dash?.trend.basis||'يوم إنشاء العميل (الرياض)'} · النقر على يوم يفتح عملاء ذلك اليوم. {dash?.definitions.period||COHORT_DEFINITIONS.period}</p>
+     </div>
+     <div className="reports-chart-card panel report-chart">
+      <h4><BarChart3 size={16} aria-hidden="true"/> مسار المراحل</h4>
+      {stageBars.some(stage=>stage.count>0)?(
+       <ResponsiveContainer width="100%" height={280}>
+        <BarChart data={stageBars} layout="vertical" onClick={openStageBar}>
+         <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb"/>
+         <XAxis type="number" allowDecimals={false}/>
+         <YAxis type="category" dataKey="label" width={120} tick={{fontSize:11}}/>
+         <Tooltip formatter={(value)=>[fmt(Number(value)||0),'العملاء']}/>
+         <Bar dataKey="count" name="العملاء" radius={[0,6,6,0]} style={{cursor:'pointer'}}>
+          {stageBars.map(stage=><Cell key={stage.stage} fill={stage.color}/>)}
+         </Bar>
+        </BarChart>
+       </ResponsiveContainer>
+      ):<div className="reports-chart-empty" role="status"><p>{stateData?.dashboardError||'لا تتوفر بيانات مراحل حالياً.'}</p></div>}
+      <p className="subtle reports-chart-caption">النقر على مرحلة يفتح قائمة عملائها ضمن الفلاتر.</p>
+     </div>
+     <div className="reports-chart-card panel report-chart">
+      <h4><PieIcon size={16} aria-hidden="true"/> مصادر العملاء</h4>
+      {(dash?.sources.length||0)>0?(
+       <ResponsiveContainer width="100%" height={260}>
+        <PieChart>
+         <Pie data={dash?.sources||[]} dataKey="total" nameKey="label" innerRadius={52} outerRadius={84} paddingAngle={2} onClick={openSourceSlice}>
+          {(dash?.sources||[]).map((source,index)=><Cell key={source.key} fill={CHART_COLORS[index%CHART_COLORS.length]} style={{cursor:'pointer'}}/>)}
+         </Pie>
+         <Tooltip formatter={(value)=>[fmt(Number(value)||0),'العملاء']}/>
+         <Legend/>
+        </PieChart>
+       </ResponsiveContainer>
+      ):<div className="reports-chart-empty" role="status"><p>لا تتوفر مصادر ضمن الفلاتر.</p></div>}
+      <p className="subtle reports-chart-caption">النقر على شريحة يفتح عملاء ذلك المصدر.</p>
+     </div>
+     <div className="reports-chart-card panel report-chart">
+      <h4><Users size={16} aria-hidden="true"/> مقارنة الموظفين</h4>
+      {perfRows.some(row=>row.assigned>0)?(
+       <ResponsiveContainer width="100%" height={280}>
+        <BarChart data={perfRows.filter(row=>row.assigned>0)} onClick={openEmployeeBar}>
+         <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb"/>
+         <XAxis dataKey="name" tick={{fontSize:11}} interval={0} angle={-25} textAnchor="end" height={70}/>
+         <YAxis allowDecimals={false}/>
+         <Tooltip formatter={(value)=>[fmt(Number(value)||0),'العملاء']}/>
+         <Bar dataKey="assigned" name="العملاء" radius={[6,6,0,0]} style={{cursor:'pointer'}}>
+          {perfRows.filter(row=>row.assigned>0).map((row,index)=><Cell key={row.id} fill={CHART_COLORS[index%CHART_COLORS.length]}/>)}
+         </Bar>
+        </BarChart>
+       </ResponsiveContainer>
+      ):<div className="reports-chart-empty" role="status"><p>{stateData?.dashboardError||'لا توجد مقارنة موظفين ضمن الفلاتر.'}</p></div>}
+      <p className="subtle reports-chart-caption">النقر على موظف يفتح العملاء المسندين له ضمن الفلاتر.</p>
+     </div>
      <div className="reports-chart-card panel report-chart reports-stage-card">
       <h4><PieIcon size={16} aria-hidden="true"/> توزيع مراحل العملاء</h4>
       {stageLegend.some(stage=>stage.count>0)?(
@@ -557,20 +749,25 @@ export default function ReportsPanel({role}:{role:string}){
        <thead>
         <tr>
          <th>#</th>
-         <th>الموظف</th>
-         <th>العملاء</th>
-         <th title={dash?.definitions.contacted||COHORT_DEFINITIONS.contacted}>تم التواصل</th>
-         <th title={dash?.definitions.interested||COHORT_DEFINITIONS.interested}>مهتم</th>
-         <th title={dash?.definitions.signed||COHORT_DEFINITIONS.signed}>وقع / إفراغ</th>
-         <th title={dash?.definitions.notInterested||COHORT_DEFINITIONS.notInterested}>غير مهتم</th>
-         <th title={dash?.definitions.overdue||COHORT_DEFINITIONS.overdue}>متابعات متأخرة</th>
-         <th title={dash?.definitions.completion||COHORT_DEFINITIONS.completion}>نسبة الإنجاز</th>
+         <SortHead label="الموظف" column="name" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="العملاء" column="assigned" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="تم التواصل" column="contacted" title={dash?.definitions.contacted||COHORT_DEFINITIONS.contacted} active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="مهتم" column="interested" title={dash?.definitions.interested||COHORT_DEFINITIONS.interested} active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="تفويج" column="dispatched" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="زيارات" column="visitsDone" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="تقارير" column="reportsSubmitted" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="متأخرة" column="reportsOverdue" active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="صفقات" column="deals" title={dash?.definitions.signed||COHORT_DEFINITIONS.signed} active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="وقع / إفراغ" column="signed" title={dash?.definitions.signed||COHORT_DEFINITIONS.signed} active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="غير مهتم" column="notInterested" title={dash?.definitions.notInterested||COHORT_DEFINITIONS.notInterested} active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="متابعات متأخرة" column="overdue" title={dash?.definitions.overdue||COHORT_DEFINITIONS.overdue} active={sortKey} dir={sortDir} onSort={toggleSort}/>
+         <SortHead label="نسبة الإنجاز" column="completion" title={dash?.definitions.completion||COHORT_DEFINITIONS.completion} active={sortKey} dir={sortDir} onSort={toggleSort}/>
          <th></th>
         </tr>
        </thead>
        <tbody>
         {perfRows.length===0?(
-         <tr><td colSpan={10}>{stateData?.dashboardError||'لا يوجد موظفون في النطاق.'}</td></tr>
+         <tr><td colSpan={15}>{stateData?.dashboardError||'لا يوجد موظفون في النطاق.'}</td></tr>
         ):perfRows.map(row=>(
          <tr key={row.id}>
           <td>{row.rank}</td>
@@ -583,6 +780,11 @@ export default function ReportsPanel({role}:{role:string}){
           <td><NumLink href={clientListHref({employee:row.id})}>{fmt(row.assigned)}</NumLink></td>
           <td><NumLink href={clientListHref({employee:row.id,stageGroup:'contacted'})}>{fmt(row.contacted)}</NumLink></td>
           <td><NumLink href={clientListHref({employee:row.id,stageGroup:'interested'})}>{fmt(row.interested)}</NumLink></td>
+          <td>{fmt(row.dispatched)}</td>
+          <td>{fmt(row.visitsDone)}</td>
+          <td>{fmtMaybe(row.reportsSubmitted,Boolean(dash?.reportsKnown))}</td>
+          <td>{fmtMaybe(row.reportsOverdue,Boolean(dash?.reportsKnown))}</td>
+          <td><NumLink href={clientListHref({employee:row.id,stageGroup:'signed'})}>{fmt(row.deals)}</NumLink></td>
           <td><NumLink href={clientListHref({employee:row.id,stageGroup:'signed'})}>{fmt(row.signed)}</NumLink></td>
           <td><NumLink href={clientListHref({employee:row.id,stageGroup:'not_interested'})}>{fmt(row.notInterested)}</NumLink></td>
           <td><NumLink href={clientListHref({employee:row.id,overdue:'1'})}>{fmt(row.overdue)}</NumLink></td>

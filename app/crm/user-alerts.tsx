@@ -1,6 +1,7 @@
 'use client';
 
 import {useEffect, useState} from 'react';
+import {FIELD_REPORT_RESOLVED_EVENT, readFieldReportResolved} from '@/lib/field-report';
 
 type UserAlert = {
   id: string;
@@ -15,14 +16,45 @@ export default function UserAlerts() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/api/alerts', {cache: 'no-store', signal: controller.signal})
-      .then(async response => {
-        const data = await response.json();
-        if (!response.ok) return;
-        setAlerts(Array.isArray(data.alerts) ? data.alerts : []);
-      })
-      .catch(() => {});
-    return () => controller.abort();
+    const load = () => {
+      fetch('/api/alerts', {cache: 'no-store', signal: controller.signal})
+        .then(async response => {
+          const data = await response.json();
+          if (!response.ok) return;
+          setAlerts(Array.isArray(data.alerts) ? data.alerts : []);
+        })
+        .catch(() => {});
+    };
+    const dropLead = (leadId: string) => {
+      if (!leadId) return;
+      setAlerts(current => current.filter(alert => alert.leadId !== leadId));
+      load();
+    };
+    const onResolved = (event: Event) => {
+      const detail = (event as CustomEvent<{leadId?: string}>).detail;
+      dropLead(detail?.leadId || '');
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== FIELD_REPORT_RESOLVED_EVENT) return;
+      dropLead(readFieldReportResolved(event.newValue)?.leadId || '');
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+    load();
+    const timer = window.setInterval(onVisible, 8000);
+    window.addEventListener(FIELD_REPORT_RESOLVED_EVENT, onResolved);
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+      window.removeEventListener(FIELD_REPORT_RESOLVED_EVENT, onResolved);
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   if (!alerts.length) return null;

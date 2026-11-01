@@ -74,6 +74,48 @@ export function fieldReportStamp(date = new Date()) {
   return date.toISOString().replace('T', ' ').replace('Z', '');
 }
 
+export const FIELD_REPORT_RESOLVED_EVENT = 'crm:field-report-resolved';
+
+export type FieldReportResolvedDetail = {
+  leadId: string;
+  report: string;
+  stage: string;
+  at: number;
+};
+
+/** Same-tab event plus a storage write so other open CRM tabs drop the badge without a reload. */
+export function publishFieldReportResolved(input: {leadId: string; report: string; stage?: string}) {
+  if (typeof window === 'undefined') return;
+  const detail: FieldReportResolvedDetail = {
+    leadId: input.leadId,
+    report: input.report,
+    stage: input.stage || '',
+    at: Date.now(),
+  };
+  window.dispatchEvent(new CustomEvent(FIELD_REPORT_RESOLVED_EVENT, {detail}));
+  try {
+    localStorage.setItem(FIELD_REPORT_RESOLVED_EVENT, JSON.stringify(detail));
+  } catch {
+    /* private mode still updates this tab through the event */
+  }
+}
+
+export function readFieldReportResolved(raw: string | null): FieldReportResolvedDetail | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<FieldReportResolvedDetail>;
+    if (!parsed || typeof parsed.leadId !== 'string' || !parsed.leadId) return null;
+    return {
+      leadId: parsed.leadId,
+      report: typeof parsed.report === 'string' ? parsed.report : '',
+      stage: typeof parsed.stage === 'string' ? parsed.stage : '',
+      at: typeof parsed.at === 'number' ? parsed.at : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function fieldReportOverdueMessage(input: {
   fieldName: string;
   leadName: string;

@@ -5,6 +5,7 @@ import {crmDb} from '@/lib/crm-db';
 import {stageWriteAllowed} from '@/lib/lead-stages';
 import {enteringFieldDispatch, rememberFieldDispatch} from '@/lib/lead-stamps';
 import {clipFieldReport, fieldReportText, visitDoneBlocked} from '@/lib/field-report';
+import {resolveFieldReportAlerts} from '@/lib/field-report-resolve.server';
 import {STAGE_NOTE_INSERT_SQL, STAGE_NOTE_MAX, clipName} from '@/lib/stage-notes';
 
 type LeadRow = {
@@ -87,7 +88,7 @@ export async function PATCH(
     const sets = ['stage = ?', 'updated_at = ?'];
     const args: Array<string | null> = [stage, at];
     if (saveReport) {
-      sets.push('field_report = ?', 'field_report_at = ?');
+      sets.push('field_report = ?', 'field_report_at = ?', 'field_report_alert_at = NULL');
       args.push(filedReport, at);
     }
     if (enteringDispatch) {
@@ -147,5 +148,9 @@ export async function PATCH(
       .run();
   }
 
-  return NextResponse.json({ok: true, appended: Boolean(note)});
+  if (saveReport || (stage === 'property_visited' && fieldReportText(lead.field_report))) {
+    await resolveFieldReportAlerts(id);
+  }
+
+  return NextResponse.json({ok: true, appended: Boolean(note), fieldReport: saveReport ? filedReport : fieldReportText(lead.field_report)});
 }
