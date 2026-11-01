@@ -60,6 +60,7 @@ export type Lead = {
   field_dispatched_at?: string | null;
   field_report?: string | null;
   field_report_at?: string | null;
+  field_report_alert_at?: string | null;
 
   created_at?: string;
   updated_at?: string | null;

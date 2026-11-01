@@ -31,13 +31,22 @@
 .report-chart .recharts-wrapper { direction: ltr; }
 .report-pagination { justify-content: start; flex-wrap: wrap; }
 @media (max-width: 720px) { .report-filters { grid-template-columns: 1fr 1fr; } .report-filters label:first-child { grid-column: 1 / -1; } .report-metrics { grid-template-columns: 1fr; } .report-overview .report-table-scroll table { min-width: 0; } }
+.reports-print-only { display: none; }
 @media print {
- @page { size: A4 landscape; margin: 12mm; }
- .crm-shell .crm-sidebar, .crm-shell .crm-toolbar, .crm-skip, .crm-shell .report-filters, .crm-shell .report-actions, .crm-shell .report-pagination, .report-heading > a { display: none !important; }
+ @page { size: A4; margin: 12mm; }
+ .crm-shell .crm-sidebar, .crm-shell .crm-toolbar, .crm-skip, .crm-shell .report-filters, .crm-shell .report-actions, .crm-shell .report-pagination, .report-heading > a, .report-heading-actions, .reports-coverage, .crm-summary, .reports-presets { display: none !important; }
  .crm-shell .crm-stage, .crm-shell .crm-main { margin: 0 !important; padding: 0 !important; width: 100% !important; }
- .crm-shell, .reports-center { background: white !important; font-size: 12pt; }
+ .crm-shell, .reports-center { background: white !important; font-size: 11pt; color: #111; font-family: RB, Tahoma, sans-serif; }
+ .reports-print-only { display: block !important; }
+ .reports-print-head { margin: 0 0 12px; padding-bottom: 8px; border-bottom: 2px solid #3F1A44; }
+ .reports-print-head h1 { margin: 0; font-size: 20pt; color: #3F1A44; }
+ .reports-print-brand { margin: 0; font-weight: 700; color: #3F1A44; }
+ .reports-print-head p { margin: 2px 0; }
+ .reports-kpis, .reports-focus-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+ .reports-kpi-card, .reports-chart-card, .reports-perf, .reports-sources, .reports-focus, .reports-assignment { break-inside: avoid; box-shadow: none !important; }
+ .recharts-wrapper, .recharts-surface { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
  .report-table-scroll { overflow: visible; }
- .report-table-scroll table { table-layout: fixed; font-size: 12pt; }
+ .report-table-scroll table { table-layout: auto; font-size: 9pt; }
  .report-table-scroll th, .report-table-scroll td { min-width: 0; padding: 4px; overflow-wrap: anywhere; }
  .report-table-scroll thead { display: table-header-group; }
  .report-table-scroll tr { break-inside: avoid; }
@@ -1267,6 +1276,43 @@ form.report-filters,
   min-width:0;
 }
 
+.reports-presets{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin:0 0 14px;
+}
+.reports-preset{
+  border:1px solid #e5e7eb;
+  background:#fff;
+  color:#374151;
+  border-radius:999px;
+  padding:6px 12px;
+  font-size:13px;
+  font-weight:700;
+  cursor:pointer;
+}
+.reports-preset[data-active]{
+  background:#3F1A44;
+  border-color:#3F1A44;
+  color:#fff;
+}
+.reports-focus-grid{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:12px;
+}
+.reports-chart-wide{grid-column:1 / -1}
+.reports-sort{
+  border:0;
+  background:transparent;
+  color:inherit;
+  font:inherit;
+  font-weight:700;
+  cursor:pointer;
+  padding:0;
+}
+.reports-sort:hover{color:#3F1A44}
 .reports-kpis{
   display:grid;
   grid-template-columns:repeat(5,minmax(0,1fr));
@@ -1606,7 +1652,7 @@ a.reports-kpi-card:hover{border-color:#3F1A44;}
 .report-pagination{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
 @media (max-width:1100px){
-  .reports-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .reports-kpis, .reports-focus-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
   .report-filter-grid,
   .reports-filters-row{grid-template-columns:repeat(3,minmax(0,1fr))}
   .reports-filter-submit{grid-column:1 / -1}
@@ -1628,7 +1674,7 @@ a.reports-kpi-card:hover{border-color:#3F1A44;}
 @media (max-width:640px){
   .report-filter-grid,
   .reports-filters-row{grid-template-columns:1fr}
-  .reports-kpis{grid-template-columns:1fr}
+  .reports-kpis, .reports-focus-grid{grid-template-columns:1fr}
   .report-kpi-row{grid-template-columns:1fr}
   .report-heading,
   .reports-dash-head{align-items:stretch;flex-direction:column}

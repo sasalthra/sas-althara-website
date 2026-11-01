@@ -18,7 +18,7 @@ import LeadForm, {
 import {formatRiyadhDate} from '@/lib/lead-dates';
 import {canToggleFeatured, featuredControlsEnabled, isFeaturedValue} from '@/lib/lead-featured';
 import NewLeadBadge from '@/components/new-lead-badge';
-import {fieldReportRequired, fieldReportText} from '@/lib/field-report';
+import {FIELD_REPORT_RESOLVED_EVENT, fieldReportRequired, fieldReportText, publishFieldReportResolved, readFieldReportResolved, type FieldReportResolvedDetail} from '@/lib/field-report';
 import {displayStage, editableStage, stageChoices, stageLabel} from '@/lib/lead-stages';
 import TransactionsPanel from '@/app/crm/transactions-panel';
 import {canSeeLeadFinance} from '@/lib/transactions';
@@ -457,8 +457,8 @@ export default function LeadDetailsPage() {
   const [dialogError, setDialogError] =
     useState('');
 
-  const refresh = async () => {
-    setLoading(true);
+  const refresh = async (options?: {silent?: boolean}) => {
+    if (!options?.silent) setLoading(true);
 
     try {
       const response =
@@ -480,15 +480,16 @@ export default function LeadDetailsPage() {
       }
 
       setLeads(Array.isArray(result) ? result : (result.leads || []));
-      setError('');
+      if (!options?.silent) setError('');
     } catch (error) {
+      if (options?.silent) return;
       setError(
         error instanceof Error
           ? error.message
           : 'تعذر تحميل العميل'
       );
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
     }
   };
 
@@ -578,6 +579,29 @@ export default function LeadDetailsPage() {
     );
   }, [params.id]);
 
+  useEffect(() => {
+    const apply = (detail: FieldReportResolvedDetail | null) => {
+      if (!detail || detail.leadId !== params.id) return;
+      setLeads(current => current.map(item => item.id !== params.id ? item : {
+        ...item,
+        field_report: detail.report || item.field_report,
+        field_report_alert_at: null,
+        stage: detail.stage || item.stage,
+      }));
+    };
+    const onEvent = (event: Event) => apply((event as CustomEvent<FieldReportResolvedDetail>).detail ?? null);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== FIELD_REPORT_RESOLVED_EVENT) return;
+      apply(readFieldReportResolved(event.newValue));
+    };
+    window.addEventListener(FIELD_REPORT_RESOLVED_EVENT, onEvent);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(FIELD_REPORT_RESOLVED_EVENT, onEvent);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [params.id]);
+
   const lead = useMemo(
     () =>
       leads.find(
@@ -586,6 +610,19 @@ export default function LeadDetailsPage() {
       ),
     [leads, params.id]
   );
+
+  useEffect(() => {
+    if (!lead || !fieldReportRequired(lead)) return;
+    const pull = () => {
+      if (document.visibilityState === 'visible') void refresh({silent: true});
+    };
+    const timer = window.setInterval(pull, 8000);
+    document.addEventListener('visibilitychange', pull);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', pull);
+    };
+  }, [lead, params.id]);
 
   const property = useMemo(
     () =>
@@ -753,11 +790,24 @@ export default function LeadDetailsPage() {
       setDialogMode(null);
       setStageNote('');
 
-      await Promise.all([
-        refresh(),
-        refreshActivity(),
-        refreshStageNotes(),
-      ]);
+      if (result.fieldReport) {
+        const filed = String(result.fieldReport);
+        setLeads(current => current.map(item => item.id !== params.id ? item : {
+          ...item,
+          field_report: filed,
+          field_report_at: new Date().toISOString(),
+          field_report_alert_at: null,
+          stage: nextStage,
+        }));
+        publishFieldReportResolved({leadId: String(params.id), report: filed, stage: nextStage});
+        await Promise.all([refresh({silent: true}), refreshActivity(), refreshStageNotes()]);
+      } else {
+        await Promise.all([
+          refresh(),
+          refreshActivity(),
+          refreshStageNotes(),
+        ]);
+      }
     } catch (error) {
       setDialogError(
         error instanceof Error
@@ -834,9 +884,19 @@ export default function LeadDetailsPage() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'تعذر حفظ التحديث الميداني');
+      const filed = text || hasReport;
+      const next = String(result.stage || lead?.stage || '');
+      setLeads(current => current.map(item => item.id !== params.id ? item : {
+        ...item,
+        field_report: filed || item.field_report,
+        field_report_at: text ? new Date().toISOString() : item.field_report_at,
+        field_report_alert_at: null,
+        stage: next || item.stage,
+      }));
+      publishFieldReportResolved({leadId: String(params.id), report: filed, stage: next});
       setDialogMode(null);
       setFieldUpdateNote('');
-      await Promise.all([refresh(), refreshActivity()]);
+      await Promise.all([refresh({silent: true}), refreshActivity()]);
     } catch (saveError) {
       setDialogError(saveError instanceof Error ? saveError.message : 'تعذر حفظ التحديث الميداني');
     } finally {

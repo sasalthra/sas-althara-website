@@ -3,6 +3,7 @@ import {NextResponse} from 'next/server';
 import {getCrmUser} from '@/lib/admin';
 import {crmDb} from '@/lib/crm-db';
 import {clipFieldReport, fieldReportText, markedVisitStage} from '@/lib/field-report';
+import {resolveFieldReportAlerts} from '@/lib/field-report-resolve.server';
 import {normalizeLeadPhone} from '@/lib/phone';
 
 type LeadRow = {
@@ -87,7 +88,7 @@ export async function POST(
   const sets = ['phone = ?', 'updated_at = ?'];
   const args: Array<string | null> = [phone, now];
   if (report) {
-    sets.push('field_report = ?', 'field_report_at = ?');
+    sets.push('field_report = ?', 'field_report_at = ?', 'field_report_alert_at = NULL');
     args.push(report, now);
   }
   if (nextStage) {
@@ -134,5 +135,7 @@ export async function POST(
       .run();
   }
 
-  return NextResponse.json({ok: true, stage: nextStage || lead.stage});
+  if (report || existingReport) await resolveFieldReportAlerts(id);
+
+  return NextResponse.json({ok: true, stage: nextStage || lead.stage, fieldReport: report || existingReport});
 }

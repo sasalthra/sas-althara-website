@@ -45,7 +45,7 @@ import {
   type LeadListFilters,
 } from '@/lib/lead-list';
 import {displayLeadPhone} from '@/lib/phone';
-import {fieldReportRequired} from '@/lib/field-report';
+import {FIELD_REPORT_RESOLVED_EVENT, fieldReportRequired, readFieldReportResolved, type FieldReportResolvedDetail} from '@/lib/field-report';
 import {canSeeLeadFinance} from '@/lib/transactions';
 import UserAlerts from './user-alerts';
 
@@ -216,6 +216,43 @@ export default function CRM({
   });
 
   const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    const apply = (detail: FieldReportResolvedDetail | null) => {
+      if (!detail?.leadId) return;
+      setLeads(current => {
+        let cleared = 0;
+        const next = current.map(item => {
+          if (item.id !== detail.leadId) return item;
+          if (fieldReportRequired(item)) cleared += 1;
+          return {
+            ...item,
+            field_report: detail.report || item.field_report,
+            field_report_alert_at: null,
+            stage: detail.stage || item.stage,
+          };
+        });
+        if (cleared) {
+          queueMicrotask(() => setCounts(countsNow => ({
+            ...countsNow,
+            reportRequired: Math.max(0, countsNow.reportRequired - cleared),
+          })));
+        }
+        return next;
+      });
+    };
+    const onEvent = (event: Event) => apply((event as CustomEvent<FieldReportResolvedDetail>).detail ?? null);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== FIELD_REPORT_RESOLVED_EVENT) return;
+      apply(readFieldReportResolved(event.newValue));
+    };
+    window.addEventListener(FIELD_REPORT_RESOLVED_EVENT, onEvent);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(FIELD_REPORT_RESOLVED_EVENT, onEvent);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
 
   const [loading, setLoading] =
     useState(true);

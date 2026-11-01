@@ -63,7 +63,9 @@
  * a stamp that was already saved.
  * crm_user_alerts keeps one in-app notice per user and dispatch; its primary
  * key and dedupe_key are VARCHAR/CHAR, not TEXT. Existing open dispatches are
- * backfilled once and the pass is recorded in crm_schema_meta.
+ * backfilled once and the pass is recorded in crm_schema_meta. An index on
+ * (lead_id, kind) lets a filed report clear every recipient in one delete;
+ * that index is recorded as user_alerts_lead_idx_v1.
  */
 
 import {createHash} from 'node:crypto';
@@ -1289,6 +1291,7 @@ async function widenAccountsRole(executor: SqlExecutor) {
 }
 
 const FIELD_REPORT_MIGRATION = 'field_report_dispatch_v1';
+const ALERT_LEAD_INDEX = 'user_alerts_lead_idx_v1';
 
 const USER_ALERTS_DDL = `CREATE TABLE IF NOT EXISTS crm_user_alerts (
   id VARCHAR(36) NOT NULL PRIMARY KEY,
@@ -1408,10 +1411,39 @@ async function ensureFieldReportSchema(executor: SqlExecutor) {
     recordSchemaIssue('alerts', USER_ALERTS_DDL, error);
   }
   try {
+    await ensureAlertLeadIndex(executor);
+  } catch (error) {
+    console.error('user alert index was not added', error);
+  }
+  try {
     await backfillFieldDispatchReports(executor);
   } catch (error) {
     console.error('field report backfill failed', error);
   }
+}
+
+/** lead_id is VARCHAR(64), not TEXT, so the delete-by-lead lookup can use an index. */
+async function ensureAlertLeadIndex(executor: SqlExecutor) {
+  if (await migrationApplied(executor, ALERT_LEAD_INDEX)) return;
+  const duplicate = /duplicate|already exists|ER_DUP_KEYNAME/i;
+  const tooLong = /too long|1071|1170|BLOB\/TEXT/i;
+  let created = false;
+  try {
+    await run(executor, 'ALTER TABLE crm_user_alerts ADD INDEX user_alerts_lead_idx (lead_id, kind)');
+    created = true;
+  } catch (error) {
+    if (duplicate.test(messageOf(error))) created = true;
+    else if (!tooLong.test(messageOf(error))) {
+      try {
+        await run(executor, 'CREATE INDEX IF NOT EXISTS user_alerts_lead_idx ON crm_user_alerts (lead_id, kind)');
+        created = true;
+      } catch (fallback) {
+        if (duplicate.test(messageOf(fallback))) created = true;
+        else console.error('user_alerts_lead_idx was not added', fallback);
+      }
+    }
+  }
+  if (created) await markMigration(executor, ALERT_LEAD_INDEX);
 }
 
 const ASSIGNED_AT_MIGRATION = 'assigned_at_backfill_v1';
