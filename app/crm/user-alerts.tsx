@@ -60,7 +60,7 @@ export default function UserAlerts() {
   if (!alerts.length) return null;
 
   return (
-    <section className="mb-4 rounded-2xl border border-amber-300 bg-amber-50 p-4" aria-label="تنبيهات التقارير الميدانية">
+    <section className="crm-user-alerts mb-4 rounded-2xl border border-amber-300 bg-amber-50 p-4" aria-label="تنبيهات التقارير الميدانية">
       <h2 className="mb-2 text-sm font-bold text-amber-950">تنبيهات</h2>
       <ul className="space-y-2">
         {alerts.map(alert => {

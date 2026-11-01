@@ -1293,6 +1293,15 @@ async function widenAccountsRole(executor: SqlExecutor) {
 const FIELD_REPORT_MIGRATION = 'field_report_dispatch_v1';
 const ALERT_LEAD_INDEX = 'user_alerts_lead_idx_v1';
 
+const WEEKLY_REPORT_DDL = `CREATE TABLE IF NOT EXISTS crm_weekly_report_sends (
+  week_key VARCHAR(16) NOT NULL PRIMARY KEY,
+  sent_at VARCHAR(40) NOT NULL
+)`;
+
+async function ensureWeeklyReportLog(executor: SqlExecutor) {
+  await run(executor, WEEKLY_REPORT_DDL);
+}
+
 const USER_ALERTS_DDL = `CREATE TABLE IF NOT EXISTS crm_user_alerts (
   id VARCHAR(36) NOT NULL PRIMARY KEY,
   user_id VARCHAR(255) NOT NULL,
@@ -1655,6 +1664,11 @@ async function runEnsure(executor: SqlExecutor): Promise<LeadSchemaState> {
     await ensureSchemaMeta(executor);
   } catch (error) {
     console.error('crm_schema_meta check failed', error);
+  }
+  try {
+    await ensureWeeklyReportLog(executor);
+  } catch (error) {
+    console.error('weekly report log table was not created', error);
   }
   try {
     await ensureActivityLeadIndex(executor);

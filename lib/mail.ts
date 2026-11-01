@@ -5,9 +5,11 @@ type MailMessage = {
   subject: string;
   text: string;
   html?: string;
+  from?: string;
 };
 
-const DEFAULT_FROM = 'ساس الثراء <sasalthra.sa@gmail.com>';
+export const CRM_MAIL_FROM = 'ساس الثراء <sasalthra.sa@gmail.com>';
+const DEFAULT_FROM = CRM_MAIL_FROM;
 
 let transporter: nodemailer.Transporter | null | undefined;
 
@@ -15,6 +17,12 @@ function fromAddress() {
   const configured = (process.env.SMTP_FROM || '').trim();
   if (!configured || /info@/i.test(configured)) return DEFAULT_FROM;
   return configured;
+}
+
+function resolveFrom(requested?: string) {
+  const asked = (requested || '').trim();
+  if (asked && !/info@/i.test(asked)) return asked;
+  return fromAddress();
 }
 
 function smtpReady() {
@@ -58,7 +66,7 @@ export async function sendMail(message: MailMessage) {
   if (!transport) return false;
   try {
     await transport.sendMail({
-      from: fromAddress(),
+      from: resolveFrom(message.from),
       to,
       subject: message.subject,
       text: message.text,
